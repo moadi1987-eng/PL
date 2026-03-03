@@ -181,8 +181,8 @@ function trySync(server){
   x.onload=function(){if(x.status===200){try{var r=JSON.parse(x.responseText);if(r.ok&&r.imported>0)console.log("Synced "+r.imported+" guesses to desktop")}catch(e){}}};
   x.send(JSON.stringify({guesses:phoneData}));
 }
-function bSt(){var t={};Object.keys(D.tm).forEach(function(k){var x=D.tm[k];t[x.id]={t:x,p:0,w:0,d:0,l:0,gf:0,ga:0,gd:0,pts:0,fm:[]}});
-  D.fx.forEach(function(f){if(!f.fin||f.hs==null)return;var h=t[f.h],a=t[f.a];if(!h||!a)return;h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
+function bSt(upToGW){var t={};Object.keys(D.tm).forEach(function(k){var x=D.tm[k];t[x.id]={t:x,p:0,w:0,d:0,l:0,gf:0,ga:0,gd:0,pts:0,fm:[]}});
+  D.fx.forEach(function(f){if(!f.fin||f.hs==null)return;if(upToGW&&f.e>upToGW)return;var h=t[f.h],a=t[f.a];if(!h||!a)return;h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
     if(f.hs>f.as){h.w++;h.pts+=3;a.l++;h.fm.push("W");a.fm.push("L")}else if(f.hs===f.as){h.d++;h.pts++;a.d++;a.pts++;h.fm.push("D");a.fm.push("D")}else{a.w++;a.pts+=3;h.l++;h.fm.push("L");a.fm.push("W")}});
   var arr=[];for(var k in t){t[k].gd=t[k].gf-t[k].ga;t[k].fm=t[k].fm.slice(-5);arr.push(t[k])}
   arr.sort(function(a,b){return b.pts-a.pts||b.gd-a.gd||b.gf-a.gf});D.st=arr;}
@@ -212,7 +212,7 @@ function rGW(){var s=$("gws"),h="";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
-function render(){if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
+function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 var _gMerged=false;
