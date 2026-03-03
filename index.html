@@ -148,6 +148,28 @@ function init(){
   var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
   if(!c){var fn=D.gw.filter(function(g){return g.fin});c=fn.length?fn[fn.length-1]:{id:1}}
   D.cur=c.id;D.sel=D.cur;bSt();rGW();render();$("upd").textContent=new Date().toLocaleTimeString();
+  autoSync();
+}
+
+function autoSync(){
+  var SERVER="http://"+location.hostname+":5000";
+  if(location.protocol==="file:"||location.hostname.indexOf("github.io")!==-1){
+    var ips=["10.221.202.50","10.221.203.220","192.168.1.100"];
+    for(var i=0;i<ips.length;i++){trySync("http://"+ips[i]+":5000")}
+  }else if(location.port==="5000"){trySync(location.origin)}
+}
+
+function trySync(server){
+  var local=gG();
+  var phoneData={};var hasData=false;
+  for(var gw in local){phoneData[gw]={};for(var mid in local[gw]){if(local[gw][mid].w){phoneData[gw][mid]=local[gw][mid];hasData=true}}}
+  if(!hasData)return;
+  var x=new XMLHttpRequest();
+  x.open("POST",server+"/api/import-phone-guesses",true);
+  x.setRequestHeader("Content-Type","application/json");
+  x.timeout=5000;
+  x.onload=function(){if(x.status===200){try{var r=JSON.parse(x.responseText);if(r.ok&&r.imported>0)console.log("Synced "+r.imported+" guesses to desktop")}catch(e){}}};
+  x.send(JSON.stringify({guesses:phoneData}));
 }
 function bSt(){var t={};Object.keys(D.tm).forEach(function(k){var x=D.tm[k];t[x.id]={t:x,p:0,w:0,d:0,l:0,gf:0,ga:0,gd:0,pts:0,fm:[]}});
   D.fx.forEach(function(f){if(!f.fin||f.hs==null)return;var h=t[f.h],a=t[f.a];if(!h||!a)return;h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
