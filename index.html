@@ -148,7 +148,11 @@ function init(){
   D.tm=EMBEDDED.teams;D.gw=EMBEDDED.gws;D.fx=EMBEDDED.fix;
   var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
   if(!c){var fn=D.gw.filter(function(g){return g.fin});c=fn.length?fn[fn.length-1]:{id:1}}
-  D.cur=c.id;
+  var curId=c.id;
+  var nxt=null;for(var ni=0;ni<D.gw.length;ni++){if(D.gw[ni].id===curId+1){nxt=D.gw[ni];break}}
+  var today=new Date().toISOString().slice(0,10);
+  if(nxt){for(var fi=0;fi<D.fx.length;fi++){if(D.fx[fi].e===nxt.id&&D.fx[fi].ko&&D.fx[fi].ko.slice(0,10)===today){curId=nxt.id;break}}}
+  D.cur=curId;
   var sGW=parseInt(sessionStorage.getItem("plGW"));
   D.sel=(sGW&&sGW>=1&&sGW<=D.gw.length)?sGW:D.cur;
   var sTab=parseInt(sessionStorage.getItem("plTab"))||0;
