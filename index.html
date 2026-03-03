@@ -20,6 +20,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk)
 .gwbtn:active{background:var(--g);color:var(--p)}
 .gwscr{display:flex;gap:.25rem;overflow-x:auto;flex:1;scrollbar-width:none;-webkit-overflow-scrolling:touch}.gwscr::-webkit-scrollbar{display:none}
 .gp{border:none;background:rgba(255,255,255,.06);color:var(--tm);font-size:.65rem;font-weight:700;padding:.25rem .55rem;border-radius:20px;white-space:nowrap;cursor:pointer;flex-shrink:0}.gp.a{background:var(--g);color:var(--p)}.gp.cur{}
+.gp.nxt{border:2px solid gold}
 .bnav{position:fixed;bottom:0;left:0;right:0;background:var(--p);border-top:1px solid var(--bd);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom)}
 .nb{flex:1;padding:.4rem 0 .25rem;text-align:center;color:var(--tm);font-size:.5rem;font-weight:600;border:none;background:none;cursor:pointer}.nb.a{color:var(--g)}.nb svg{width:20px;height:20px;display:block;margin:0 auto 1px}
 .stabs{display:flex;gap:.25rem;background:var(--cd);border-radius:var(--r);padding:.2rem;margin-bottom:.5rem;position:sticky;top:70px;z-index:50}
@@ -149,14 +150,15 @@ function init(){
   var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
   if(!c){var fn=D.gw.filter(function(g){return g.fin});c=fn.length?fn[fn.length-1]:{id:1}}
   var curId=c.id;
-  var nxt=null;for(var ni=0;ni<D.gw.length;ni++){if(D.gw[ni].id===curId+1){nxt=D.gw[ni];break}}
+  var nxt=null;D.nxtId=0;
+  for(var ni=0;ni<D.gw.length;ni++){if(D.gw[ni].id===curId+1){nxt=D.gw[ni];D.nxtId=nxt.id;break}}
   var today=new Date().toISOString().slice(0,10);
   if(nxt){for(var fi=0;fi<D.fx.length;fi++){if(D.fx[fi].e===nxt.id&&D.fx[fi].ko&&D.fx[fi].ko.slice(0,10)===today){curId=nxt.id;break}}}
   D.cur=curId;
   var sGW=parseInt(sessionStorage.getItem("plGW"));
   D.sel=(sGW&&sGW>=1&&sGW<=D.gw.length)?sGW:D.cur;
   var sTab=parseInt(sessionStorage.getItem("plTab"))||0;
-  var sSub=parseInt(sessionStorage.getItem("plSub"))||0;
+  var sSub=sessionStorage.getItem("plSub")!=null?parseInt(sessionStorage.getItem("plSub")):1;
   D.tab=sTab;D.sub=sSub;
   bSt();rGW();
   for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===D.tab?" a":"");$("n"+j).className="nb"+(j===D.tab?" a":"")}
@@ -208,7 +210,7 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   var lb={home:T(hid).s,draw:"Draw",away:T(aid).s};
   reasons.push("Prediction: "+lb[rec]+" ("+rh+"-"+ra+")");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
-function rGW(){var s=$("gws"),h="";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+'" onclick="sGW('+g.id+')">GW'+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
+function rGW(){var s=$("gws"),h="";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">GW'+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
@@ -289,7 +291,8 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     else if(m.st&&!m.fin)act='<div class="act"><span class="ldot"></span>LIVE: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>';
     var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
-    h+='<div class="gc '+(g.w?"has ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div><div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
+    var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
+    h+='<div class="gc '+(g.w?"has ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+pctBar+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
   return h;}
 
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
