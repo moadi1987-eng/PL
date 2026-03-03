@@ -212,7 +212,7 @@ function h2h(hid,aid){var r={hw:0,d:0,aw:0,hg:0,ag:0,n:0};D.fx.forEach(function(
 function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},at=D.tm[aid]||{};
   var pm={};D.st.forEach(function(r,i){pm[r.t.id]=i+1});
   var hAll=allMatches(hid,gw),aAll=allMatches(aid,gw);
-  var W=typeof EMBEDDED_WEIGHTS!=="undefined"?EMBEDDED_WEIGHTS:{form:.20,strength:.20,position:.15,home_adv:.10,streak:.15,h2h:.05,home_away_split:.10,goals_trend:.05};
+  var W=typeof EMBEDDED_WEIGHTS!=="undefined"?EMBEDDED_WEIGHTS:{form:.15,strength:.15,position:.12,home_adv:.08,streak:.12,h2h:.08,home_away_split:.08,goals_trend:.06,upset:.06,clean_sheet:.05,draw_tendency:.05};
   var hP=(21-(pm[hid]||10))/20*100,aP=(21-(pm[aid]||10))/20*100;
   var hStr=((ht.sah||1e3)/Math.max(at.sda||1e3,1))*50,aStr=((at.saa||1e3)/Math.max(ht.sdh||1e3,1))*50;
   var hStrk=streak(hAll,5),aStrk=streak(aAll,5);
@@ -220,13 +220,30 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   var hSp=haSplit(hAll,true),aSp=haSplit(aAll,false);
   var hTrGf=0,aTrGf=0;if(hAll.length){var hl=hAll.slice(-3);hTrGf=0;hl.forEach(function(m){hTrGf+=m.gf});hTrGf=hTrGf/hl.length}else hTrGf=1.2;
   if(aAll.length){var al=aAll.slice(-3);aTrGf=0;al.forEach(function(m){aTrGf+=m.gf});aTrGf=aTrGf/al.length}else aTrGf=1;
-  var hSc=hs.fs*W.form+hStr*W.strength+hP*W.position+18*W.home_adv+hStrk*W.streak+h2hH*W.h2h+hSp.wr*W.home_away_split+hTrGf*30*W.goals_trend;
-  var aSc=as.fs*W.form+aStr*W.strength+aP*W.position+0+aStrk*W.streak+h2hA*W.h2h+aSp.wr*W.home_away_split+aTrGf*30*W.goals_trend;
-  var tot=(hSc+aSc)||1,hp=hSc/tot*100,ap=aSc/tot*100,cl=1-Math.abs(hp-ap)/100,dp=12+cl*22,rt=hp+dp+ap;
+  // Upset potential: wins vs top-6 opponents
+  function upsetPot(ms,oppId){var u=0,t=0;ms.forEach(function(m){var op=pm[m.opp]||10;if(op<=6){t++;if(m.r==="W")u++}});return t?Math.round(u/t*1000)/10:0}
+  var hUpset=upsetPot(hAll,aid),aUpset=upsetPot(aAll,hid);
+  // Clean sheet rate last 5
+  function csRate(ms){var r=ms.slice(-5);if(!r.length)return 0;var c=0;r.forEach(function(m){if(m.ga===0)c++});return Math.round(c/r.length*1000)/10}
+  var hCs=csRate(hAll),aCs=csRate(aAll);
+  // Draw tendency last 8
+  function drawTend(ms){var r=ms.slice(-8);if(!r.length)return 15;var d=0;r.forEach(function(m){if(m.r==="D")d++});return Math.round(d/r.length*1000)/10}
+  var hDT=drawTend(hAll),aDT=drawTend(aAll);
+  var hSc=hs.fs*W.form+hStr*W.strength+hP*W.position+18*W.home_adv+hStrk*W.streak+h2hH*W.h2h+hSp.wr*W.home_away_split+hTrGf*30*W.goals_trend+hUpset*(W.upset||0)+hCs*(W.clean_sheet||0)+(100-hDT)*(W.draw_tendency||0);
+  var aSc=as.fs*W.form+aStr*W.strength+aP*W.position+0+aStrk*W.streak+h2hA*W.h2h+aSp.wr*W.home_away_split+aTrGf*30*W.goals_trend+aUpset*(W.upset||0)+aCs*(W.clean_sheet||0)+(100-aDT)*(W.draw_tendency||0);
+  var tot=(hSc+aSc)||1,hp=hSc/tot*100,ap=aSc/tot*100;
+  var cl=1-Math.abs(hp-ap)/100,avgDT=(hDT+aDT)/2,dBoost=Math.max(0,(avgDT-20)*0.3);
+  var dp=10+cl*18+dBoost,rt=hp+dp+ap;
   hp=Math.round(hp/rt*1000)/10;dp=Math.round(dp/rt*1000)/10;ap=Math.round((100-hp-dp)*10)/10;
   var hm=Math.max(hs.c,1),am=Math.max(as.c,1);
   var phg=(hs.gf/hm*.4+as.ga/am*.3+hSp.gf*.2+hTrGf*.1);
   var pag=(as.gf/am*.4+hs.ga/hm*.3+aSp.gf*.2+aTrGf*.1);
+  // Adjust for clean sheets and concede rate
+  if(aCs>40)phg*=0.85;if(hCs>40)pag*=0.85;
+  var hConcede=0,aConcede=0;var hL5=hAll.slice(-5),aL5=aAll.slice(-5);
+  if(hL5.length){hL5.forEach(function(m){hConcede+=m.ga});hConcede/=hL5.length}
+  if(aL5.length){aL5.forEach(function(m){aConcede+=m.ga});aConcede/=aL5.length}
+  if(aConcede>2)phg*=1.1;if(hConcede>2)pag*=1.1;
   phg=Math.round(Math.max(phg,.2)*10)/10;pag=Math.round(Math.max(pag,.2)*10)/10;
   var rec=(hp>ap&&hp>dp)?"home":(ap>hp&&ap>dp)?"away":"draw";var rh=Math.round(phg),ra=Math.round(pag);if(rh===ra)rec="draw";
   // Build reasoning
