@@ -343,24 +343,23 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
 
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0;
-  var cards="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
+  var rows="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var lb={home:hm.s,draw:"Draw",away:am.s};
     var uw=g.w||null,aiW=(p.rh===p.ra)?"draw":p.rec;
     var uwOk=!!(aw&&uw&&uw===aw),usOk=!!(aw&&g.hs!=null&&g.hs===ah&&g.as===aa);
     var awOk=!!(aw&&aiW===aw),asOk=!!(aw&&p.rh===ah&&p.ra===aa);
     if(uwOk)uW++;if(usOk)uS++;if(awOk)aW++;if(asOk)aS++;
-    var actWS=aw?lb[aw]:"–",actSS=ah!=null?ah+"-"+aa:"–";
+    var actW=aw?lb[aw]:"–",actS=ah!=null?ah+"-"+aa:"–";
     var uWS=uw?lb[uw]:"–",uSS=g.hs!=null?g.hs+"-"+g.as:"–";
     var aWS=lb[aiW],aSS=p.rh+"-"+p.ra;
-    var mk=function(ok,has){return aw&&has?(ok?" ✓":" ✗"):""};
-    cards+='<div class="ccrd"><div class="cmatch"><img src="'+hm.b+'" onerror="this.style.display=\'none\'">'+hm.s+' v '+am.s+'<img src="'+am.b+'" onerror="this.style.display=\'none\'"></div>'+
-      '<div class="cblk"><div class="cbt">Winner</div><div class="crow"><span class="cl" style="color:#fff;font-weight:600">Actual</span>'+actWS+'</div><div class="crow"><span class="cl" style="color:var(--g)">You</span>'+uWS+mk(uwOk,uw)+'</div><div class="crow"><span class="cl" style="color:var(--cy)">AI</span>'+aWS+mk(awOk,true)+'</div></div>'+
-      '<div class="cblk"><div class="cbt">Score</div><div class="crow"><span class="cl" style="color:#fff;font-weight:600">Actual</span>'+actSS+'</div><div class="crow"><span class="cl" style="color:var(--g)">You</span>'+uSS+mk(usOk,g.hs!=null)+'</div><div class="crow"><span class="cl" style="color:var(--cy)">AI</span>'+aSS+mk(asOk,true)+'</div></div></div>'});
+    function cell(v,ok,has){if(!aw||!has)return'<td style="text-align:center">'+v+'</td>';return ok?'<td style="text-align:center;color:var(--g);font-weight:700">'+v+' ✓</td>':'<td style="text-align:center;color:var(--pk)">'+v+' ✗</td>'}
+    rows+='<tr><td><b>'+hm.s+' v '+am.s+'</b></td><td style="text-align:center;font-weight:700">'+actW+'<br><small style="color:var(--tm)">'+actS+'</small></td>'+cell(uWS+'<br><small>'+uSS+'</small>',uwOk||usOk,uw)+cell(aWS+'<br><small>'+aSS+'</small>',awOk||asOk,true)+'</tr>'});
   var uPts=uW*3+uS*5,aPts=aW*3+aS*5;
   var h='<div class="csb"><div class="csc'+(uPts>aPts?" win":"")+'"><div class="cw">You</div><div class="cp" style="color:'+(uPts>aPts?"var(--g)":"var(--tx)")+'">'+uPts+' pts</div><div class="cd">'+uW+' winners / '+uS+' exact</div></div>'+
     '<div class="csc'+(aPts>uPts?" win":"")+'"><div class="cw">AI</div><div class="cp" style="color:'+(aPts>uPts?"var(--cy)":"var(--tx)")+'">'+aPts+' pts</div><div class="cd">'+aW+' winners / '+aS+' exact</div></div></div>';
-  return h+cards;}
+  h+='<div class="tw"><table class="tbl"><thead><tr><th>Match</th><th style="text-align:center">Actual</th><th style="text-align:center;color:var(--g)">You</th><th style="text-align:center;color:var(--cy)">AI</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  return h;}
 
 function exportGuesses(){
   var d=gG(),code=btoa(unescape(encodeURIComponent(JSON.stringify(d))));
