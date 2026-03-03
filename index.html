@@ -148,7 +148,15 @@ function init(){
   D.tm=EMBEDDED.teams;D.gw=EMBEDDED.gws;D.fx=EMBEDDED.fix;
   var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
   if(!c){var fn=D.gw.filter(function(g){return g.fin});c=fn.length?fn[fn.length-1]:{id:1}}
-  D.cur=c.id;D.sel=D.cur;bSt();rGW();render();$("upd").textContent=new Date().toLocaleTimeString();
+  D.cur=c.id;
+  var sGW=parseInt(sessionStorage.getItem("plGW"));
+  D.sel=(sGW&&sGW>=1&&sGW<=D.gw.length)?sGW:D.cur;
+  var sTab=parseInt(sessionStorage.getItem("plTab"))||0;
+  var sSub=parseInt(sessionStorage.getItem("plSub"))||0;
+  D.tab=sTab;D.sub=sSub;
+  bSt();rGW();
+  for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===D.tab?" a":"");$("n"+j).className="nb"+(j===D.tab?" a":"")}
+  render();$("upd").textContent=new Date().toLocaleTimeString();
   autoSync();
 }
 
@@ -197,9 +205,9 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   reasons.push("Prediction: "+lb[rec]+" ("+rh+"-"+ra+")");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
 function rGW(){var s=$("gws"),h="";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+'" onclick="sGW('+g.id+')">GW'+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
-function sGW(g){D.sel=g;rGW();render()}
+function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
-function sw(i){D.tab=i;D.sub=0;for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
+function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
 function render(){if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
@@ -236,7 +244,7 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — GW'+D.se
 
 /* ══ GUESS (3 sub-tabs + history) ══ */
 function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
-  h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;rGuess()">Predictions</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;rGuess()">Fill Guesses</button><button class="stab'+(D.sub===2?" a":"")+'" onclick="D.sub=2;rGuess()">You vs AI</button></div>';
+  h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;sessionStorage.setItem(\'plSub\',0);rGuess()">Predictions</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;sessionStorage.setItem(\'plSub\',1);rGuess()">Fill Guesses</button><button class="stab'+(D.sub===2?" a":"")+'" onclick="D.sub=2;sessionStorage.setItem(\'plSub\',2);rGuess()">You vs AI</button></div>';
   if(D.sub===0)h+=rPred();else if(D.sub===1)h+=rGF();else h+=rVsAI();
   h+=rGH();c.innerHTML=h;}
 
