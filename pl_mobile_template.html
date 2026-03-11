@@ -548,6 +548,22 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   h+='<tr class="sm"><td colspan="2"><b>Out of 5</b></td><td colspan="2"></td><td><b>'+wC+'/5</b></td><td></td><td><b>'+aiC+'/5</b></td></tr></tbody></table></div>';
   return h;}
 
+function _rndGoal(){var r=Math.random();if(r<.28)return 0;if(r<.62)return 1;if(r<.84)return 2;if(r<.94)return 3;return 4}
+
+function autoFillRandom(){
+  var gw=D.sel,ms=gFix(),ag=gG(),changed=0;
+  if(!ag[gw])ag[gw]={};
+  ms.forEach(function(m){
+    if(m.fin)return;
+    if(!ag[gw][m.id])ag[gw][m.id]={};
+    var h=_rndGoal(),a=_rndGoal();
+    ag[gw][m.id].hs=h;ag[gw][m.id].as=a;
+    ag[gw][m.id].w=h>a?"home":h===a?"draw":"away";
+    changed++;
+  });
+  if(changed){sG(ag);rGuess()}
+}
+
 function autoFillAI(mode){
   var gw=D.sel,ms=gFix(),ag=gG(),changed=0;
   if(!ag[gw])ag[gw]={};
@@ -570,7 +586,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   var open=ms.filter(function(m){return!m.fin});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(open.length>0){var allDone=filled===open.length;h+='<div class="af-bar"><button class="af-btn'+(allDone?" done":"")+'" onclick="autoFillAI(\''+(allDone?'all':'empty')+'\')">'+(allDone?'All filled! Tap to refill from AI':'Auto-fill with AI ('+(open.length-filled)+' empty)')+'</button></div>';}
+  if(open.length>0){var allDone=filled===open.length;h+='<div class="af-bar"><button class="af-btn" onclick="autoFillAI(\''+(allDone?'all':'empty')+'\')">AI Fill'+(allDone?'':' ('+(open.length-filled)+')')+'</button><button class="af-btn" style="border-color:var(--pk);color:var(--pk);background:rgba(233,0,82,.08)" onclick="autoFillRandom()">Random</button></div>';}
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> winner(s), <b>'+ce+'</b> exact — <b>'+(cw*3+ce*5)+' pts</b></div>';
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="";
