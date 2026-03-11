@@ -2,13 +2,15 @@ name: Update PL Dashboard
 
 on:
   schedule:
-    # Match-day windows: every 15 min (Sat/Sun 10:00-23:59 UTC)
+    # ── PL + La Liga: Sat/Sun all day (every 15 min, 10:00-23:59 UTC) ──
     - cron: '5,20,35,50 10-23 * * 0,6'
-    # Weekday evenings: every 15 min (Mon-Fri 17:00-23:59 UTC)
+    # ── PL + La Liga: Weekday evenings (every 15 min, 17:00-23:59 UTC) ──
     - cron: '5,20,35,50 17-23 * * 1-5'
-    # Background refresh: twice daily on weekdays (morning & afternoon)
+    # ── La Liga: Friday early evening (every 15 min, 13:00-16:59 UTC) ──
+    - cron: '5,35 13-16 * * 5'
+    # ── Background refresh: weekday morning & afternoon ──
     - cron: '0 8,14 * * 1-5'
-    # Background refresh: morning on weekends
+    # ── Background refresh: weekend morning ──
     - cron: '0 8 * * 0,6'
   workflow_dispatch:
 
@@ -38,13 +40,14 @@ jobs:
       - name: Install dependencies
         run: pip install requests python-dotenv
 
-      - name: Check if update needed
+      - name: Check if update needed (PL + La Liga)
         id: check
         run: |
           python3 << 'PYEOF'
           import requests, os, subprocess, datetime
 
           FPL = "https://fantasy.premierleague.com/api"
+          ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
           HDR = {"User-Agent": "PL-Dashboard/1.0"}
           output_file = os.environ.get("GITHUB_OUTPUT", "/dev/null")
 
@@ -52,17 +55,40 @@ jobs:
               with open(output_file, "a") as f:
                   f.write(f"should_update={value}\n")
 
+          pl_live = 0
+          ll_live = 0
+
+          # --- Check Premier League ---
           try:
               fx = requests.get(f"{FPL}/fixtures/", headers=HDR, timeout=15).json()
-              live = [f for f in fx if f.get("started") and not f.get("finished")]
-              if live:
-                  print(f"LIVE: {len(live)} matches in progress — updating")
-                  write_output("true")
-                  raise SystemExit(0)
-          except SystemExit:
-              raise
+              pl_live = len([f for f in fx if f.get("started") and not f.get("finished")])
+              if pl_live:
+                  print(f"PL LIVE: {pl_live} matches in progress")
           except Exception as e:
-              print(f"API check failed ({e}) — updating as precaution")
+              print(f"PL check failed ({e}) — will update as precaution")
+              write_output("true")
+              raise SystemExit(0)
+
+          # --- Check La Liga ---
+          try:
+              now = datetime.datetime.now(datetime.timezone.utc)
+              sy = now.year if now.month >= 7 else now.year - 1
+              dr = f"{sy}0801-{sy+1}0630"
+              espn = requests.get(ESPN_SB, params={"dates": dr, "limit": "1000"}, headers=HDR, timeout=15).json()
+              for ev in espn.get("events", []):
+                  for comp in ev.get("competitions", []):
+                      state = comp.get("status", {}).get("type", {}).get("state", "pre")
+                      if state == "in":
+                          ll_live += 1
+              if ll_live:
+                  print(f"La Liga LIVE: {ll_live} matches in progress")
+          except Exception as e:
+              print(f"La Liga check failed ({e}) — ignoring")
+
+          # --- Decision ---
+          total_live = pl_live + ll_live
+          if total_live:
+              print(f"TOTAL LIVE: {total_live} (PL={pl_live}, LL={ll_live}) — updating")
               write_output("true")
               raise SystemExit(0)
 
@@ -79,7 +105,7 @@ jobs:
               print(f"Last update was {age_hours:.1f}h ago — refreshing")
               write_output("true")
           else:
-              print(f"No live matches, last update {age_hours:.1f}h ago — skipping")
+              print(f"No live matches (PL=0, LL=0), last update {age_hours:.1f}h ago — skipping")
               write_output("false")
           PYEOF
 
@@ -99,18 +125,31 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to deploy"
           else
-            LIVE_COUNT=$(python3 -c "
-          import requests
+            LIVE_INFO=$(python3 -c "
+          import requests, datetime
+          HDR = {'User-Agent': 'PL/1.0'}
+          pl = ll = 0
           try:
-              fx = requests.get('https://fantasy.premierleague.com/api/fixtures/',
-                                headers={'User-Agent':'PL/1.0'}, timeout=10).json()
-              live = [f for f in fx if f.get('started') and not f.get('finished')]
-              print(len(live))
-          except: print(0)
-          " 2>/dev/null || echo "0")
+              fx = requests.get('https://fantasy.premierleague.com/api/fixtures/', headers=HDR, timeout=10).json()
+              pl = len([f for f in fx if f.get('started') and not f.get('finished')])
+          except: pass
+          try:
+              now = datetime.datetime.now(datetime.timezone.utc)
+              sy = now.year if now.month >= 7 else now.year - 1
+              espn = requests.get(f'https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard',
+                  params={'dates': f'{sy}0801-{sy+1}0630', 'limit': '1000'}, headers=HDR, timeout=10).json()
+              for ev in espn.get('events', []):
+                  for comp in ev.get('competitions', []):
+                      if comp.get('status', {}).get('type', {}).get('state', 'pre') == 'in': ll += 1
+          except: pass
+          parts = []
+          if pl: parts.append(f'PL:{pl}')
+          if ll: parts.append(f'LL:{ll}')
+          print(' '.join(parts) if parts else '')
+          " 2>/dev/null || echo "")
 
-            if [ "$LIVE_COUNT" -gt 0 ] 2>/dev/null; then
-              MSG="Live update ($LIVE_COUNT matches in progress)"
+            if [ -n "$LIVE_INFO" ]; then
+              MSG="Live update ($LIVE_INFO)"
             else
               MSG="Auto-update dashboard data"
             fi
