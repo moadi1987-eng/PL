@@ -46,6 +46,7 @@ jobs:
           python3 << 'PYEOF'
           import requests, os, subprocess, datetime
 
+          is_manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
           FPL = "https://fantasy.premierleague.com/api"
           ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
           HDR = {"User-Agent": "PL-Dashboard/1.0"}
@@ -86,6 +87,11 @@ jobs:
               print(f"La Liga check failed ({e}) — ignoring")
 
           # --- Decision ---
+          if is_manual:
+              print("Manual trigger — always updating")
+              write_output("true")
+              raise SystemExit(0)
+
           total_live = pl_live + ll_live
           if total_live:
               print(f"TOTAL LIVE: {total_live} (PL={pl_live}, LL={ll_live}) — updating")
