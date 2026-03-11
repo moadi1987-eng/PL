@@ -81,7 +81,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .si input{width:38px;height:32px;text-align:center;border:2px solid var(--bd);background:rgba(255,255,255,.05);color:var(--tx);border-radius:var(--rs);font-size:.8rem;font-weight:800;outline:none}.si input:focus{border-color:var(--g)}
 .act{text-align:center;font-size:.55rem;color:var(--tm);margin-top:.15rem}.act b{color:var(--tx)}
 .psum{background:linear-gradient(135deg,rgba(0,255,135,.06),rgba(4,245,255,.04));border:1px solid rgba(0,255,135,.15);border-radius:var(--r);padding:.35rem;margin-bottom:.35rem;text-align:center;font-size:.65rem}.psum b{color:var(--g)}
-.af-bar{display:flex;gap:.3rem;margin-bottom:.4rem}.af-btn{flex:1;padding:.4rem;border:2px solid var(--cy);background:rgba(4,245,255,.08);color:var(--cy);font-size:.65rem;font-weight:700;border-radius:var(--r);cursor:pointer;text-align:center;transition:all .2s}.af-btn:active{transform:scale(.97);background:rgba(4,245,255,.2)}.af-btn.done{border-color:var(--g);color:var(--g);background:rgba(0,255,135,.08)}
+.af-bar{margin-bottom:.4rem}.af-btn{width:100%;padding:.5rem;border:2px solid var(--pk);background:rgba(233,0,82,.1);color:var(--pk);font-size:.75rem;font-weight:700;border-radius:var(--r);cursor:pointer;text-align:center;transition:all .2s}.af-btn:active{transform:scale(.95);background:rgba(233,0,82,.25)}
 /* You vs AI scoreboard */
 .csb{display:flex;gap:.4rem;margin-bottom:.5rem}
 .csc{flex:1;background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem;text-align:center}
@@ -550,34 +550,20 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
 
 function _rndGoal(){var r=Math.random();if(r<.28)return 0;if(r<.62)return 1;if(r<.84)return 2;if(r<.94)return 3;return 4}
 
-function autoFillRandom(){
+function randomFill(){
   var gw=D.sel,ms=gFix(),ag=gG(),changed=0;
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
     if(m.fin)return;
-    if(!ag[gw][m.id])ag[gw][m.id]={};
     var h=_rndGoal(),a=_rndGoal();
-    ag[gw][m.id].hs=h;ag[gw][m.id].as=a;
+    if(!ag[gw][m.id])ag[gw][m.id]={};
+    ag[gw][m.id].hs=h;
+    ag[gw][m.id].as=a;
     ag[gw][m.id].w=h>a?"home":h===a?"draw":"away";
     changed++;
   });
-  if(changed){sG(ag);rGuess()}
-}
-
-function autoFillAI(mode){
-  var gw=D.sel,ms=gFix(),ag=gG(),changed=0;
-  if(!ag[gw])ag[gw]={};
-  ms.forEach(function(m){
-    if(m.fin)return;
-    var g=ag[gw][m.id]||{};
-    if(mode==='empty'&&g.w&&g.hs!=null&&g.as!=null)return;
-    var p=pred(m.h,m.a,gw);
-    if(!ag[gw][m.id])ag[gw][m.id]={};
-    ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
-    changed++;
-  });
-  if(changed){sG(ag);rGuess()}
-  else{var b=document.querySelector('.af-btn');if(b){b.textContent='All filled!';b.classList.add('done')}}
+  sG(ag);
+  rGuess();
 }
 
 function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
@@ -586,7 +572,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   var open=ms.filter(function(m){return!m.fin});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(open.length>0){var allDone=filled===open.length;h+='<div class="af-bar"><button class="af-btn" onclick="autoFillAI(\''+(allDone?'all':'empty')+'\')">AI Fill'+(allDone?'':' ('+(open.length-filled)+')')+'</button><button class="af-btn" style="border-color:var(--pk);color:var(--pk);background:rgba(233,0,82,.08)" onclick="autoFillRandom()">Random</button></div>';}
+  if(open.length>0)h+='<div class="af-bar"><button class="af-btn" onclick="randomFill()">&#127922; Random Fill — '+open.length+' matches</button></div>';
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> winner(s), <b>'+ce+'</b> exact — <b>'+(cw*3+ce*5)+' pts</b></div>';
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="";
