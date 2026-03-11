@@ -1,0 +1,120 @@
+name: Update PL Dashboard
+
+on:
+  schedule:
+    # Match-day windows: every 15 min (Sat/Sun 10:00-23:59 UTC)
+    - cron: '5,20,35,50 10-23 * * 0,6'
+    # Weekday evenings: every 15 min (Mon-Fri 17:00-23:59 UTC)
+    - cron: '5,20,35,50 17-23 * * 1-5'
+    # Background refresh: twice daily on weekdays (morning & afternoon)
+    - cron: '0 8,14 * * 1-5'
+    # Background refresh: morning on weekends
+    - cron: '0 8 * * 0,6'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-dashboard
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+
+      - name: Check if update needed
+        id: check
+        run: |
+          python3 << 'PYEOF'
+          import requests, os, subprocess, datetime
+
+          FPL = "https://fantasy.premierleague.com/api"
+          HDR = {"User-Agent": "PL-Dashboard/1.0"}
+          output_file = os.environ.get("GITHUB_OUTPUT", "/dev/null")
+
+          def write_output(value):
+              with open(output_file, "a") as f:
+                  f.write(f"should_update={value}\n")
+
+          try:
+              fx = requests.get(f"{FPL}/fixtures/", headers=HDR, timeout=15).json()
+              live = [f for f in fx if f.get("started") and not f.get("finished")]
+              if live:
+                  print(f"LIVE: {len(live)} matches in progress — updating")
+                  write_output("true")
+                  raise SystemExit(0)
+          except SystemExit:
+              raise
+          except Exception as e:
+              print(f"API check failed ({e}) — updating as precaution")
+              write_output("true")
+              raise SystemExit(0)
+
+          # No live matches — check how old index.html is
+          result = subprocess.run(
+              ["git", "log", "-1", "--format=%ct", "--", "index.html"],
+              capture_output=True, text=True
+          )
+          last_ts = int(result.stdout.strip()) if result.stdout.strip() else 0
+          now_ts = datetime.datetime.now(datetime.timezone.utc).timestamp()
+          age_hours = (now_ts - last_ts) / 3600
+
+          if age_hours > 3:
+              print(f"Last update was {age_hours:.1f}h ago — refreshing")
+              write_output("true")
+          else:
+              print(f"No live matches, last update {age_hours:.1f}h ago — skipping")
+              write_output("false")
+          PYEOF
+
+      - name: Build dashboard
+        if: steps.check.outputs.should_update == 'true'
+        run: python update_pl_mobile.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Commit & push if changed
+        if: steps.check.outputs.should_update == 'true'
+        run: |
+          cp -f pl_mobile.html index.html
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --staged --quiet; then
+            echo "No changes to deploy"
+          else
+            LIVE_COUNT=$(python3 -c "
+          import requests
+          try:
+              fx = requests.get('https://fantasy.premierleague.com/api/fixtures/',
+                                headers={'User-Agent':'PL/1.0'}, timeout=10).json()
+              live = [f for f in fx if f.get('started') and not f.get('finished')]
+              print(len(live))
+          except: print(0)
+          " 2>/dev/null || echo "0")
+
+            if [ "$LIVE_COUNT" -gt 0 ] 2>/dev/null; then
+              MSG="Live update ($LIVE_COUNT matches in progress)"
+            else
+              MSG="Auto-update dashboard data"
+            fi
+            git commit -m "$MSG"
+            git push
+            echo "Deployed successfully"
+          fi
