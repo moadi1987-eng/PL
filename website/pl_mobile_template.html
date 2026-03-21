@@ -254,25 +254,28 @@ var ESPNST='https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings';
 var _rTmr=null,_cdTmr=null,_hasLive=false,_wasLive=false,_justEnded=0,_fid=0,_nxtIn=0;
 
 function _mkPx(url){var e=encodeURIComponent(url);return[
-  'https://corsproxy.io/?'+e,
-  'https://api.allorigins.win/raw?url='+e,
-  'https://api.codetabs.com/v1/proxy?quest='+e,
-  'https://thingproxy.freeboard.io/fetch/'+url,
-  'https://corsproxy.io/?'+url
+  {u:'https://api.codetabs.com/v1/proxy?quest='+e,w:false},
+  {u:'https://api.allorigins.win/get?url='+e,w:true},
+  {u:'https://corsproxy.io/?'+e,w:false},
+  {u:'https://corsproxy.org/?'+e,w:false}
 ]}
 
 function pxF(url,cb){
   var ps=_mkPx(url),done=false,pending=0;
   function win(d){if(done)return;done=true;cb(d)}
-  function tryPx(purl,idx){
+  function tryPx(p){
     pending++;
     var x=new XMLHttpRequest();
-    x.open('GET',purl,true);
+    x.open('GET',p.u,true);
     x.timeout=8000;
     x.onload=function(){
       if(done)return;
       if(x.status>=200&&x.status<300){
-        try{var d=JSON.parse(x.responseText);if(d&&typeof d==='object'){win(d);return}}catch(e){}
+        try{
+          var raw=JSON.parse(x.responseText);
+          var d=p.w&&raw&&raw.contents?JSON.parse(raw.contents):raw;
+          if(d&&typeof d==='object'){win(d);return}
+        }catch(e){}
       }
       pending--;if(!pending&&!done)win(null);
     };
@@ -280,7 +283,7 @@ function pxF(url,cb){
     x.ontimeout=function(){pending--;if(!pending&&!done)win(null)};
     x.send();
   }
-  for(var i=0;i<ps.length;i++)tryPx(ps[i],i);
+  for(var i=0;i<ps.length;i++)tryPx(ps[i]);
   setTimeout(function(){if(!done)win(null)},10000);
 }
 

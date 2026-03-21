@@ -2,12 +2,12 @@ name: Update PL Dashboard
 
 on:
   schedule:
-    # ── PL + La Liga: Sat/Sun all day (every 15 min, 10:00-23:59 UTC) ──
-    - cron: '5,20,35,50 10-23 * * 0,6'
-    # ── PL + La Liga: Weekday evenings (every 15 min, 17:00-23:59 UTC) ──
-    - cron: '5,20,35,50 17-23 * * 1-5'
-    # ── La Liga: Friday early evening (every 15 min, 13:00-16:59 UTC) ──
-    - cron: '5,35 13-16 * * 5'
+    # ── PL + La Liga: Sat/Sun all day (every 5 min, 10:00-23:59 UTC) ──
+    - cron: '*/5 10-23 * * 0,6'
+    # ── PL + La Liga: Weekday evenings (every 5 min, 17:00-23:59 UTC) ──
+    - cron: '*/5 17-23 * * 1-5'
+    # ── La Liga: Friday early evening (every 10 min, 13:00-16:59 UTC) ──
+    - cron: '*/10 13-16 * * 5'
     # ── Background refresh: weekday morning & afternoon ──
     - cron: '0 8,14 * * 1-5'
     # ── Background refresh: weekend morning ──
