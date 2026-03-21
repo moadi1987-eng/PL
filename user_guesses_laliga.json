@@ -1,0 +1,39 @@
+{
+  "29": {
+    "guesses": [
+      {
+        "match_id": 748424,
+        "winner": "draw"
+      },
+      {
+        "match_id": 748425,
+        "winner": "draw"
+      },
+      {
+        "match_id": 748426,
+        "winner": "draw"
+      },
+      {
+        "match_id": 748427,
+        "winner": "away"
+      },
+      {
+        "match_id": 748428,
+        "winner": "draw"
+      },
+      {
+        "match_id": 748431,
+        "winner": "home"
+      },
+      {
+        "match_id": 748432,
+        "winner": "home"
+      },
+      {
+        "match_id": 748433,
+        "winner": "away"
+      }
+    ],
+    "saved_at": "2026-03-21 15:46:28"
+  }
+}

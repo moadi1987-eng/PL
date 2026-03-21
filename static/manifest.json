@@ -1,0 +1,14 @@
+{
+  "name": "PL Dashboard",
+  "short_name": "PL Dashboard",
+  "description": "Premier League results, standings, predictions and guess the results",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a0a1f",
+  "theme_color": "#37003c",
+  "orientation": "any",
+  "icons": [
+    { "src": "/static/favicon-32.png", "sizes": "32x32", "type": "image/png", "purpose": "any" },
+    { "src": "/static/pl-logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
