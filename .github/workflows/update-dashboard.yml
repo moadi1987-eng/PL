@@ -117,14 +117,14 @@ jobs:
 
       - name: Build dashboard
         if: steps.check.outputs.should_update == 'true'
-        run: python update_pl_mobile.py
+        run: python website/update_pl_mobile.py
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Commit & push if changed
         if: steps.check.outputs.should_update == 'true'
         run: |
-          cp -f pl_mobile.html index.html
+          cp -f website/pl_mobile.html index.html
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add index.html
