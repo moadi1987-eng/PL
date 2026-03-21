@@ -160,6 +160,7 @@ jobs:
               MSG="Auto-update dashboard data"
             fi
             git commit -m "$MSG"
-            git push
+            git pull --rebase origin main || true
+            git push origin main
             echo "Deployed successfully"
           fi
