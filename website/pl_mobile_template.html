@@ -354,21 +354,16 @@ function _applyData(lg,tm,gws,fix){
 function _fPL(){
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
-  var n=0,bs=null,fx=null;
-  function chk(){
-    if(n<2||fid!==_fid)return;
-    if(!bs||!fx){_updDone(false);return}
-    var tm={};
-    (bs.teams||[]).forEach(function(t){
-      tm[t.id]={id:t.id,n:t.name,s:t.short_name,c:t.code,
-        b:'https://resources.premierleague.com/premierleague/badges/70/t'+t.code+'.png',
-        sah:t.strength_attack_home||1000,sdh:t.strength_defence_home||1000,
-        saa:t.strength_attack_away||1000,sda:t.strength_defence_away||1000};
-    });
-    var gws=(bs.events||[]).map(function(e){return{id:e.id,fin:e.finished,cur:e.is_current}});
+  pxF(FPLURL+'/fixtures/',function(fx){
+    if(fid!==_fid)return;
+    if(!fx||!fx.length){_updDone(false);return}
+
+    var tm=D.tm||{};
+    var gw=D.gw||[];
+
     var fix=[];
     var now=new Date();
-    (fx||[]).forEach(function(f){
+    fx.forEach(function(f){
       if(f.event==null)return;
       var st=f.started||false,fin=f.finished||false,fp=f.finished_provisional||false;
       var mn=f.minutes||0,ko=f.kickoff_time||'';
@@ -381,12 +376,22 @@ function _fPL(){
       fix.push({id:f.id,e:f.event,h:f.team_h,a:f.team_a,
         hs:f.team_h_score,as:f.team_a_score,fin:fin,st:st,ko:ko,mn:mn});
     });
-    if(!Object.keys(tm).length){_updDone(false);return}
-    _applyData('pl',tm,gws,fix);
+
+    var curGW=null;
+    if(gw.length){
+      var fxByGW={};fix.forEach(function(f){if(!fxByGW[f.e])fxByGW[f.e]=[];fxByGW[f.e].push(f)});
+      gw.forEach(function(g){
+        var gf=fxByGW[g.id]||[];
+        g.fin=gf.length>0&&gf.every(function(f){return f.fin});
+        g.cur=gf.some(function(f){return f.st&&!f.fin});
+      });
+      for(var gi=0;gi<gw.length;gi++){if(gw[gi].cur){curGW=gw[gi];break}}
+      if(!curGW){for(var gi2=gw.length-1;gi2>=0;gi2--){if(gw[gi2].fin){curGW=gw[gi2];break}}}
+    }
+
+    _applyData('pl',tm,gw,fix);
     _updDone(true);
-  }
-  pxF(FPLURL+'/bootstrap-static/',function(d){bs=d;n++;chk()});
-  pxF(FPLURL+'/fixtures/',function(d){fx=d;n++;chk()});
+  });
 }
 
 function _fLL(){
@@ -395,20 +400,11 @@ function _fLL(){
   var now=new Date();
   var sy=now.getMonth()>=6?now.getFullYear():now.getFullYear()-1;
   var dr=sy+'0801-'+(sy+1)+'0630';
-  var n=0,evts=null,stnd=null;
-  function chk(){
-    if(n<2||fid!==_fid)return;
+  pxF(ESPNSB+'?dates='+dr+'&limit=1000',function(d){
+    if(fid!==_fid)return;
+    var evts=d?(d.events||null):null;
     if(!evts){_updDone(false);return}
-    var tm={};
-    if(stnd){
-      var ch=stnd.children||[];
-      var ents=ch.length?((ch[0].standings||{}).entries||[]):[];
-      ents.forEach(function(en){
-        var et=en.team||{};var tid=+(et.id||0);var logos=et.logos||[];
-        if(tid)tm[tid]={id:tid,n:et.displayName||'',s:et.abbreviation||'???',c:tid,
-          b:logos.length?logos[0].href:'',sah:1200,sdh:1200,saa:1100,sda:1100};
-      });
-    }
+    var tm=D.tm&&Object.keys(D.tm).length?D.tm:{};
     evts.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
     evts.forEach(function(ev){
       (ev.competitions||[]).forEach(function(comp){
@@ -431,7 +427,7 @@ function _fLL(){
       var hs=null,as2=null;
       if(started){hs=parseInt(hm.score,10)||0;as2=parseInt(aw.score,10)||0}
       fix.push({id:+(ev.id||0),e:Math.floor(idx/10)+1,h:+(hm.team.id),a:+(aw.team.id),
-        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||''});
+        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:0});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     var maxMd=0;fix.forEach(function(f){if(f.e>maxMd)maxMd=f.e});
@@ -446,9 +442,7 @@ function _fLL(){
     if(!gws.some(function(g){return g.cur})){for(var gi=gws.length-1;gi>=0;gi--){if(gws[gi].fin){gws[gi].cur=true;break}}}
     _applyData('laliga',tm,gws,fix);
     _updDone(true);
-  }
-  pxF(ESPNSB+'?dates='+dr+'&limit=1000',function(d){evts=d?(d.events||null):null;n++;chk()});
-  pxF(ESPNST,function(d){stnd=d;n++;chk()});
+  });
 }
 
 function bSt(upToGW){var t={};Object.keys(D.tm).forEach(function(k){var x=D.tm[k];t[x.id]={t:x,p:0,w:0,d:0,l:0,gf:0,ga:0,gd:0,pts:0,fm:[]}});
