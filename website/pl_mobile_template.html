@@ -366,9 +366,19 @@ function _fPL(){
     });
     var gws=(bs.events||[]).map(function(e){return{id:e.id,fin:e.finished,cur:e.is_current}});
     var fix=[];
+    var now=new Date();
     (fx||[]).forEach(function(f){
-      if(f.event!=null)fix.push({id:f.id,e:f.event,h:f.team_h,a:f.team_a,
-        hs:f.team_h_score,as:f.team_a_score,fin:f.finished||false,st:f.started||false,ko:f.kickoff_time||'',mn:f.minutes||0});
+      if(f.event==null)return;
+      var st=f.started||false,fin=f.finished||false,fp=f.finished_provisional||false;
+      var mn=f.minutes||0,ko=f.kickoff_time||'';
+      if(fp)fin=true;
+      if(st&&!fin&&ko){
+        var el=Math.floor((now-new Date(ko))/60000);
+        if(mn===0&&el>0)mn=Math.max(0,el);
+        if(el>115){fin=true;mn=90}
+      }
+      fix.push({id:f.id,e:f.event,h:f.team_h,a:f.team_a,
+        hs:f.team_h_score,as:f.team_a_score,fin:fin,st:st,ko:ko,mn:mn});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     _applyData('pl',tm,gws,fix);
@@ -508,8 +518,15 @@ function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 function liveMin(ko,mn){
-  if(mn&&mn>0){if(mn===45)return"HT";if(mn>=90)return"90+";return mn+"'"}
-  if(!ko)return"";try{var k=new Date(ko),now=new Date(),diff=Math.floor((now-k)/60000);if(diff<0)return"";if(diff<=45)return diff+"'";if(diff<=65)return"HT";if(diff<=110)return Math.min(45+diff-65,90)+"'";return"90+"}catch(e){return""}
+  var el=0;
+  if(ko){try{el=Math.floor((new Date()-new Date(ko))/60000)}catch(e){}}
+  var m=mn&&mn>0?mn:(el>0?el:0);
+  if(m<=0)return"LIVE";
+  if(m>=90)return"90+";
+  if(m>45&&m<=48&&el<65)return"45+";
+  if(el>=47&&el<=65)return"HT";
+  if(m>45&&el>=65)return Math.min(m,90)+"'";
+  return m+"'";
 }
 var _gMerged=false;
 function _gKey(){return D.league==="laliga"?"llg":"plg"}

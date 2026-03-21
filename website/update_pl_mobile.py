@@ -45,7 +45,8 @@ gws = [{"id": e["id"], "fin": e["finished"], "cur": e["is_current"]} for e in bs
 fixtures = [{
     "id": f["id"], "e": f.get("event"), "h": f["team_h"], "a": f["team_a"],
     "hs": f.get("team_h_score"), "as": f.get("team_a_score"),
-    "fin": f.get("finished", False), "st": f.get("started", False),
+    "fin": f.get("finished", False) or f.get("finished_provisional", False),
+    "st": f.get("started", False),
     "ko": f.get("kickoff_time", ""), "mn": f.get("minutes", 0),
 } for f in fx if f.get("event") is not None]
 
