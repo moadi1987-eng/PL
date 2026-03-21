@@ -30,14 +30,35 @@ bs = requests.get(f"{FPL}/bootstrap-static/", headers=hdr, timeout=20).json()
 fx = requests.get(f"{FPL}/fixtures/", headers=hdr, timeout=20).json()
 
 teams = {}
+team_xg = {}
+for p in bs.get("elements", []):
+    tid = p.get("team")
+    if tid not in team_xg:
+        team_xg[tid] = {"xg": 0, "xa": 0, "xgc": 0, "mins": 0, "inj": []}
+    team_xg[tid]["xg"] += float(p.get("expected_goals", 0))
+    team_xg[tid]["xa"] += float(p.get("expected_assists", 0))
+    if p.get("element_type") in (1, 2):
+        team_xg[tid]["xgc"] += float(p.get("expected_goals_conceded", 0))
+    team_xg[tid]["mins"] += p.get("minutes", 0)
+    if p.get("status") in ("i", "s", "u"):
+        xgi = float(p.get("expected_goal_involvements", 0))
+        if xgi > 3:
+            team_xg[tid]["inj"].append({"n": p.get("web_name", "?"), "xgi": round(xgi, 1)})
+
 for t in bs["teams"]:
-    teams[t["id"]] = {
-        "id": t["id"], "n": t["name"], "s": t["short_name"], "c": t["code"],
+    tid = t["id"]
+    tx = team_xg.get(tid, {})
+    me = max(tx.get("mins", 990) / 11 / 90, 1)
+    teams[tid] = {
+        "id": tid, "n": t["name"], "s": t["short_name"], "c": t["code"],
         "b": BADGE.format(t["code"]),
         "sah": t.get("strength_attack_home", 1000),
         "sdh": t.get("strength_defence_home", 1000),
         "saa": t.get("strength_attack_away", 1000),
         "sda": t.get("strength_defence_away", 1000),
+        "xg": round(tx.get("xg", 0) / me, 2),
+        "xgc": round(tx.get("xgc", 0) / max(me, 1), 2),
+        "inj": tx.get("inj", [])[:3],
     }
 
 gws = [{"id": e["id"], "fin": e["finished"], "cur": e["is_current"]} for e in bs["events"]]

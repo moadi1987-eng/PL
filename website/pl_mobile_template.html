@@ -458,6 +458,9 @@ function streak(ms,n){var r=ms.slice(-n),t=0,ws=0;for(var i=0;i<r.length;i++){va
 function haSplit(ms,isH){var f=ms.filter(function(m){return m.ih===isH});if(!f.length)return{gf:1,ga:1,wr:33};var gf=0,ga=0,w=0;f.forEach(function(m){gf+=m.gf;ga+=m.ga;if(m.r==="W")w++});var n=f.length;return{gf:Math.round(gf/n*100)/100,ga:Math.round(ga/n*100)/100,wr:Math.round(w/n*1000)/10}}
 function h2h(hid,aid){var r={hw:0,d:0,aw:0,hg:0,ag:0,n:0};D.fx.forEach(function(f){if(!f.fin||f.hs==null)return;if((f.h===hid&&f.a===aid)||(f.h===aid&&f.a===hid)){r.n++;if(f.h===hid){r.hg+=f.hs;r.ag+=f.as;if(f.hs>f.as)r.hw++;else if(f.hs===f.as)r.d++;else r.aw++}else{r.hg+=f.as;r.ag+=f.hs;if(f.as>f.hs)r.hw++;else if(f.as===f.hs)r.d++;else r.aw++}}});return r}
 
+function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++)f*=i;return Math.pow(lam,k)*Math.exp(-lam)/f}
+function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
+
 function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},at=D.tm[aid]||{};
   var pm={};D.st.forEach(function(r,i){pm[r.t.id]=i+1});
   var hAll=allMatches(hid,gw),aAll=allMatches(aid,gw);
@@ -467,43 +470,48 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   var hStrk=streak(hAll,5),aStrk=streak(aAll,5);
   var h2=h2h(hid,aid),h2hH=h2.n?Math.round((h2.hw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:55,h2hA=h2.n?Math.round((h2.aw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:45;
   var hSp=haSplit(hAll,true),aSp=haSplit(aAll,false);
-  var hTrGf=0,aTrGf=0;if(hAll.length){var hl=hAll.slice(-3);hTrGf=0;hl.forEach(function(m){hTrGf+=m.gf});hTrGf=hTrGf/hl.length}else hTrGf=1.2;
-  if(aAll.length){var al=aAll.slice(-3);aTrGf=0;al.forEach(function(m){aTrGf+=m.gf});aTrGf=aTrGf/al.length}else aTrGf=1;
-  // Upset potential: wins vs top-6 opponents
-  function upsetPot(ms,oppId){var u=0,t=0;ms.forEach(function(m){var op=pm[m.opp]||10;if(op<=6){t++;if(m.r==="W")u++}});return t?Math.round(u/t*1000)/10:0}
-  var hUpset=upsetPot(hAll,aid),aUpset=upsetPot(aAll,hid);
-  // Clean sheet rate last 5
+  var hTrGf=0,aTrGf=0;if(hAll.length){var hl=hAll.slice(-3);hl.forEach(function(m){hTrGf+=m.gf});hTrGf/=hl.length}else hTrGf=1.2;
+  if(aAll.length){var al=aAll.slice(-3);al.forEach(function(m){aTrGf+=m.gf});aTrGf/=al.length}else aTrGf=1;
   function csRate(ms){var r=ms.slice(-5);if(!r.length)return 0;var c=0;r.forEach(function(m){if(m.ga===0)c++});return Math.round(c/r.length*1000)/10}
   var hCs=csRate(hAll),aCs=csRate(aAll);
-  // Draw tendency last 8
   function drawTend(ms){var r=ms.slice(-8);if(!r.length)return 15;var d=0;r.forEach(function(m){if(m.r==="D")d++});return Math.round(d/r.length*1000)/10}
   var hDT=drawTend(hAll),aDT=drawTend(aAll);
-  var hSc=hs.fs*W.form+hStr*W.strength+hP*W.position+18*W.home_adv+hStrk*W.streak+h2hH*W.h2h+hSp.wr*W.home_away_split+hTrGf*30*W.goals_trend+hUpset*(W.upset||0)+hCs*(W.clean_sheet||0)+(100-hDT)*(W.draw_tendency||0);
-  var aSc=as.fs*W.form+aStr*W.strength+aP*W.position+0+aStrk*W.streak+h2hA*W.h2h+aSp.wr*W.home_away_split+aTrGf*30*W.goals_trend+aUpset*(W.upset||0)+aCs*(W.clean_sheet||0)+(100-aDT)*(W.draw_tendency||0);
-  var tot=(hSc+aSc)||1,hp=hSc/tot*100,ap=aSc/tot*100;
-  var cl=1-Math.abs(hp-ap)/100,avgDT=(hDT+aDT)/2,dBoost=Math.max(0,(avgDT-20)*0.3);
-  var dp=10+cl*18+dBoost,rt=hp+dp+ap;
-  hp=Math.round(hp/rt*1000)/10;dp=Math.round(dp/rt*1000)/10;ap=Math.round((100-hp-dp)*10)/10;
+  // Factor-based scores
+  var hSc=hs.fs*W.form+hStr*W.strength+hP*W.position+18*W.home_adv+hStrk*W.streak+h2hH*W.h2h+hSp.wr*W.home_away_split+hTrGf*30*W.goals_trend+hCs*(W.clean_sheet||0)+(100-hDT)*(W.draw_tendency||0);
+  var aSc=as.fs*W.form+aStr*W.strength+aP*W.position+0+aStrk*W.streak+h2hA*W.h2h+aSp.wr*W.home_away_split+aTrGf*30*W.goals_trend+aCs*(W.clean_sheet||0)+(100-aDT)*(W.draw_tendency||0);
+  var tot=(hSc+aSc)||1,fhp=hSc/tot*100,fap=aSc/tot*100;
+  var cl=1-Math.abs(fhp-fap)/100,avgDT=(hDT+aDT)/2;
+  var fdp=10+cl*18+Math.max(0,(avgDT-20)*0.3),frt=fhp+fdp+fap;
+  fhp=fhp/frt*100;fdp=fdp/frt*100;fap=100-fhp-fdp;
+  // xG + Poisson model for goals
   var hm=Math.max(hs.c,1),am=Math.max(as.c,1);
-  var phg=(hs.gf/hm*.4+as.ga/am*.3+hSp.gf*.2+hTrGf*.1);
-  var pag=(as.gf/am*.4+hs.ga/hm*.3+aSp.gf*.2+aTrGf*.1);
-  // Adjust for clean sheets and concede rate
-  if(aCs>40)phg*=0.85;if(hCs>40)pag*=0.85;
-  var hConcede=0,aConcede=0;var hL5=hAll.slice(-5),aL5=aAll.slice(-5);
-  if(hL5.length){hL5.forEach(function(m){hConcede+=m.ga});hConcede/=hL5.length}
-  if(aL5.length){aL5.forEach(function(m){aConcede+=m.ga});aConcede/=aL5.length}
-  if(aConcede>2)phg*=1.1;if(hConcede>2)pag*=1.1;
-  phg=Math.round(Math.max(phg,.2)*10)/10;pag=Math.round(Math.max(pag,.2)*10)/10;
-  var rec=(hp>ap&&hp>dp)?"home":(ap>hp&&ap>dp)?"away":"draw";var rh=Math.round(phg),ra=Math.round(pag);if(rh===ra)rec="draw";
-  // Build reasoning
-  var hn=T(hid).n||T(hid).s,an=T(aid).n||T(aid).s;
+  var hXg=ht.xg||1.3,aXg=at.xg||1.1,hXgc=ht.xgc||1.2,aXgc=at.xgc||1.2;
+  var lamH=(hs.gf/hm*.15+hXg*.25+(as.ga/am)*.20+hSp.gf*.15+hTrGf*.15+(aXgc||1.2)*.10)*1.08;
+  var lamA=(as.gf/am*.15+aXg*.25+(hs.ga/hm)*.20+aSp.gf*.15+aTrGf*.15+(hXgc||1.2)*.10)*0.92;
+  // Injury penalty
+  var hInj=ht.inj||[],aInj=at.inj||[];
+  var hPen=0,aPen=0;hInj.forEach(function(p){hPen+=Math.min(p.xgi/15,.15)});aInj.forEach(function(p){aPen+=Math.min(p.xgi/15,.15)});
+  lamH*=(1-Math.min(hPen,.35));lamA*=(1-Math.min(aPen,.35));
+  if(aCs>40)lamH*=0.88;if(hCs>40)lamA*=0.88;
+  var hCon=0,aCon=0;hAll.slice(-5).forEach(function(m){hCon+=m.ga});aCon=0;aAll.slice(-5).forEach(function(m){aCon+=m.ga});
+  hCon/=Math.max(hAll.slice(-5).length,1);aCon/=Math.max(aAll.slice(-5).length,1);
+  if(aCon>2)lamH*=1.08;if(hCon>2)lamA*=1.08;
+  lamH=Math.max(lamH,.3);lamA=Math.max(lamA,.3);
+  var poi=_poissonMatch(lamH,lamA);
+  // Blend factor-based + Poisson (60% Poisson, 40% factors)
+  var hp=Math.round((fhp*.4+poi.hw*.6)*10)/10;
+  var dp=Math.round((fdp*.4+poi.dr*.6)*10)/10;
+  var ap=Math.round((100-hp-dp)*10)/10;
+  var phg=Math.round(lamH*10)/10,pag=Math.round(lamA*10)/10;
+  var rh=poi.bs[0],ra=poi.bs[1];
+  var rec=rh>ra?"home":rh<ra?"away":"draw";
+  // Reasoning
   var reasons=[];
-  reasons.push("Form (last 5): "+T(hid).s+" "+hs.w+"W "+hs.d+"D "+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W "+as.d+"D "+as.l+"L ("+as.fs+"%)");
-  reasons.push("Win probability: "+T(hid).s+" "+hp+"% | Draw "+dp+"% | "+T(aid).s+" "+ap+"%");
-  reasons.push("Home advantage: "+T(hid).s+" playing at home (+15 boost)");
-  reasons.push("League position: "+T(hid).s+" #"+(pm[hid]||"?")+" vs "+T(aid).s+" #"+(pm[aid]||"?"));
-  var lb={home:T(hid).s,draw:"Draw",away:T(aid).s};
-  reasons.push("Prediction: "+lb[rec]+" ("+rh+"-"+ra+")");
+  reasons.push("Form: "+T(hid).s+" "+hs.w+"W"+hs.d+"D"+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W"+as.d+"D"+as.l+"L ("+as.fs+"%)");
+  reasons.push("xG/match: "+T(hid).s+" "+hXg+" | "+T(aid).s+" "+aXg);
+  if(hInj.length||aInj.length){var injTxt=[];if(hInj.length)injTxt.push(T(hid).s+": "+hInj.map(function(p){return p.n}).join(", ")+" out");if(aInj.length)injTxt.push(T(aid).s+": "+aInj.map(function(p){return p.n}).join(", ")+" out");reasons.push("Injuries: "+injTxt.join(" | "))}
+  reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
+  reasons.push("Predicted: "+rh+"-"+ra+" (Poisson most likely score)");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}

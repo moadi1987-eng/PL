@@ -555,6 +555,161 @@ def _draw_tendency(matches, n=8):
     return round(draws / len(recent) * 100, 1)
 
 
+# ── Enhanced AI: Player Stats + Poisson Model ──
+
+import math
+
+def _get_team_players(team_id):
+    """Get all players for a team with key stats."""
+    bs = get_bootstrap()
+    return [p for p in bs.get("elements", []) if p.get("team") == team_id]
+
+
+def _team_xg_stats(team_id):
+    """Aggregate xG stats for a team from player data."""
+    players = _get_team_players(team_id)
+    total_xg = sum(float(p.get("expected_goals", 0)) for p in players)
+    total_xa = sum(float(p.get("expected_assists", 0)) for p in players)
+    total_xgc = sum(float(p.get("expected_goals_conceded", 0)) for p in players if p.get("element_type") in (1, 2))
+    total_mins = sum(p.get("minutes", 0) for p in players)
+    matches_est = max(total_mins / 11 / 90, 1)
+    return {
+        "xg": total_xg, "xa": total_xa, "xgc": total_xgc,
+        "xg_per_match": round(total_xg / matches_est, 2),
+        "xgc_per_match": round(total_xgc / max(matches_est, 1), 2),
+    }
+
+
+def _key_player_impact(team_id):
+    """Check if key players are injured/suspended. Returns penalty 0-1."""
+    players = _get_team_players(team_id)
+    top_attackers = sorted(players, key=lambda p: float(p.get("expected_goals", 0)), reverse=True)[:3]
+    top_creators = sorted(players, key=lambda p: float(p.get("expected_assists", 0)), reverse=True)[:2]
+    key = set()
+    for p in top_attackers + top_creators:
+        key.add(p["id"])
+
+    penalty = 0
+    for p in players:
+        if p["id"] in key:
+            status = p.get("status", "a")
+            chance = p.get("chance_of_playing_next_round")
+            if status in ("i", "s", "u") or chance == 0:
+                xgi = float(p.get("expected_goal_involvements", 0))
+                penalty += min(xgi / 15, 0.15)
+            elif chance is not None and chance < 75:
+                penalty += 0.03
+    return round(min(penalty, 0.35), 3)
+
+
+def _poisson_prob(lam, k):
+    """P(X=k) for Poisson distribution."""
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+def _poisson_match_probs(lambda_home, lambda_away, max_goals=6):
+    """Calculate match outcome probabilities using Poisson model."""
+    home_win = draw = away_win = 0
+    scorelines = {}
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            p = _poisson_prob(lambda_home, h) * _poisson_prob(lambda_away, a)
+            scorelines[(h, a)] = p
+            if h > a:
+                home_win += p
+            elif h == a:
+                draw += p
+            else:
+                away_win += p
+    total = home_win + draw + away_win
+    if total > 0:
+        home_win /= total
+        draw /= total
+        away_win /= total
+    best_score = max(scorelines, key=scorelines.get)
+    return {
+        "home_win": round(home_win * 100, 1),
+        "draw": round(draw * 100, 1),
+        "away_win": round(away_win * 100, 1),
+        "best_score": best_score,
+        "score_prob": round(scorelines[best_score] * 100, 1),
+    }
+
+
+def _opponent_adjusted_goals(team_matches, pos_map, is_home):
+    """Weight goals by opponent quality."""
+    if not team_matches:
+        return 1.2
+    total = 0
+    weight_sum = 0
+    for i, m in enumerate(team_matches):
+        opp_pos = pos_map.get(m["opp"], 10)
+        quality = opp_pos / 20.0
+        decay = 0.5 + 0.5 * (i / max(len(team_matches) - 1, 1))
+        w = quality * decay
+        total += m["gf"] * w
+        weight_sum += w
+    return total / max(weight_sum, 0.01)
+
+
+AI_ACCURACY_FILE = os.path.join(DATA_DIR, "ai_accuracy.json")
+
+def _load_accuracy():
+    if os.path.exists(AI_ACCURACY_FILE):
+        try:
+            with open(AI_ACCURACY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"predictions": [], "stats": {"total": 0, "winner_correct": 0, "score_correct": 0}}
+
+
+def _save_accuracy(data):
+    with open(AI_ACCURACY_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def track_prediction_accuracy():
+    """Compare past predictions with actual results."""
+    acc = _load_accuracy()
+    all_fix = get_all_fixtures()
+    results = {}
+    for f in all_fix:
+        if f.get("finished") and f.get("team_h_score") is not None:
+            results[f["id"]] = {
+                "hs": f["team_h_score"], "as": f["team_a_score"],
+                "winner": "home" if f["team_h_score"] > f["team_a_score"] else "draw" if f["team_h_score"] == f["team_a_score"] else "away"
+            }
+
+    changed = False
+    for pred in acc["predictions"]:
+        if pred.get("checked"):
+            continue
+        mid = pred.get("match_id")
+        if mid in results:
+            r = results[mid]
+            pred["actual_winner"] = r["winner"]
+            pred["actual_hs"] = r["hs"]
+            pred["actual_as"] = r["as"]
+            pred["winner_correct"] = pred.get("pred_winner") == r["winner"]
+            pred["score_correct"] = pred.get("pred_hs") == r["hs"] and pred.get("pred_as") == r["as"]
+            pred["checked"] = True
+            changed = True
+
+    if changed:
+        checked = [p for p in acc["predictions"] if p.get("checked")]
+        acc["stats"]["total"] = len(checked)
+        acc["stats"]["winner_correct"] = sum(1 for p in checked if p.get("winner_correct"))
+        acc["stats"]["score_correct"] = sum(1 for p in checked if p.get("score_correct"))
+        if checked:
+            acc["stats"]["winner_pct"] = round(acc["stats"]["winner_correct"] / len(checked) * 100, 1)
+            acc["stats"]["score_pct"] = round(acc["stats"]["score_correct"] / len(checked) * 100, 1)
+        _save_accuracy(acc)
+    return acc["stats"]
+
+
 WEIGHTS_FILE = os.path.join(DATA_DIR, "ai_weights.json")
 
 def _load_weights_pl():
@@ -774,7 +929,8 @@ def predict_match(home_id, away_id, current_gw):
     draw_pct = round(draw_pct / raw_total * 100, 1)
     away_pct = round(100 - home_pct - draw_pct, 1)
 
-    # Goals prediction: combine form avg + opponent weakness + trend
+    # ── Enhanced Goals Prediction: xG + Poisson + Player Data ──
+
     h_matches = max(len(home_stats["matches"]), 1)
     a_matches = max(len(away_stats["matches"]), 1)
     avg_home_gf = home_stats["goals_for"] / h_matches
@@ -782,37 +938,101 @@ def predict_match(home_id, away_id, current_gw):
     avg_away_gf = away_stats["goals_for"] / a_matches
     avg_away_ga = away_stats["goals_against"] / a_matches
 
-    pred_home_goals = (avg_home_gf * 0.4 + avg_away_ga * 0.3 + h_split["gf_avg"] * 0.2 + h_trend_gf * 0.1)
-    pred_away_goals = (avg_away_gf * 0.4 + avg_home_ga * 0.3 + a_split["gf_avg"] * 0.2 + a_trend_gf * 0.1)
+    # Player-level xG data
+    h_xg = _team_xg_stats(home_id)
+    a_xg = _team_xg_stats(away_id)
 
-    opp_quality_h = _opponent_quality(away_id, pos_map)
-    opp_quality_a = _opponent_quality(home_id, pos_map)
-    pred_home_goals *= (1.08 / max(opp_quality_h, 0.5))
-    pred_away_goals *= (0.95 / max(opp_quality_a, 0.5))
+    # Opponent-adjusted goals
+    h_adj_gf = _opponent_adjusted_goals(h_all, pos_map, True)
+    a_adj_gf = _opponent_adjusted_goals(a_all, pos_map, False)
 
-    # Reduce goals if opponent has high clean sheet rate
-    if a_cs > 40:
-        pred_home_goals *= 0.85
-    if h_cs > 40:
-        pred_away_goals *= 0.85
+    # Lambda (expected goals) for Poisson: blend form + xG + opponent weakness
+    lambda_home = (
+        avg_home_gf * 0.20 +
+        h_xg["xg_per_match"] * 0.25 +
+        avg_away_ga * 0.20 +
+        h_split["gf_avg"] * 0.15 +
+        h_adj_gf * 0.10 +
+        h_trend_gf * 0.10
+    )
+    lambda_away = (
+        avg_away_gf * 0.20 +
+        a_xg["xg_per_match"] * 0.25 +
+        avg_home_ga * 0.20 +
+        a_split["gf_avg"] * 0.15 +
+        a_adj_gf * 0.10 +
+        a_trend_gf * 0.10
+    )
 
-    # Increase goals if opponent concedes a lot recently
+    # Home advantage boost
+    lambda_home *= 1.08
+    lambda_away *= 0.92
+
+    # Key player injury penalty
+    h_injury_pen = _key_player_impact(home_id)
+    a_injury_pen = _key_player_impact(away_id)
+    lambda_home *= (1 - h_injury_pen)
+    lambda_away *= (1 - a_injury_pen)
+
+    # Clean sheet / concede adjustments
     h_concede = _concede_rate(h_all, 5)
     a_concede = _concede_rate(a_all, 5)
+    if a_cs > 40:
+        lambda_home *= 0.88
+    if h_cs > 40:
+        lambda_away *= 0.88
     if a_concede > 2.0:
-        pred_home_goals *= 1.1
+        lambda_home *= 1.08
     if h_concede > 2.0:
-        pred_away_goals *= 1.1
+        lambda_away *= 1.08
 
-    pred_home_goals = round(max(pred_home_goals, 0.2), 1)
-    pred_away_goals = round(max(pred_away_goals, 0.2), 1)
+    lambda_home = max(lambda_home, 0.3)
+    lambda_away = max(lambda_away, 0.3)
+
+    # Poisson probabilities
+    poisson = _poisson_match_probs(lambda_home, lambda_away)
+
+    # Blend Poisson probabilities with factor-based probabilities
+    final_home_pct = round(home_pct * 0.4 + poisson["home_win"] * 0.6, 1)
+    final_draw_pct = round(draw_pct * 0.4 + poisson["draw"] * 0.6, 1)
+    final_away_pct = round(100 - final_home_pct - final_draw_pct, 1)
+
+    pred_home_goals = round(lambda_home, 1)
+    pred_away_goals = round(lambda_away, 1)
+    best_h, best_a = poisson["best_score"]
+
+    # Save prediction for accuracy tracking
+    try:
+        acc = _load_accuracy()
+        all_fix = get_all_fixtures()
+        match_id = None
+        for f in all_fix:
+            if f.get("event") == current_gw and f.get("team_h") == home_id and f.get("team_a") == away_id:
+                match_id = f["id"]
+                break
+        if match_id and not any(p.get("match_id") == match_id for p in acc["predictions"]):
+            recommended = "home" if final_home_pct > final_away_pct and final_home_pct > final_draw_pct else \
+                         "away" if final_away_pct > final_home_pct and final_away_pct > final_draw_pct else "draw"
+            acc["predictions"].append({
+                "match_id": match_id, "gw": current_gw,
+                "pred_winner": recommended, "pred_hs": best_h, "pred_as": best_a,
+                "home_pct": final_home_pct, "draw_pct": final_draw_pct, "away_pct": final_away_pct,
+            })
+            acc["predictions"] = acc["predictions"][-500:]
+            _save_accuracy(acc)
+    except Exception:
+        pass
 
     return {
-        "home_win_pct": home_pct,
-        "draw_pct": draw_pct,
-        "away_win_pct": away_pct,
+        "home_win_pct": final_home_pct,
+        "draw_pct": final_draw_pct,
+        "away_win_pct": final_away_pct,
         "predicted_home_goals": pred_home_goals,
         "predicted_away_goals": pred_away_goals,
+        "poisson_score": (best_h, best_a),
+        "poisson_prob": poisson["score_prob"],
+        "home_xg": h_xg, "away_xg": a_xg,
+        "home_injury_pen": h_injury_pen, "away_injury_pen": a_injury_pen,
         "home_form": home_stats,
         "away_form": away_stats,
     }
@@ -2226,10 +2446,26 @@ def api_push_update():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/ai-accuracy")
+def api_ai_accuracy():
+    try:
+        stats = track_prediction_accuracy()
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def auto_update_mobile():
-    """Auto-update: calibrate AI weights + push to GitHub Pages on startup."""
+    """Auto-update: calibrate AI weights + track accuracy + push to GitHub Pages on startup."""
     import subprocess, sys, threading
     def run():
+        try:
+            print("[AI] Tracking prediction accuracy...")
+            acc_stats = track_prediction_accuracy()
+            if acc_stats.get("total", 0) > 0:
+                print(f"[AI] Accuracy: {acc_stats.get('winner_pct', 0)}% winners ({acc_stats['winner_correct']}/{acc_stats['total']})")
+        except Exception as e:
+            print(f"[AI] Accuracy tracking failed: {e}")
         try:
             print("[AI] Calibrating prediction weights from past results...")
             new_w = calibrate_weights()
