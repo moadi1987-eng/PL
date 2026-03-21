@@ -247,41 +247,41 @@ function trySync(server){
   x.send(JSON.stringify({guesses:phoneData}));
 }
 
-/* ── Live Data Fetch via CORS Proxy ── */
+/* ── Live Data Fetch — Race Proxies ── */
 var FPLURL='https://fantasy.premierleague.com/api';
 var ESPNSB='https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard';
 var ESPNST='https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings';
-var _rTmr=null,_hasLive=false,_fid=0;
+var _rTmr=null,_cdTmr=null,_hasLive=false,_wasLive=false,_justEnded=0,_fid=0,_nxtIn=0;
 
 function _mkPx(url){var e=encodeURIComponent(url);return[
   'https://corsproxy.io/?'+e,
   'https://api.allorigins.win/raw?url='+e,
   'https://api.codetabs.com/v1/proxy?quest='+e,
+  'https://thingproxy.freeboard.io/fetch/'+url,
   'https://corsproxy.io/?'+url
 ]}
 
 function pxF(url,cb){
-  var ps=_mkPx(url),i=0;
-  console.log('[Live] Fetching: '+url);
-  function nxt(){
-    if(i>=ps.length){console.log('[Live] All proxies failed for: '+url);cb(null);return}
-    var purl=ps[i++];
-    console.log('[Live] Trying proxy '+i+'/'+ps.length+': '+purl.substring(0,60)+'...');
+  var ps=_mkPx(url),done=false,pending=0;
+  function win(d){if(done)return;done=true;cb(d)}
+  function tryPx(purl,idx){
+    pending++;
     var x=new XMLHttpRequest();
     x.open('GET',purl,true);
-    x.timeout=12000;
+    x.timeout=8000;
     x.onload=function(){
-      console.log('[Live] Proxy '+i+' response: HTTP '+x.status+', len='+x.responseText.length);
+      if(done)return;
       if(x.status>=200&&x.status<300){
-        try{var d=JSON.parse(x.responseText);if(d&&typeof d==='object'){console.log('[Live] Proxy '+i+' OK!');cb(d);return}}catch(e){console.log('[Live] JSON parse failed: '+e.message)}
+        try{var d=JSON.parse(x.responseText);if(d&&typeof d==='object'){win(d);return}}catch(e){}
       }
-      nxt();
+      pending--;if(!pending&&!done)win(null);
     };
-    x.onerror=function(){console.log('[Live] Proxy '+i+' network error');nxt()};
-    x.ontimeout=function(){console.log('[Live] Proxy '+i+' timeout');nxt()};
+    x.onerror=function(){pending--;if(!pending&&!done)win(null)};
+    x.ontimeout=function(){pending--;if(!pending&&!done)win(null)};
     x.send();
   }
-  nxt();
+  for(var i=0;i<ps.length;i++)tryPx(ps[i],i);
+  setTimeout(function(){if(!done)win(null)},10000);
 }
 
 function fetchLive(){
@@ -290,18 +290,44 @@ function fetchLive(){
   else if(D.league==='laliga')_fLL();
 }
 
+function _getInterval(){
+  if(_justEnded>0)return 15000;
+  if(_hasLive)return 30000;
+  return 300000;
+}
+
+function _startCountdown(){
+  if(_cdTmr)clearInterval(_cdTmr);
+  _nxtIn=Math.round(_getInterval()/1000);
+  _cdTmr=setInterval(function(){
+    _nxtIn--;
+    if(_nxtIn<=0){clearInterval(_cdTmr);return}
+    var u=$('upd');if(!u)return;
+    var base=u.getAttribute('data-base')||u.innerHTML;
+    if(!u.getAttribute('data-base'))u.setAttribute('data-base',u.innerHTML);
+    u.innerHTML=base+' <span style="color:var(--tm);font-size:.5rem">('+_nxtIn+'s)</span>';
+  },1000);
+}
+
 function _updDone(ok){
+  var prevLive=_hasLive;
   _hasLive=D.fx.some(function(f){return f.st&&!f.fin});
+  if(prevLive&&!_hasLive){_justEnded=20;_wasLive=true}
+  if(_justEnded>0)_justEnded--;
   var t=new Date().toLocaleTimeString();
+  var u=$('upd');
   if(ok){
-    console.log('[Live] Data updated! hasLive='+_hasLive+' fixtures='+D.fx.length);
-    $('upd').innerHTML=_hasLive?'<span style="color:#e90052;font-weight:700">LIVE</span> '+t:'<span style="color:#00ff87">Live</span> '+t;
+    if(_hasLive)u.innerHTML='<span style="color:#e90052;font-weight:700">LIVE</span> '+t;
+    else if(_justEnded>0)u.innerHTML='<span style="color:#ffc107;font-weight:700">Finishing</span> '+t;
+    else u.innerHTML='<span style="color:#00ff87">Updated</span> '+t;
   }else{
-    console.log('[Live] Failed — using embedded data');
-    $('upd').innerHTML='<span style="color:#ffc107">Embedded</span> '+t;
+    u.innerHTML='<span style="color:#ffc107">Embedded</span> '+t;
   }
+  u.removeAttribute('data-base');
   if(_rTmr)clearInterval(_rTmr);
-  _rTmr=setInterval(fetchLive,_hasLive?60000:300000);
+  var iv=_getInterval();
+  _rTmr=setInterval(fetchLive,iv);
+  _startCountdown();
 }
 
 function _applyData(lg,tm,gws,fix){
