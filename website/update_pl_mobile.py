@@ -46,7 +46,7 @@ fixtures = [{
     "id": f["id"], "e": f.get("event"), "h": f["team_h"], "a": f["team_a"],
     "hs": f.get("team_h_score"), "as": f.get("team_a_score"),
     "fin": f.get("finished", False), "st": f.get("started", False),
-    "ko": f.get("kickoff_time", ""),
+    "ko": f.get("kickoff_time", ""), "mn": f.get("minutes", 0),
 } for f in fx if f.get("event") is not None]
 
 data = json.dumps({"teams": teams, "gws": gws, "fix": fixtures}, ensure_ascii=False, separators=(",", ":"))

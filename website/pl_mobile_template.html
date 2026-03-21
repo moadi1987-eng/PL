@@ -365,7 +365,7 @@ function _fPL(){
     var fix=[];
     (fx||[]).forEach(function(f){
       if(f.event!=null)fix.push({id:f.id,e:f.event,h:f.team_h,a:f.team_a,
-        hs:f.team_h_score,as:f.team_a_score,fin:f.finished||false,st:f.started||false,ko:f.kickoff_time||''});
+        hs:f.team_h_score,as:f.team_a_score,fin:f.finished||false,st:f.started||false,ko:f.kickoff_time||'',mn:f.minutes||0});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     _applyData('pl',tm,gws,fix);
@@ -504,7 +504,10 @@ function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
-function liveMin(ko){if(!ko)return"";try{var k=new Date(ko),now=new Date(),diff=Math.floor((now-k)/60000);if(diff<0)return"";if(diff<=45)return diff+"'";if(diff<=65)return"HT";if(diff<=110)return Math.min(45+diff-65,90)+"'";return"90+"}catch(e){return""}}
+function liveMin(ko,mn){
+  if(mn&&mn>0){if(mn===45)return"HT";if(mn>=90)return"90+";return mn+"'"}
+  if(!ko)return"";try{var k=new Date(ko),now=new Date(),diff=Math.floor((now-k)/60000);if(diff<0)return"";if(diff<=45)return diff+"'";if(diff<=65)return"HT";if(diff<=110)return Math.min(45+diff-65,90)+"'";return"90+"}catch(e){return""}
+}
 var _gMerged=false;
 function _gKey(){return D.league==="laliga"?"llg":"plg"}
 function gG(){
@@ -532,7 +535,7 @@ function cReas(){$("rmod").classList.remove("show")}
 function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl||"GW")+D.sel+'</div>';
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
-    var lm=m.st&&!m.fin?liveMin(m.ko):"";
+    var lm=m.st&&!m.fin?liveMin(m.ko,m.mn):"";
     var tag=m.st&&!m.fin?'<span class="labs"><span class="ldot"></span>'+(lm||"LIVE")+'</span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
@@ -554,7 +557,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
   pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:"Draw",away:am.s};
     var li="";if(m.fin)li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--g);font-weight:700">FT</span> <b>'+(m.hs!=null?m.hs:"-")+' - '+(m.as!=null?m.as:"-")+'</b></div>';
-    else if(m.st){var lm2=liveMin(m.ko);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span>'+(lm2||"LIVE")+'</span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st){var lm2=liveMin(m.ko,m.mn);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span>'+(lm2||"LIVE")+'</span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     h+='<div class="pc'+(rk?" tb":"")+'">'+(rk?'<span class="tbg">#'+rk+' Best Bet</span>':"")+
       '<div class="mr" style="margin-bottom:.2rem"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+li+
@@ -603,7 +606,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="";
     if(m.fin&&g.w){var aw=m.hs>m.as?"home":m.hs===m.as?"draw":"away",ex=g.hs===m.hs&&g.as===m.as;cls=ex?"rex":g.w===aw?"rok":"rbad";bdg=ex?'<span class="rb re">★</span>':g.w===aw?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b></div>'}
-    else if(m.st&&!m.fin){var lm3=liveMin(m.ko);act='<div class="act"><span class="ldot"></span>'+(lm3||"LIVE")+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st&&!m.fin){var lm3=liveMin(m.ko,m.mn);act='<div class="act"><span class="ldot"></span>'+(lm3||"LIVE")+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
@@ -622,7 +625,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
     var actW=aw?lb[aw]:"–",actS=ah!=null?ah+"-"+aa:"–";
     var uWS=uw?lb[uw]:"–",uSS=g.hs!=null?g.hs+"-"+g.as:"–";
     var aWS=lb[aiW],aSS=p.rh+"-"+p.ra;
-    var live=m.st&&!m.fin;var lm4=live?liveMin(m.ko):"";
+    var live=m.st&&!m.fin;var lm4=live?liveMin(m.ko,m.mn):"";
     function wCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ok">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     function sCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ex">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     var actWd=live?'<span style="color:var(--pk)">'+( lm4||"LIVE")+'</span> '+actW:actW;
