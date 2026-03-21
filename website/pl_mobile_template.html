@@ -42,6 +42,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk)
 .msc{font-size:1.1rem;font-weight:800;min-width:50px;text-align:center;flex-shrink:0}
 .mko{font-size:.5rem;color:var(--tm);text-align:center;margin-top:.1rem}
 .ldot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--pk);margin-right:3px;animation:lp 1.2s infinite}
+.clk{font-variant-numeric:tabular-nums;letter-spacing:.5px}.clk-s{font-size:.6em;opacity:.7}
 .labs{position:absolute;top:4px;right:5px;background:var(--pk);color:#fff;font-size:.46rem;font-weight:800;padding:1px 5px;border-radius:10px;display:flex;align-items:center;gap:2px;animation:lp 1.5s infinite}
 .fabs{position:absolute;top:4px;right:5px;font-size:.46rem;font-weight:700;color:var(--tm);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:10px}
 /* Table */
@@ -81,7 +82,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .si input{width:38px;height:32px;text-align:center;border:2px solid var(--bd);background:rgba(255,255,255,.05);color:var(--tx);border-radius:var(--rs);font-size:.8rem;font-weight:800;outline:none}.si input:focus{border-color:var(--g)}
 .act{text-align:center;font-size:.55rem;color:var(--tm);margin-top:.15rem}.act b{color:var(--tx)}
 .psum{background:linear-gradient(135deg,rgba(0,255,135,.06),rgba(4,245,255,.04));border:1px solid rgba(0,255,135,.15);border-radius:var(--r);padding:.35rem;margin-bottom:.35rem;text-align:center;font-size:.65rem}.psum b{color:var(--g)}
-.af-bar{margin-bottom:.4rem}.af-btn{width:100%;padding:.5rem;border:2px solid var(--pk);background:rgba(233,0,82,.1);color:var(--pk);font-size:.75rem;font-weight:700;border-radius:var(--r);cursor:pointer;text-align:center;transition:all .2s}.af-btn:active{transform:scale(.95);background:rgba(233,0,82,.25)}
+.af-bar{display:flex;gap:.3rem;margin-bottom:.4rem}.af-btn{flex:1;padding:.45rem;border:2px solid var(--bd);background:rgba(255,255,255,.03);color:var(--tx);font-size:.7rem;font-weight:700;border-radius:var(--r);cursor:pointer;text-align:center;transition:all .2s}.af-btn:active{transform:scale(.95)}.af-ai{border-color:var(--cy);color:var(--cy);background:rgba(4,245,255,.08)}.af-rnd{border-color:var(--pk);color:var(--pk);background:rgba(233,0,82,.08)}
 /* You vs AI scoreboard */
 .csb{display:flex;gap:.4rem;margin-bottom:.5rem}
 .csc{flex:1;background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem;text-align:center}
@@ -517,17 +518,45 @@ function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
-function liveMin(ko,mn){
+var _tickBase={},_tickTmr=null;
+
+function _calcMatch(ko,mn){
   var el=0;
-  if(ko){try{el=Math.floor((new Date()-new Date(ko))/60000)}catch(e){}}
-  var m=mn&&mn>0?mn:(el>0?el:0);
-  if(m<=0)return"LIVE";
-  if(m>=90)return"90+";
-  if(m>45&&m<=48&&el<65)return"45+";
-  if(el>=47&&el<=65)return"HT";
-  if(m>45&&el>=65)return Math.min(m,90)+"'";
-  return m+"'";
+  if(ko){try{el=(Date.now()-new Date(ko).getTime())/60000}catch(e){}}
+  var m=mn&&mn>0?mn:(el>0?Math.floor(el):0);
+  if(m<=0)return{st:"LIVE",m:0,ht:false};
+  if(m>=90||el>110)return{st:"90+",m:90,ht:false};
+  if(el>=47&&el<=65)return{st:"HT",m:45,ht:true};
+  if(m>45&&m<=48&&el<65)return{st:"45+",m:45,ht:false};
+  return{st:null,m:m,ht:false};
 }
+
+function liveMin(ko,mn){var c=_calcMatch(ko,mn);return c.st||(c.m+"'")}
+
+function setTick(mid,ko,mn){
+  var c=_calcMatch(ko,mn);
+  _tickBase[mid]={ko:ko,mn:mn,baseM:c.m,ts:Date.now(),ht:c.ht,fixed:c.st};
+}
+
+function _tickAll(){
+  var now=Date.now();
+  var els=document.querySelectorAll('[data-tick]');
+  els.forEach(function(el){
+    var mid=el.getAttribute('data-tick');
+    var b=_tickBase[mid];if(!b)return;
+    if(b.fixed){el.innerHTML='<span class="clk">'+b.fixed+'</span>';return}
+    var secSince=Math.floor((now-b.ts)/1000);
+    var totalSec=b.baseM*60+secSince;
+    var min=Math.floor(totalSec/60);
+    var sec=totalSec%60;
+    if(min>=90){el.innerHTML='<span class="clk">90+</span>';return}
+    if(b.ht){el.innerHTML='<span class="clk">HT</span>';return}
+    el.innerHTML='<span class="clk">'+min+'<span class="clk-s">:'+('0'+sec).slice(-2)+'</span></span>';
+  });
+}
+
+function startTicker(){if(_tickTmr)clearInterval(_tickTmr);_tickTmr=setInterval(_tickAll,1000);}
+startTicker();
 var _gMerged=false;
 function _gKey(){return D.league==="laliga"?"llg":"plg"}
 function gG(){
@@ -555,8 +584,9 @@ function cReas(){$("rmod").classList.remove("show")}
 function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl||"GW")+D.sel+'</div>';
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
-    var lm=m.st&&!m.fin?liveMin(m.ko,m.mn):"";
-    var tag=m.st&&!m.fin?'<span class="labs"><span class="ldot"></span>'+(lm||"LIVE")+'</span>':m.fin?'<span class="fabs">FT</span>':"";
+    var isLive=m.st&&!m.fin;
+    if(isLive)setTick(m.id,m.ko,m.mn);
+    var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
   h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
@@ -577,7 +607,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
   pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:"Draw",away:am.s};
     var li="";if(m.fin)li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--g);font-weight:700">FT</span> <b>'+(m.hs!=null?m.hs:"-")+' - '+(m.as!=null?m.as:"-")+'</b></div>';
-    else if(m.st){var lm2=liveMin(m.ko,m.mn);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span>'+(lm2||"LIVE")+'</span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st){setTick(m.id,m.ko,m.mn);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     h+='<div class="pc'+(rk?" tb":"")+'">'+(rk?'<span class="tbg">#'+rk+' Best Bet</span>':"")+
       '<div class="mr" style="margin-bottom:.2rem"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+li+
@@ -600,19 +630,28 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
 function _rndGoal(){var r=Math.random();if(r<.28)return 0;if(r<.62)return 1;if(r<.84)return 2;if(r<.94)return 3;return 4}
 
 function randomFill(){
-  var gw=D.sel,ms=gFix(),ag=gG(),changed=0;
+  var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
     if(m.fin)return;
     var h=_rndGoal(),a=_rndGoal();
     if(!ag[gw][m.id])ag[gw][m.id]={};
-    ag[gw][m.id].hs=h;
-    ag[gw][m.id].as=a;
+    ag[gw][m.id].hs=h;ag[gw][m.id].as=a;
     ag[gw][m.id].w=h>a?"home":h===a?"draw":"away";
-    changed++;
   });
-  sG(ag);
-  rGuess();
+  sG(ag);rGuess();
+}
+
+function aiFill(){
+  var gw=D.sel,ms=gFix(),ag=gG();
+  if(!ag[gw])ag[gw]={};
+  ms.forEach(function(m){
+    if(m.fin)return;
+    var p=pred(m.h,m.a,gw);
+    if(!ag[gw][m.id])ag[gw][m.id]={};
+    ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
+  });
+  sG(ag);rGuess();
 }
 
 function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
@@ -621,12 +660,12 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   var open=ms.filter(function(m){return!m.fin});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(open.length>0)h+='<div class="af-bar"><button class="af-btn" onclick="randomFill()">&#127922; Random Fill — '+open.length+' matches</button></div>';
+  if(open.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> winner(s), <b>'+ce+'</b> exact — <b>'+(cw*3+ce*5)+' pts</b></div>';
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="";
     if(m.fin&&g.w){var aw=m.hs>m.as?"home":m.hs===m.as?"draw":"away",ex=g.hs===m.hs&&g.as===m.as;cls=ex?"rex":g.w===aw?"rok":"rbad";bdg=ex?'<span class="rb re">★</span>':g.w===aw?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b></div>'}
-    else if(m.st&&!m.fin){var lm3=liveMin(m.ko,m.mn);act='<div class="act"><span class="ldot"></span>'+(lm3||"LIVE")+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st&&!m.fin){setTick(m.id,m.ko,m.mn);act='<div class="act"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span>: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
@@ -645,7 +684,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
     var actW=aw?lb[aw]:"–",actS=ah!=null?ah+"-"+aa:"–";
     var uWS=uw?lb[uw]:"–",uSS=g.hs!=null?g.hs+"-"+g.as:"–";
     var aWS=lb[aiW],aSS=p.rh+"-"+p.ra;
-    var live=m.st&&!m.fin;var lm4=live?liveMin(m.ko,m.mn):"";
+    var live=m.st&&!m.fin;if(live)setTick(m.id,m.ko,m.mn);var lm4=live?'<span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span>':"";
     function wCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ok">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     function sCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ex">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     var actWd=live?'<span style="color:var(--pk)">'+( lm4||"LIVE")+'</span> '+actW:actW;
