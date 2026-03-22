@@ -2483,15 +2483,33 @@ def auto_update_mobile():
     threading.Thread(target=run, daemon=True).start()
 
 
-LIVE_PUSH_INTERVAL = 300  # 5 minutes
+LIVE_PUSH_INTERVAL = 120  # 2 minutes during live
+
+
+def _trigger_ci_workflow():
+    """Trigger GitHub Actions workflow to rebuild the website."""
+    try:
+        token = os.environ.get("GITHUB_TOKEN", "").strip()
+        if not token:
+            return
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+        resp = requests.post(
+            "https://api.github.com/repos/moadi1987-eng/PL/actions/workflows/update-dashboard.yml/dispatches",
+            headers=headers, json={"ref": "main"}, timeout=10
+        )
+        if resp.status_code in (204, 200):
+            print(f"[Live-push] CI workflow triggered")
+    except Exception as e:
+        print(f"[Live-push] CI trigger failed: {e}")
 
 
 def start_live_push_watcher():
-    """Background thread: pushes to GitHub Pages every 5 min when live matches are detected."""
+    """Background thread: pushes to GitHub Pages every 2 min when live matches are detected."""
     import subprocess, sys, threading
 
     def watcher():
         was_live = False
+        push_count = 0
         while True:
             time.sleep(LIVE_PUSH_INTERVAL)
             try:
@@ -2502,29 +2520,34 @@ def start_live_push_watcher():
 
             if is_live:
                 was_live = True
+                push_count += 1
                 try:
                     script = os.path.join(os.path.dirname(__file__), "website", "update_pl_mobile.py")
                     if os.path.exists(script):
-                        print(f"[Live-push] Matches in progress — pushing update...")
+                        print(f"[Live-push] Matches in progress — pushing update #{push_count}...")
                         subprocess.run([sys.executable, script],
                                        cwd=os.path.dirname(__file__), timeout=120, capture_output=True)
                         print(f"[Live-push] Done at {time.strftime('%H:%M:%S')}")
+                    if push_count % 3 == 1:
+                        _trigger_ci_workflow()
                 except Exception as e:
                     print(f"[Live-push] Failed: {e}")
             elif was_live:
                 was_live = False
+                push_count = 0
                 try:
                     script = os.path.join(os.path.dirname(__file__), "website", "update_pl_mobile.py")
                     if os.path.exists(script):
                         print(f"[Live-push] Matches ended — final push...")
                         subprocess.run([sys.executable, script],
                                        cwd=os.path.dirname(__file__), timeout=120, capture_output=True)
+                        _trigger_ci_workflow()
                         print(f"[Live-push] Final push done at {time.strftime('%H:%M:%S')}")
                 except Exception as e:
                     print(f"[Live-push] Final push failed: {e}")
 
     threading.Thread(target=watcher, daemon=True).start()
-    print("[Live-push] Watcher started — will auto-push every 5 min during live matches")
+    print("[Live-push] Watcher started — will auto-push every 2 min during live matches")
 
 
 if __name__ == "__main__":
