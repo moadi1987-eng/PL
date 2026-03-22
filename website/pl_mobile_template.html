@@ -327,7 +327,19 @@ function _fLiveJson(){
           var tm=D.tm||{};var gw=D.gw||[];
           if(gw.length){
             var fxByGW={};fix.forEach(function(f){if(!fxByGW[f.e])fxByGW[f.e]=[];fxByGW[f.e].push(f)});
-            gw.forEach(function(g){var gf=fxByGW[g.id]||[];g.fin=gf.length>0&&gf.every(function(f){return f.fin});g.cur=gf.some(function(f){return f.st&&!f.fin})});
+            var hasLiveCur=false;
+            gw.forEach(function(g){
+              var gf=fxByGW[g.id]||[];
+              g.fin=gf.length>0&&gf.every(function(f){return f.fin});
+              var isLive=gf.some(function(f){return f.st&&!f.fin});
+              if(isLive){g.cur=true;hasLiveCur=true}
+            });
+            if(!hasLiveCur){
+              var lastFin=0;
+              gw.forEach(function(g){if(g.fin&&g.id>lastFin)lastFin=g.id});
+              gw.forEach(function(g){g.cur=(g.id===lastFin+1)||(lastFin===0&&g.id===1)});
+              if(!gw.some(function(g){return g.cur}))gw.forEach(function(g){if(g.id===lastFin)g.cur=true});
+            }
           }
           if(D.league==='pl'){_applyData('pl',tm,gw,fix);_updDone(true);return}
           if(D.league==='laliga'&&d.fix_ll){
@@ -434,16 +446,20 @@ function _fPL(){
         hs:f.team_h_score,as:f.team_a_score,fin:fin,st:st,ko:ko,mn:mn});
     });
 
-    var curGW=null;
     if(gw.length){
       var fxByGW={};fix.forEach(function(f){if(!fxByGW[f.e])fxByGW[f.e]=[];fxByGW[f.e].push(f)});
+      var hasLive2=false;
       gw.forEach(function(g){
         var gf=fxByGW[g.id]||[];
         g.fin=gf.length>0&&gf.every(function(f){return f.fin});
-        g.cur=gf.some(function(f){return f.st&&!f.fin});
+        var isLive=gf.some(function(f){return f.st&&!f.fin});
+        if(isLive){g.cur=true;hasLive2=true}
       });
-      for(var gi=0;gi<gw.length;gi++){if(gw[gi].cur){curGW=gw[gi];break}}
-      if(!curGW){for(var gi2=gw.length-1;gi2>=0;gi2--){if(gw[gi2].fin){curGW=gw[gi2];break}}}
+      if(!hasLive2){
+        var lf2=0;gw.forEach(function(g){if(g.fin&&g.id>lf2)lf2=g.id});
+        gw.forEach(function(g){g.cur=(g.id===lf2+1)||(lf2===0&&g.id===1)});
+        if(!gw.some(function(g){return g.cur}))gw.forEach(function(g){if(g.id===lf2)g.cur=true});
+      }
     }
 
     _applyData('pl',tm,gw,fix);
