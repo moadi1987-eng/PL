@@ -16,6 +16,8 @@ FPL = "https://fantasy.premierleague.com/api"
 BADGE = "https://resources.premierleague.com/premierleague/badges/70/t{}.png"
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
+FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY", "").strip()
+FOOTBALL_API = "https://v3.football.api-sports.io"
 OUT = os.path.join(HERE, "pl_mobile.html")
 TPL = os.path.join(HERE, "pl_mobile_template.html")
 
@@ -70,6 +72,43 @@ fixtures = [{
     "st": f.get("started", False),
     "ko": f.get("kickoff_time", ""), "mn": f.get("minutes", 0),
 } for f in fx if f.get("event") is not None]
+
+# ── Overlay live data from api-football.com (more accurate minutes + status) ──
+if FOOTBALL_API_KEY:
+    try:
+        live_resp = requests.get(f"{FOOTBALL_API}/fixtures",
+            params={"live": "all"},
+            headers={"x-apisports-key": FOOTBALL_API_KEY}, timeout=15).json()
+        live_matches = live_resp.get("response", [])
+        pl_live = {m["teams"]["home"]["name"].lower(): m for m in live_matches
+                   if m.get("league", {}).get("id") == 39}
+        ll_live = {m["teams"]["home"]["name"].lower(): m for m in live_matches
+                   if m.get("league", {}).get("id") == 140}
+
+        team_name_map = {t["n"].lower(): t["id"] for t in teams.values()}
+        updated = 0
+        for fix in fixtures:
+            h_name = teams.get(fix["h"], {}).get("n", "").lower()
+            for key, lm in pl_live.items():
+                if key in h_name or h_name in key:
+                    status = lm["fixture"]["status"]
+                    fix["mn"] = status.get("elapsed", 0) or 0
+                    fix["hs"] = lm["goals"]["home"]
+                    fix["as"] = lm["goals"]["away"]
+                    fix["st"] = True
+                    short = status.get("short", "")
+                    if short in ("FT", "AET", "PEN"):
+                        fix["fin"] = True
+                    elif short == "HT":
+                        fix["mn"] = 45
+                    updated += 1
+                    break
+        if updated:
+            print(f"api-football: overlaid {updated} live PL matches")
+        if ll_live:
+            print(f"api-football: {len(ll_live)} live La Liga matches available")
+    except Exception as e:
+        print(f"api-football: {e}")
 
 data = json.dumps({"teams": teams, "gws": gws, "fix": fixtures}, ensure_ascii=False, separators=(",", ":"))
 print(f"Teams: {len(teams)}, GWs: {len(gws)}, Fixtures: {len(fixtures)}")
