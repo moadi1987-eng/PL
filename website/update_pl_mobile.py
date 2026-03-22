@@ -174,8 +174,9 @@ try:
                         "sah": 1100, "sdh": 1100, "saa": 1050, "sda": 1050,
                     }
 
-    ll_fixtures = []
-    for idx, ev in enumerate(espn_events):
+    # Group events into matchdays by date clusters (10 matches per matchday)
+    ll_raw = []
+    for ev in espn_events:
         comps = ev.get("competitions", [])
         if not comps:
             continue
@@ -196,18 +197,43 @@ try:
         started = state in ("in", "post")
         finished = status.get("completed", False)
         hs = as_score = None
+        mn = 0
         if started:
             try: hs = int(home.get("score", "0"))
             except: hs = 0
             try: as_score = int(away.get("score", "0"))
             except: as_score = 0
-        matchday = (idx // 10) + 1
-        ll_fixtures.append({
-            "id": int(ev.get("id", 0)), "e": matchday,
+            detail = status.get("shortDetail", "")
+            if detail:
+                import re
+                mn_match = re.search(r"(\d+)'", detail)
+                if mn_match:
+                    mn = int(mn_match.group(1))
+                elif "HT" in detail.upper():
+                    mn = 45
+                elif "FT" in detail.upper():
+                    mn = 90
+        ll_raw.append({
+            "id": int(ev.get("id", 0)),
             "h": int(home["team"]["id"]), "a": int(away["team"]["id"]),
             "hs": hs, "as": as_score,
-            "fin": finished, "st": started, "ko": ev.get("date", ""),
+            "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
         })
+
+    # Assign matchdays: every 10 consecutive matches = 1 matchday
+    # But use date gaps to detect matchday boundaries
+    ll_fixtures = []
+    md = 1
+    md_count = 0
+    prev_date = ""
+    for i, f in enumerate(ll_raw):
+        match_date = f["ko"][:10] if f["ko"] else ""
+        if md_count >= 10:
+            md += 1
+            md_count = 0
+        f["e"] = md
+        md_count += 1
+        ll_fixtures.append(f)
 
     max_md = max((f["e"] for f in ll_fixtures), default=38)
     ll_gws = []
