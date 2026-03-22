@@ -178,6 +178,7 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 /*__GUESSES_LL__*/
 /*__SERVER__*/
 /*__WEIGHTS__*/
+/*__BUILD_TIME__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
 var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,cn:5,league:"pl",gwl:"GW"};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]}};
@@ -226,7 +227,12 @@ function init(){
   D.tab=sTab;D.sub=sSub;
   bSt();rGW();
   for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===D.tab?" a":"");$("n"+j).className="nb"+(j===D.tab?" a":"")}
-  render();$("upd").textContent=new Date().toLocaleTimeString();
+  render();
+  if(typeof EMBEDDED_BUILD_TIME!=="undefined"){
+    var bt=new Date(EMBEDDED_BUILD_TIME);_lastOk=bt.getTime();
+    var age=Math.round((Date.now()-bt.getTime())/60000);
+    $("upd").innerHTML=age>10?'<span style="color:#ffc107">Built '+age+'m ago</span> <span style="font-size:.5rem;text-decoration:underline" onclick="fetchLive()">Refresh</span>':'<span style="color:#00ff87">Built '+age+'m ago</span>';
+  }else{$("upd").textContent="Loading...";}
   autoSync();fetchLive();
 }
 
@@ -313,6 +319,8 @@ function _startCountdown(){
   },1000);
 }
 
+var _lastOk=0,_fetchFails=0;
+
 function _updDone(ok){
   var prevLive=_hasLive;
   _hasLive=D.fx.some(function(f){return f.st&&!f.fin});
@@ -321,15 +329,20 @@ function _updDone(ok){
   var t=new Date().toLocaleTimeString();
   var u=$('upd');
   if(ok){
-    if(_hasLive)u.innerHTML='<span style="color:#e90052;font-weight:700">LIVE</span> '+t;
+    _lastOk=Date.now();_fetchFails=0;
+    if(_hasLive)u.innerHTML='<span style="color:#e90052;font-weight:700">● LIVE</span> '+t;
     else if(_justEnded>0)u.innerHTML='<span style="color:#ffc107;font-weight:700">Finishing</span> '+t;
-    else u.innerHTML='<span style="color:#00ff87">Updated</span> '+t;
+    else u.innerHTML='<span style="color:#00ff87">✓ Updated</span> '+t;
   }else{
-    u.innerHTML='<span style="color:#ffc107">Embedded</span> '+t;
+    _fetchFails++;
+    var age=_lastOk?Math.round((Date.now()-_lastOk)/60000):0;
+    var ageStr=age>0?' ('+age+'m ago)':'';
+    if(_fetchFails>=2)u.innerHTML='<span style="color:#ff6b6b">✗ Offline'+ageStr+'</span> <span style="font-size:.5rem;text-decoration:underline" onclick="fetchLive()">Retry</span>';
+    else u.innerHTML='<span style="color:#ffc107">Embedded'+ageStr+'</span> '+t;
   }
   u.removeAttribute('data-base');
   if(_rTmr)clearInterval(_rTmr);
-  var iv=_getInterval();
+  var iv=_fetchFails>=2?15000:_getInterval();
   _rTmr=setInterval(fetchLive,iv);
   _startCountdown();
 }
