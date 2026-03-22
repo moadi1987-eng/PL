@@ -296,8 +296,52 @@ function pxF(url,cb){
 
 function fetchLive(){
   if(location.port==='5000')return;
-  if(D.league==='pl')_fPL();
-  else if(D.league==='laliga')_fLL();
+  _fLiveJson();
+}
+
+function _fLiveJson(){
+  _fid++;var fid=_fid;
+  $('upd').textContent='\u21BB ...';
+  var url='./live.json?t='+Date.now();
+  var x=new XMLHttpRequest();
+  x.open('GET',url,true);
+  x.timeout=8000;
+  x.onload=function(){
+    if(fid!==_fid)return;
+    if(x.status>=200&&x.status<300){
+      try{
+        var d=JSON.parse(x.responseText);
+        if(d&&d.fix){
+          var now=new Date();
+          var fix=[];
+          d.fix.forEach(function(f){
+            if(f.e==null)return;
+            var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
+            if(st&&!fin&&ko){
+              var el=Math.floor((now-new Date(ko))/60000);
+              if(mn===0&&el>0)mn=Math.max(0,el);
+              if(el>115){fin=true;mn=90}
+            }
+            fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
+          });
+          var tm=D.tm||{};var gw=D.gw||[];
+          if(gw.length){
+            var fxByGW={};fix.forEach(function(f){if(!fxByGW[f.e])fxByGW[f.e]=[];fxByGW[f.e].push(f)});
+            gw.forEach(function(g){var gf=fxByGW[g.id]||[];g.fin=gf.length>0&&gf.every(function(f){return f.fin});g.cur=gf.some(function(f){return f.st&&!f.fin})});
+          }
+          if(D.league==='pl'){_applyData('pl',tm,gw,fix);_updDone(true);return}
+          if(D.league==='laliga'&&d.fix_ll){
+            var llFix=[];d.fix_ll.forEach(function(f){llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:f.fin||false,st:f.st||false,ko:f.ko||'',mn:f.mn||0})});
+            _applyData('laliga',D.tm,D.gw,llFix);_updDone(true);return;
+          }
+        }
+      }catch(e){}
+    }
+    if(D.league==='pl')_fPL();else _fLL();
+  };
+  x.onerror=function(){if(D.league==='pl')_fPL();else _fLL()};
+  x.ontimeout=function(){if(D.league==='pl')_fPL();else _fLL()};
+  x.send();
 }
 
 function _getInterval(){

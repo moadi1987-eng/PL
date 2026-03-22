@@ -302,9 +302,36 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = "moadi1987-eng/PL"
 
 if GITHUB_TOKEN:
-    print("Uploading to GitHub Pages...")
-    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/index.html"
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+
+    # Upload live.json (small, fast — browser fetches this for live updates)
+    live_data = {
+        "fix": fixtures,
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if ll_data:
+        try:
+            ll_parsed = json.loads(ll_data)
+            live_data["fix_ll"] = ll_parsed.get("fix", [])
+        except Exception:
+            pass
+    live_json = json.dumps(live_data, ensure_ascii=False, separators=(",", ":"))
+    live_b64 = base64.b64encode(live_json.encode("utf-8")).decode()
+
+    print("Uploading live.json...")
+    live_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/live.json"
+    existing_live = requests.get(live_url, headers=headers, timeout=15)
+    live_sha = existing_live.json().get("sha", "") if existing_live.status_code == 200 else ""
+    live_payload = {"message": "Live update", "content": live_b64}
+    if live_sha:
+        live_payload["sha"] = live_sha
+    resp_live = requests.put(live_url, headers=headers, json=live_payload, timeout=15)
+    if resp_live.status_code in (200, 201):
+        print("live.json uploaded!")
+
+    # Upload index.html (full page rebuild)
+    print("Uploading index.html...")
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/index.html"
 
     existing = requests.get(api_url, headers=headers, timeout=15)
     sha = existing.json().get("sha", "") if existing.status_code == 200 else ""
