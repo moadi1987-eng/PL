@@ -120,6 +120,7 @@ jobs:
         run: python website/update_pl_mobile.py
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
 
       - name: Commit & push if changed
         if: steps.check.outputs.should_update == 'true'
