@@ -231,23 +231,27 @@ try:
     min_played = min(team_finished.values()) if team_finished else 0
     current_md = min_played + 1
 
-    # Assign matchday per fixture: count finished games per team
+    # Split into finished and unfinished
+    finished_raw = [f for f in ll_raw if f["fin"]]
+    upcoming_raw = [f for f in ll_raw if not f["fin"]]
+
+    # Assign matchday for finished: count each team's game number
     team_game_num = {}
     ll_fixtures = []
-    for f in ll_raw:
+    for f in finished_raw:
         hid, aid = f["h"], f["a"]
-        if f["fin"]:
-            team_game_num[hid] = team_game_num.get(hid, 0) + 1
-            team_game_num[aid] = team_game_num.get(aid, 0) + 1
-            md = max(team_game_num[hid], team_game_num[aid])
-        else:
-            h_next = team_game_num.get(hid, 0) + 1
-            a_next = team_game_num.get(aid, 0) + 1
-            md = max(h_next, a_next)
-        f["e"] = md
+        team_game_num[hid] = team_game_num.get(hid, 0) + 1
+        team_game_num[aid] = team_game_num.get(aid, 0) + 1
+        f["e"] = max(team_game_num[hid], team_game_num[aid])
         ll_fixtures.append(f)
 
-    print(f"La Liga: min played={min_played}, current MD={current_md}")
+    # Assign matchday for upcoming: every 10 matches = 1 matchday
+    upcoming_raw.sort(key=lambda x: x.get("ko", ""))
+    for i, f in enumerate(upcoming_raw):
+        f["e"] = current_md + (i // 10)
+        ll_fixtures.append(f)
+
+    print(f"La Liga: {len(finished_raw)} finished (MD1-{min_played}), {len(upcoming_raw)} upcoming (MD{current_md}+)")
 
     max_md = max((f["e"] for f in ll_fixtures), default=38)
     ll_gws = []
