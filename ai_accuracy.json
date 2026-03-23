@@ -1,0 +1,109 @@
+{
+  "predictions": [
+    {
+      "match_id": 320,
+      "gw": 32,
+      "pred_winner": "away",
+      "pred_hs": 0,
+      "pred_as": 0,
+      "home_pct": 32.1,
+      "draw_pct": 29.7,
+      "away_pct": 38.2
+    },
+    {
+      "match_id": 311,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 0,
+      "home_pct": 54.2,
+      "draw_pct": 23.9,
+      "away_pct": 21.9
+    },
+    {
+      "match_id": 312,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 1,
+      "home_pct": 41.0,
+      "draw_pct": 24.7,
+      "away_pct": 34.3
+    },
+    {
+      "match_id": 313,
+      "gw": 32,
+      "pred_winner": "away",
+      "pred_hs": 0,
+      "pred_as": 1,
+      "home_pct": 23.1,
+      "draw_pct": 23.0,
+      "away_pct": 53.9
+    },
+    {
+      "match_id": 316,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 1,
+      "home_pct": 43.1,
+      "draw_pct": 23.6,
+      "away_pct": 33.3
+    },
+    {
+      "match_id": 315,
+      "gw": 32,
+      "pred_winner": "away",
+      "pred_hs": 1,
+      "pred_as": 1,
+      "home_pct": 37.6,
+      "draw_pct": 23.2,
+      "away_pct": 39.2
+    },
+    {
+      "match_id": 318,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 0,
+      "home_pct": 37.6,
+      "draw_pct": 26.3,
+      "away_pct": 36.1
+    },
+    {
+      "match_id": 319,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 1,
+      "home_pct": 45.9,
+      "draw_pct": 24.1,
+      "away_pct": 30.0
+    },
+    {
+      "match_id": 314,
+      "gw": 32,
+      "pred_winner": "away",
+      "pred_hs": 1,
+      "pred_as": 1,
+      "home_pct": 35.5,
+      "draw_pct": 23.1,
+      "away_pct": 41.4
+    },
+    {
+      "match_id": 317,
+      "gw": 32,
+      "pred_winner": "home",
+      "pred_hs": 1,
+      "pred_as": 0,
+      "home_pct": 57.2,
+      "draw_pct": 22.4,
+      "away_pct": 20.4
+    }
+  ],
+  "stats": {
+    "total": 0,
+    "winner_correct": 0,
+    "score_correct": 0
+  }
+}
