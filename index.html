@@ -14,7 +14,7 @@
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk);color:var(--tx);min-height:100vh;padding-bottom:64px;-webkit-font-smoothing:antialiased}
 .topbar{background:linear-gradient(135deg,var(--p),#1a0025);border-bottom:2px solid var(--g);padding:.5rem .75rem;position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:.4rem}
 .ltog{display:flex;gap:1px;background:rgba(255,255,255,.08);border-radius:14px;padding:1px;flex-shrink:0}
-.lb,.lbtn{border:none;background:transparent;color:rgba(255,255,255,.4);font-weight:700;font-size:.55rem;padding:.2rem .45rem;border-radius:13px;cursor:pointer}.lb.a{background:var(--g);color:var(--p)}.lbtn.a{background:rgba(255,255,255,.15);color:#fff}
+.lb{border:none;background:transparent;color:rgba(255,255,255,.4);font-weight:700;font-size:.55rem;padding:.2rem .45rem;border-radius:13px;cursor:pointer}.lb.a{background:var(--g);color:var(--p)}
 .upd{margin-left:auto}
 .brand{font-weight:800;font-size:1.05rem;background:linear-gradient(90deg,var(--g),var(--cy));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .upd{font-size:.5rem;color:var(--tm);cursor:pointer;user-select:none}
@@ -162,7 +162,7 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 </style>
 </head>
 <body>
-<div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><div class="ltog" id="langtog"><button class="lbtn a" data-lang="en" onclick="setLang('en')">EN</button><button class="lbtn" data-lang="he" onclick="setLang('he')">עב</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
+<div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
 <div class="gwbar"><button class="gwbtn" onclick="nGW(-1)">&#9664;</button><div class="gwscr" id="gws"></div><button class="gwbtn" onclick="nGW(1)">&#9654;</button></div>
 <div class="tab a" id="t0"></div><div class="tab" id="t1"></div><div class="tab" id="t2"></div>
 <div class="rov" id="rmod" onclick="if(event.target===this)cReas()"><div class="rpop"><div class="rhead"><span id="rtitle"></span><button class="rclose" onclick="cReas()">&#10005;</button></div><div class="rbody" id="rbody"></div></div></div>
@@ -190,54 +190,8 @@ var EMBEDDED_WEIGHTS={
   "clean_sheet": 0.0659,
   "draw_tendency": 0.0659
 };
-var EMBEDDED_BUILD_TIME="2026-03-23T12:40:42Z";
+var EMBEDDED_BUILD_TIME="2026-03-23T13:21:24Z";
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
-var _LANG=localStorage.getItem("plLang")||"en";
-var _T={
-  en:{
-    plDash:"PL Dashboard",llDash:"La Liga Dashboard",
-    results:"Results",guess:"Guess",compare:"Compare",
-    predictions:"Predictions",fillGuesses:"Fill Guesses",youVsAi:"You vs AI",
-    guessResults:"Guess the Results",leagueTable:"League Table",
-    noFixtures:"No fixtures",noPredictions:"No predictions",
-    aiFill:"AI Fill",random:"Random",
-    bestBet:"Best Bet",advice:"Advice",whyPred:"Why this prediction?",
-    form:"Form",winProb:"Win probability",homeAdv:"playing at home",
-    leaguePos:"League position",predicted:"Predicted",
-    winner:"Winner",exact:"Exact",
-    pts:"pts",total:"Total",
-    myHistory:"My History",noGuesses:"No guesses yet",
-    autoSync:"Auto-syncs with desktop when PC is on",
-    actual:"Actual",draw:t('draw'),vs:"VS",ft:"FT",
-    xgMatch:"xG/match",injuries:"Injuries",out:"out",
-    poissonModel:"Poisson model",poissonScore:"Poisson most likely score",
-    built:"Built",ago:"ago",refresh:"Refresh",retry:"Retry",
-    offline:"Offline",updated:"Updated",live:"LIVE",finishing:"Finishing",embedded:"Embedded"
-  },
-  he:{
-    plDash:"דאשבורד פרמייר ליג",llDash:"דאשבורד לה ליגה",
-    results:"תוצאות",guess:"ניחושים",compare:"השוואה",
-    predictions:"תחזיות",fillGuesses:"מלא ניחושים",youVsAi:"אתה vs AI",
-    guessResults:"נחש את התוצאות",leagueTable:"טבלת הליגה",
-    noFixtures:"אין משחקים",noPredictions:"אין תחזיות",
-    aiFill:"מילוי AI",random:"אקראי",
-    bestBet:"Best Bet",advice:"עצה",whyPred:"למה התחזית הזו?",
-    form:"פורמה",winProb:"סיכויי ניצחון",homeAdv:"משחק ביתי",
-    leaguePos:"מיקום בטבלה",predicted:"תחזית",
-    winner:"מנצח",exact:"מדויק",
-    pts:"נק׳",total:"סך הכל",
-    myHistory:"ההיסטוריה שלי",noGuesses:"אין ניחושים עדיין",
-    autoSync:"מסנכרן אוטומטית עם המחשב כשהוא דלוק",
-    actual:"בפועל",draw:"תיקו",vs:"נגד",ft:"סיום",
-    xgMatch:"xG/משחק",injuries:"פציעות",out:"חסר",
-    poissonModel:"מודל פואסון",poissonScore:"תוצאה סבירה ביותר",
-    built:"נבנה לפני",ago:"",refresh:"רענן",retry:"נסה שוב",
-    offline:"לא מחובר",updated:"מעודכן",live:"LIVE",finishing:"מסיים",embedded:"מוטמע"
-  }
-};
-function t(k){return (_T[_LANG]||_T.en)[k]||(_T.en[k]||k)}
-function setLang(l){_LANG=l;localStorage.setItem("plLang",l);document.querySelectorAll('.lbtn').forEach(function(b){b.className='lbtn'+(b.getAttribute('data-lang')===l?' a':'')});render();_updNav();}
-function _updNav(){try{var s0=$('n0').querySelector('svg'),s1=$('n1').querySelector('svg'),s2=$('n2').querySelector('svg');if(s0)$('n0').innerHTML=s0.outerHTML+t('results');if(s1)$('n1').innerHTML=s1.outerHTML+t('guess');if(s2)$('n2').innerHTML=s2.outerHTML+t('compare');$('mbrand').textContent=D.league==='laliga'?t('llDash'):t('plDash')}catch(e){console.log('updNav error:'+e)}}
 var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,cn:5,league:"pl",gwl:"GW"};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]}};
 function $(i){return document.getElementById(i)}
@@ -248,7 +202,7 @@ function swL(lg){
   sessionStorage.setItem("plLeague",lg);sessionStorage.removeItem("plGW");
   document.body.className=lg==="laliga"?"ll":"";
   document.querySelectorAll(".lb").forEach(function(b){b.className="lb"+(b.getAttribute("data-l")===lg?" a":"")});
-  $("mbrand").textContent=lg==="laliga"?t('llDash'):t('plDash');
+  $("mbrand").textContent=lg==="laliga"?"La Liga Dashboard":"PL Dashboard";
   var ld=LDATA[lg];
   if(ld&&ld.tm&&Object.keys(ld.tm).length){D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;_gMerged=false;initAfterData();render();fetchLive()}
   else{var msg='<div class="emp">Fetching live '+lg+' data...</div>';for(var ti=0;ti<3;ti++)$("t"+ti).innerHTML=msg;fetchLive()}
@@ -291,8 +245,6 @@ function init(){
     var age=Math.round((Date.now()-bt.getTime())/60000);
     $("upd").innerHTML=age>10?'<span style="color:#ffc107">Built '+age+'m ago</span> <span style="font-size:.5rem;text-decoration:underline" onclick="fetchLive()">Refresh</span>':'<span style="color:#00ff87">Built '+age+'m ago</span>';
   }else{$("upd").textContent="Loading...";}
-  document.querySelectorAll('.lbtn').forEach(function(b){b.className='lbtn'+(b.getAttribute('data-lang')===_LANG?' a':'')});
-  _updNav();
   autoSync();fetchLive();
 }
 
@@ -650,7 +602,7 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   reasons.push("Form: "+T(hid).s+" "+hs.w+"W"+hs.d+"D"+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W"+as.d+"D"+as.l+"L ("+as.fs+"%)");
   reasons.push("xG/match: "+T(hid).s+" "+hXg+" | "+T(aid).s+" "+aXg);
   if(hInj.length||aInj.length){var injTxt=[];if(hInj.length)injTxt.push(T(hid).s+": "+hInj.map(function(p){return p.n}).join(", ")+" out");if(aInj.length)injTxt.push(T(aid).s+": "+aInj.map(function(p){return p.n}).join(", ")+" out");reasons.push("Injuries: "+injTxt.join(" | "))}
-  reasons.push(t('poissonModel')+": "+T(hid).s+" "+poi.hw+"% | "+t('draw')+" "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
+  reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
   reasons.push("Predicted: "+rh+"-"+ra+" (Poisson most likely score)");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
@@ -723,22 +675,22 @@ function sReas(title,reasons){$("rtitle").textContent=title;var h='<div class="r
 function cReas(){$("rmod").classList.remove("show")}
 
 /* ══ RESULTS ══ */
-function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">'+t('results')+' — '+(D.gwl||"GW")+D.sel+'</div>';
-  if(!ms.length){c.innerHTML=h+'<div class="emp">'+t('noFixtures')+'</div>';return}
+function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl||"GW")+D.sel+'</div>';
+  if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
     var isLive=m.st&&!m.fin;
     if(isLive)setTick(m.id,m.ko,m.mn);
     var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
-  h+='<div class="sec" style="margin-top:.6rem">'+t('leagueTable')+'</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
+  h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
   D.st.forEach(function(r,i){var p=i+1,pc=p<=1?"pch":p<=4?"pcl":p>=18?"prl":"";var fm="";r.fm.forEach(function(f){fm+='<span class="fd '+f+'">'+f+'</span>'});
     h+='<tr><td class="'+pc+'">'+p+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span></div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
   h+='</tbody></table></div>';c.innerHTML=h;}
 
 /* ══ GUESS (3 sub-tabs + history) ══ */
-function rGuess(){var c=$("t1"),h='<div class="sec">'+t('guessResults')+'</div>';
-  h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;sessionStorage.setItem(\'plSub\',0);rGuess()">'+t('predictions')+'</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;sessionStorage.setItem(\'plSub\',1);rGuess()">'+t('fillGuesses')+'</button><button class="stab'+(D.sub===2?" a":"")+'" onclick="D.sub=2;sessionStorage.setItem(\'plSub\',2);rGuess()">'+t('youVsAi')+'</button></div>';
+function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
+  h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;sessionStorage.setItem(\'plSub\',0);rGuess()">Predictions</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;sessionStorage.setItem(\'plSub\',1);rGuess()">Fill Guesses</button><button class="stab'+(D.sub===2?" a":"")+'" onclick="D.sub=2;sessionStorage.setItem(\'plSub\',2);rGuess()">You vs AI</button></div>';
   if(D.sub===0)h+=rPred();else if(D.sub===1)h+=rGF();else h+=rVsAI();
   h+=rGH();c.innerHTML=h;}
 
@@ -747,7 +699,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
-  pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:t('draw'),away:am.s};
+  pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:"Draw",away:am.s};
     var li="";if(m.fin)li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--g);font-weight:700">FT</span> <b>'+(m.hs!=null?m.hs:"-")+' - '+(m.as!=null?m.as:"-")+'</b></div>';
     else if(m.st){setTick(m.id,m.ko,m.mn);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
@@ -760,7 +712,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var ag=gG(),gg=ag[gw]||{},bb=[];
   so.slice(0,5).forEach(function(x){var m=x.m,p=x.p,g=gg[m.id]||{},hm=T(m.h),am=T(m.a);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
-    var uw=g.w||null,wok=!!(aw&&uw&&uw===aw),lb={home:hm.s,draw:t('draw'),away:am.s};
+    var uw=g.w||null,wok=!!(aw&&uw&&uw===aw),lb={home:hm.s,draw:"Draw",away:am.s};
     var aiW=(p.rh===p.ra)?"draw":p.rec,aiOk=!!(aw&&aiW===aw);
     bb.push({hm:hm,am:am,rk:rm[m.id],aw:aw?lb[aw]:"–",as2:ah!=null?ah+"-"+aa:"–",uw:uw?lb[uw]:"–",us:g.hs!=null?g.hs+"-"+g.as:"–",wok:wok,adv:lb[p.rec]+" ("+p.rh+"-"+p.ra+")",aiOk:aiOk,fin:!!aw})});
   var wC=0,aiC=0;bb.forEach(function(b){if(b.fin&&b.wok)wC++;if(b.fin&&b.aiOk)aiC++});
@@ -802,23 +754,23 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   var open=ms.filter(function(m){return!m.fin});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(open.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; '+t('aiFill')+'</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; '+t('random')+'</button></div>';
+  if(open.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> winner(s), <b>'+ce+'</b> exact — <b>'+(cw*3+ce*5)+' pts</b></div>';
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="";
     if(m.fin&&g.w){var aw=m.hs>m.as?"home":m.hs===m.as?"draw":"away",ex=g.hs===m.hs&&g.as===m.as;cls=ex?"rex":g.w===aw?"rok":"rbad";bdg=ex?'<span class="rb re">★</span>':g.w===aw?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b></div>'}
     else if(m.st&&!m.fin){setTick(m.id,m.ko,m.mn);act='<div class="act"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span>: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
-    var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:t('draw'),away:am.s};
+    var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
-    h+='<div class="gc '+(g.w?"has ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+pctBar+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>'+t('draw')+'</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
+    h+='<div class="gc '+(g.w?"has ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+pctBar+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
   return h;}
 
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0;
   var rows="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
-    var lb={home:hm.s,draw:t('draw'),away:am.s};
+    var lb={home:hm.s,draw:"Draw",away:am.s};
     var uw=g.w||null,aiW=(p.rh===p.ra)?"draw":p.rec;
     var uwOk=!!(aw&&uw&&uw===aw),usOk=!!(aw&&g.hs!=null&&g.hs===ah&&g.as===aa);
     var awOk=!!(aw&&aiW===aw),asOk=!!(aw&&p.rh===ah&&p.ra===aa);
@@ -844,15 +796,15 @@ function exportGuesses(){
   }else{prompt("Copy this code and paste in desktop:",code)}
 }
 
-function rGH(){var ag=gG(),h='<div class="sec" style="margin-top:.6rem">'+t('myHistory')+'</div>',tp=0,tw=0,ts=0;
+function rGH(){var ag=gG(),h='<div class="sec" style="margin-top:.6rem">My History</div>',tp=0,tw=0,ts=0;
   var ks=Object.keys(ag).sort(function(a,b){return+b-+a});
-  if(!ks.length)return h+'<div class="emp">'+t('noGuesses')+'</div>';
+  if(!ks.length)return h+'<div class="emp">No guesses yet</div>';
   ks.forEach(function(k){var gw=+k,gg=ag[gw],ms=D.fx.filter(function(f){return f.e===gw&&f.fin&&f.hs!=null}),cw=0,ce=0;
     ms.forEach(function(f){var g=gg[f.id];if(!g||!g.w)return;var aw=f.hs>f.as?"home":f.hs===f.as?"draw":"away";if(g.w===aw)cw++;if(g.hs===f.hs&&g.as===f.as)ce++});
     var pts=cw*3+ce*5;tp+=pts;tw+=cw;ts+=ce;
-    h+='<div class="hc" onclick="D.sel='+gw+';rGW();D.sub=1;rGuess()"><span class="hg">'+(D.gwl||"GW")+gw+'</span><div class="hs"><div><span class="hn">'+cw+'</span><span class="hl">'+t('winner')+'</span></div><div><span class="hn">'+ce+'</span><span class="hl">'+t('exact')+'</span></div></div><span class="hp">'+pts+' '+t('pts')+'</span></div>'});
-  h+='<div class="htot"><span class="hl">'+t('total')+': '+tw+' '+t('winner')+', '+ts+' '+t('exact')+'</span><span class="hp">'+tp+' '+t('pts')+'</span></div>';
-  h+='<div style="text-align:center;margin-top:.5rem;font-size:.5rem;color:var(--tm)">'+t('autoSync')+'</div>';
+    h+='<div class="hc" onclick="D.sel='+gw+';rGW();D.sub=1;rGuess()"><span class="hg">'+(D.gwl||"GW")+gw+'</span><div class="hs"><div><span class="hn">'+cw+'</span><span class="hl">Winner</span></div><div><span class="hn">'+ce+'</span><span class="hl">Exact</span></div></div><span class="hp">'+pts+' pts</span></div>'});
+  h+='<div class="htot"><span class="hl">Total: '+tw+' winners, '+ts+' exact</span><span class="hp">'+tp+' pts</span></div>';
+  h+='<div style="text-align:center;margin-top:.5rem;font-size:.5rem;color:var(--tm)">Auto-syncs with desktop when PC is on</div>';
   return h;}
 
 function setW(gw,mid,w){
