@@ -121,9 +121,9 @@ function selectGW(gw) {
         const sub = activeSub ? activeSub.dataset.subtab : "fill";
         if (sub === "predictions") {
             loadGuessPredictions();
-            loadBestBetsScore();
         } else if (sub === "compare") {
             loadGuessComparison();
+            loadBestBetsScore();
         }
     }
 }
@@ -799,15 +799,15 @@ async function randomFillGuesses() {
     let filled = 0;
     cards.forEach(card => {
         const mid = card.dataset.matchId;
-        const hInput = card.querySelector('input[data-side="home"]');
-        const aInput = card.querySelector('input[data-side="away"]');
+        const hInput = card.querySelector('.guess-score-home');
+        const aInput = card.querySelector('.guess-score-away');
         if (!hInput || !aInput || hInput.disabled) return;
 
         const h = _rndGoal(), a = _rndGoal();
         hInput.value = h;
         aInput.value = a;
-        hInput.dispatchEvent(new Event("change", {bubbles: true}));
-        aInput.dispatchEvent(new Event("change", {bubbles: true}));
+        hInput.dispatchEvent(new Event("input", {bubbles: true}));
+        aInput.dispatchEvent(new Event("input", {bubbles: true}));
 
         const w = h > a ? "home" : h === a ? "draw" : "away";
         const winBtn = card.querySelector(`.winner-btn[data-winner="${w}"]`);
@@ -848,20 +848,32 @@ async function autoFillWithAI() {
             if (f.finished || f.is_live) return;
             const card = document.querySelector(`.guess-card[data-match-id="${f.id}"]`);
             if (!card) return;
-            const hInput = card.querySelector('input[data-side="home"]');
-            const aInput = card.querySelector('input[data-side="away"]');
+            const hInput = card.querySelector('.guess-score-home');
+            const aInput = card.querySelector('.guess-score-away');
             if (hInput && hInput.value !== "" && aInput && aInput.value !== "") return;
 
             const adv = advMap[f.id];
             const pred = predMap[f.id]?.prediction;
-            const hs = adv ? adv.recommended_home_score : pred ? pred.predicted_home : null;
-            const as_ = adv ? adv.recommended_away_score : pred ? pred.predicted_away : null;
-            const w = adv ? adv.recommended_winner : pred ? pred.recommended : null;
+
+            let hs, as_, w;
+            if (adv) {
+                hs = adv.recommended_home_score;
+                as_ = adv.recommended_away_score;
+                w = adv.recommended_winner;
+            } else if (pred) {
+                hs = Math.round(pred.predicted_home_goals);
+                as_ = Math.round(pred.predicted_away_goals);
+                if (hs > as_) w = "home";
+                else if (as_ > hs) w = "away";
+                else w = "draw";
+            } else {
+                return;
+            }
 
             if (hs == null || as_ == null || !w) return;
 
-            if (hInput) { hInput.value = hs; hInput.dispatchEvent(new Event("change", {bubbles: true})); }
-            if (aInput) { aInput.value = as_; aInput.dispatchEvent(new Event("change", {bubbles: true})); }
+            if (hInput) { hInput.value = hs; hInput.dispatchEvent(new Event("input", {bubbles: true})); }
+            if (aInput) { aInput.value = as_; aInput.dispatchEvent(new Event("input", {bubbles: true})); }
 
             const winBtn = card.querySelector(`.winner-btn[data-winner="${w}"]`);
             if (winBtn && !winBtn.classList.contains("selected-home") && !winBtn.classList.contains("selected-draw") && !winBtn.classList.contains("selected-away")) {
@@ -1430,15 +1442,111 @@ function initGuessSubtabs() {
             if (sub === "predictions") {
                 $("#guessPredictionsSection").classList.remove("d-none");
                 loadGuessPredictions();
-                loadBestBetsScore();
             } else if (sub === "fill") {
                 $("#guessFillSection").classList.remove("d-none");
             } else {
                 $("#guessCompareSection").classList.remove("d-none");
                 loadGuessComparison();
+                loadBestBetsScore();
             }
         });
     });
+}
+
+async function loadMLStatus() {
+    const container = $("#mlStatusContainer");
+    if (!container || STATE.league !== "pl") { if (container) container.innerHTML = ""; return; }
+    try {
+        const data = await api("/api/ml-status");
+        if (!data.matches_learned) {
+            container.innerHTML = "";
+            return;
+        }
+
+        const accuracy = data.recent_accuracy_50 || 0;
+        const accuracyColor = accuracy >= 50 ? "#00ff87" : accuracy >= 35 ? "#f5a623" : "#e90052";
+        const last10 = data.last_10_accuracy || "–";
+        const blend = data.poisson_blend || 0.6;
+        const blendPct = Math.round(blend * 100);
+        const factorPct = 100 - blendPct;
+
+        const topFactors = Object.entries(data.factor_accuracy || {})
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([k, v]) => `<span class="ml-factor-tag">${k} <b>${Math.round(v * 100)}%</b></span>`)
+            .join("");
+
+        const calBands = Object.entries(data.confidence_calibration || {})
+            .filter(([, v]) => v.total >= 3)
+            .sort((a, b) => parseInt(b[0]) - parseInt(a[0]))
+            .slice(0, 4)
+            .map(([band, v]) => `<div class="ml-cal-row"><span>${band}</span><div class="ml-cal-bar"><div class="ml-cal-fill" style="width:${v.accuracy}%;background:${v.accuracy >= 50 ? '#00ff87' : v.accuracy >= 35 ? '#f5a623' : '#e90052'}"></div></div><span>${v.accuracy}%</span></div>`)
+            .join("");
+
+        container.innerHTML = `
+        <div class="ml-status-card">
+            <div class="ml-status-header">
+                <h6><i class="bi bi-cpu-fill me-2"></i>AI Learning Model</h6>
+                <span class="ml-matches-badge">${data.matches_learned} matches learned</span>
+            </div>
+            <div class="ml-status-grid">
+                <div class="ml-stat-box">
+                    <div class="ml-stat-value" style="color:${accuracyColor}">${accuracy}%</div>
+                    <div class="ml-stat-label">Recent Accuracy (50)</div>
+                </div>
+                <div class="ml-stat-box">
+                    <div class="ml-stat-value">${last10}</div>
+                    <div class="ml-stat-label">Last 10 Matches</div>
+                </div>
+                <div class="ml-stat-box">
+                    <div class="ml-stat-value">${blendPct}/${factorPct}</div>
+                    <div class="ml-stat-label">Poisson / Factors</div>
+                </div>
+            </div>
+            ${topFactors ? `<div class="ml-factors-row"><span class="ml-label">Top factors:</span>${topFactors}</div>` : ""}
+            ${calBands ? `<div class="ml-calibration"><div class="ml-label mb-1">Confidence Calibration:</div>${calBands}</div>` : ""}
+        </div>`;
+    } catch (err) {
+        container.innerHTML = "";
+    }
+}
+
+async function loadMLChanges() {
+    const container = $("#mlChangesContainer");
+    if (!container || STATE.league !== "pl") { if (container) container.innerHTML = ""; return; }
+    const gw = STATE.selectedGW;
+    try {
+        const data = await api(`/api/ml-changes/${gw}`);
+        const changes = data.changes || [];
+        if (changes.length === 0 || !data.model_updated) {
+            container.innerHTML = "";
+            return;
+        }
+
+        const rows = changes.map(c => {
+            const oldIcon = c.old_winner === "home" ? "bi-house-fill" : c.old_winner === "away" ? "bi-airplane-fill" : "bi-dash-circle";
+            const newIcon = c.new_winner === "home" ? "bi-house-fill" : c.new_winner === "away" ? "bi-airplane-fill" : "bi-dash-circle";
+            return `<div class="ml-change-row">
+                <span class="ml-change-match"><b>${c.home}</b> vs <b>${c.away}</b></span>
+                <span class="ml-change-old"><i class="bi ${oldIcon}"></i> ${c.old_score}</span>
+                <i class="bi bi-arrow-right mx-1" style="color:#f5a623"></i>
+                <span class="ml-change-new"><i class="bi ${newIcon}"></i> ${c.new_score}</span>
+            </div>`;
+        }).join("");
+
+        container.innerHTML = `
+        <div class="ml-changes-card">
+            <div class="ml-changes-header">
+                <h6><i class="bi bi-arrow-repeat me-2" style="color:#f5a623"></i>Predictions Updated After Learning</h6>
+                <span class="ml-version-badge">v${data.version}</span>
+            </div>
+            <p class="text-muted small mb-2">${changes.length} prediction(s) changed for ${STATE.gwLabel}${gw} based on recent match results:</p>
+            ${rows}
+            <div class="ml-changes-footer">${data.created_at}</div>
+        </div>`;
+    } catch (err) {
+        container.innerHTML = "";
+    }
 }
 
 let guessPredictionsLoading = false;
@@ -1452,6 +1560,8 @@ async function loadGuessPredictions() {
         const [predResponse, adviceResponse] = await Promise.all([
             api(`/api/predictions/${gw}`),
             api(`/api/guess-advice/${gw}`).catch(() => ({ advice: [] })),
+            loadMLStatus(),
+            loadMLChanges(),
         ]);
         const adviceMap = {};
         (adviceResponse.advice || []).forEach(a => { adviceMap[a.match_id] = a; });
