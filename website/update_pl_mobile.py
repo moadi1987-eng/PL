@@ -174,7 +174,10 @@ try:
                         "sah": 1100, "sdh": 1100, "saa": 1050, "sda": 1050,
                     }
 
-    # Group events into matchdays by date clusters (10 matches per matchday)
+    import re as _re
+
+    # Build team match count to determine real matchdays
+    team_finished = {}
     ll_raw = []
     for ev in espn_events:
         comps = ev.get("competitions", [])
@@ -205,35 +208,46 @@ try:
             except: as_score = 0
             detail = status.get("shortDetail", "")
             if detail:
-                import re
-                mn_match = re.search(r"(\d+)'", detail)
+                mn_match = _re.search(r"(\d+)'", detail)
                 if mn_match:
                     mn = int(mn_match.group(1))
                 elif "HT" in detail.upper():
                     mn = 45
                 elif "FT" in detail.upper():
                     mn = 90
+        hid = int(home["team"]["id"])
+        aid = int(away["team"]["id"])
+        if finished:
+            team_finished[hid] = team_finished.get(hid, 0) + 1
+            team_finished[aid] = team_finished.get(aid, 0) + 1
         ll_raw.append({
             "id": int(ev.get("id", 0)),
-            "h": int(home["team"]["id"]), "a": int(away["team"]["id"]),
+            "h": hid, "a": aid,
             "hs": hs, "as": as_score,
             "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
         })
 
-    # Assign matchdays: every 10 consecutive matches = 1 matchday
-    # But use date gaps to detect matchday boundaries
+    # Real matchday = based on team games played
+    min_played = min(team_finished.values()) if team_finished else 0
+    current_md = min_played + 1
+
+    # Assign matchday per fixture: count finished games per team
+    team_game_num = {}
     ll_fixtures = []
-    md = 1
-    md_count = 0
-    prev_date = ""
-    for i, f in enumerate(ll_raw):
-        match_date = f["ko"][:10] if f["ko"] else ""
-        if md_count >= 10:
-            md += 1
-            md_count = 0
+    for f in ll_raw:
+        hid, aid = f["h"], f["a"]
+        if f["fin"]:
+            team_game_num[hid] = team_game_num.get(hid, 0) + 1
+            team_game_num[aid] = team_game_num.get(aid, 0) + 1
+            md = max(team_game_num[hid], team_game_num[aid])
+        else:
+            h_next = team_game_num.get(hid, 0) + 1
+            a_next = team_game_num.get(aid, 0) + 1
+            md = max(h_next, a_next)
         f["e"] = md
-        md_count += 1
         ll_fixtures.append(f)
+
+    print(f"La Liga: min played={min_played}, current MD={current_md}")
 
     max_md = max((f["e"] for f in ll_fixtures), default=38)
     ll_gws = []
