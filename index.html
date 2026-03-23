@@ -14,7 +14,7 @@
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk);color:var(--tx);min-height:100vh;padding-bottom:64px;-webkit-font-smoothing:antialiased}
 .topbar{background:linear-gradient(135deg,var(--p),#1a0025);border-bottom:2px solid var(--g);padding:.5rem .75rem;position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:.4rem}
 .ltog{display:flex;gap:1px;background:rgba(255,255,255,.08);border-radius:14px;padding:1px;flex-shrink:0}
-.lb,.lbtn{border:none;background:transparent;color:rgba(255,255,255,.4);font-weight:700;font-size:.55rem;padding:.2rem .45rem;border-radius:13px;cursor:pointer}.lb.a{background:var(--g);color:var(--p)}.lbtn.a{background:rgba(255,255,255,.15);color:#fff}
+.lb{border:none;background:transparent;color:rgba(255,255,255,.4);font-weight:700;font-size:.55rem;padding:.2rem .45rem;border-radius:13px;cursor:pointer}.lb.a{background:var(--g);color:var(--p)}
 .upd{margin-left:auto}
 .brand{font-weight:800;font-size:1.05rem;background:linear-gradient(90deg,var(--g),var(--cy));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .upd{font-size:.5rem;color:var(--tm);cursor:pointer;user-select:none}
@@ -162,7 +162,7 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 </style>
 </head>
 <body>
-<div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><div class="ltog" id="langtog"><button class="lbtn a" data-lang="en" onclick="setLang('en')">EN</button><button class="lbtn" data-lang="he" onclick="setLang('he')">עב</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
+<div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
 <div class="gwbar"><button class="gwbtn" onclick="nGW(-1)">&#9664;</button><div class="gwscr" id="gws"></div><button class="gwbtn" onclick="nGW(1)">&#9654;</button></div>
 <div class="tab a" id="t0"></div><div class="tab" id="t1"></div><div class="tab" id="t2"></div>
 <div class="rov" id="rmod" onclick="if(event.target===this)cReas()"><div class="rpop"><div class="rhead"><span id="rtitle"></span><button class="rclose" onclick="cReas()">&#10005;</button></div><div class="rbody" id="rbody"></div></div></div>
@@ -192,52 +192,7 @@ var EMBEDDED_WEIGHTS={
 };
 var EMBEDDED_BUILD_TIME="2026-03-23T12:40:42Z";
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
-var _LANG=localStorage.getItem("plLang")||"en";
-var _T={
-  en:{
-    plDash:"PL Dashboard",llDash:"La Liga Dashboard",
-    results:"Results",guess:"Guess",compare:"Compare",
-    predictions:"Predictions",fillGuesses:"Fill Guesses",youVsAi:"You vs AI",
-    guessResults:"Guess the Results",leagueTable:"League Table",
-    noFixtures:"No fixtures",noPredictions:"No predictions",
-    aiFill:"AI Fill",random:"Random",
-    bestBet:"Best Bet",advice:"Advice",whyPred:"Why this prediction?",
-    form:"Form",winProb:"Win probability",homeAdv:"playing at home",
-    leaguePos:"League position",predicted:"Predicted",
-    winner:"Winner",exact:"Exact",
-    pts:"pts",total:"Total",
-    myHistory:"My History",noGuesses:"No guesses yet",
-    autoSync:"Auto-syncs with desktop when PC is on",
-    actual:"Actual",draw:t('draw'),vs:"VS",ft:"FT",
-    xgMatch:"xG/match",injuries:"Injuries",out:"out",
-    poissonModel:"Poisson model",poissonScore:"Poisson most likely score",
-    built:"Built",ago:"ago",refresh:"Refresh",retry:"Retry",
-    offline:"Offline",updated:"Updated",live:"LIVE",finishing:"Finishing",embedded:"Embedded"
-  },
-  he:{
-    plDash:"דאשבורד פרמייר ליג",llDash:"דאשבורד לה ליגה",
-    results:"תוצאות",guess:"ניחושים",compare:"השוואה",
-    predictions:"תחזיות",fillGuesses:"מלא ניחושים",youVsAi:"אתה vs AI",
-    guessResults:"נחש את התוצאות",leagueTable:"טבלת הליגה",
-    noFixtures:"אין משחקים",noPredictions:"אין תחזיות",
-    aiFill:"מילוי AI",random:"אקראי",
-    bestBet:"Best Bet",advice:"עצה",whyPred:"למה התחזית הזו?",
-    form:"פורמה",winProb:"סיכויי ניצחון",homeAdv:"משחק ביתי",
-    leaguePos:"מיקום בטבלה",predicted:"תחזית",
-    winner:"מנצח",exact:"מדויק",
-    pts:"נק׳",total:"סך הכל",
-    myHistory:"ההיסטוריה שלי",noGuesses:"אין ניחושים עדיין",
-    autoSync:"מסנכרן אוטומטית עם המחשב כשהוא דלוק",
-    actual:"בפועל",draw:"תיקו",vs:"נגד",ft:"סיום",
-    xgMatch:"xG/משחק",injuries:"פציעות",out:"חסר",
-    poissonModel:"מודל פואסון",poissonScore:"תוצאה סבירה ביותר",
-    built:"נבנה לפני",ago:"",refresh:"רענן",retry:"נסה שוב",
-    offline:"לא מחובר",updated:"מעודכן",live:"LIVE",finishing:"מסיים",embedded:"מוטמע"
-  }
-};
-function t(k){return (_T[_LANG]||_T.en)[k]||(_T.en[k]||k)}
-function setLang(l){_LANG=l;localStorage.setItem("plLang",l);document.querySelectorAll('.lbtn').forEach(function(b){b.className='lbtn'+(b.getAttribute('data-lang')===l?' a':'')});render();_updNav();}
-function _updNav(){try{var s0=$('n0').querySelector('svg'),s1=$('n1').querySelector('svg'),s2=$('n2').querySelector('svg');if(s0)$('n0').innerHTML=s0.outerHTML+t('results');if(s1)$('n1').innerHTML=s1.outerHTML+t('guess');if(s2)$('n2').innerHTML=s2.outerHTML+t('compare');$('mbrand').textContent=D.league==='laliga'?t('llDash'):t('plDash')}catch(e){console.log('updNav error:'+e)}}
+function t(k){var m={draw:"Draw",predictions:"Predictions",fillGuesses:"Fill Guesses",youVsAi:"You vs AI",guessResults:"Guess the Results",myHistory:"My History",aiFill:"AI Fill",random:"Random",winner:"Winner",exact:"Exact"};return m[k]||k}
 var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,cn:5,league:"pl",gwl:"GW"};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]}};
 function $(i){return document.getElementById(i)}
@@ -291,8 +246,6 @@ function init(){
     var age=Math.round((Date.now()-bt.getTime())/60000);
     $("upd").innerHTML=age>10?'<span style="color:#ffc107">Built '+age+'m ago</span> <span style="font-size:.5rem;text-decoration:underline" onclick="fetchLive()">Refresh</span>':'<span style="color:#00ff87">Built '+age+'m ago</span>';
   }else{$("upd").textContent="Loading...";}
-  document.querySelectorAll('.lbtn').forEach(function(b){b.className='lbtn'+(b.getAttribute('data-lang')===_LANG?' a':'')});
-  _updNav();
   autoSync();fetchLive();
 }
 
