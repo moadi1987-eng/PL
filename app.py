@@ -655,6 +655,458 @@ def _opponent_adjusted_goals(team_matches, pos_map, is_home):
 
 
 AI_ACCURACY_FILE = os.path.join(DATA_DIR, "ai_accuracy.json")
+ML_STATE_FILE = os.path.join(DATA_DIR, "ml_state.json")
+ML_HISTORY_FILE = os.path.join(DATA_DIR, "ml_history.json")
+
+
+def _default_ml_state():
+    return {
+        "factor_accuracy": {
+            "form": 0.5, "strength": 0.5, "position": 0.5, "home_adv": 0.5,
+            "streak": 0.5, "h2h": 0.5, "home_away_split": 0.5, "goals_trend": 0.5,
+            "upset": 0.5, "clean_sheet": 0.5, "draw_tendency": 0.5,
+        },
+        "team_goal_bias": {},
+        "team_result_bias": {},
+        "poisson_blend": 0.6,
+        "factor_blend": 0.4,
+        "confidence_features": {
+            "position_gap_weight": 0.15,
+            "form_diff_weight": 0.20,
+            "max_pct_weight": 0.30,
+            "draw_penalty_weight": 0.10,
+            "home_fav_bonus": 0.10,
+            "h2h_clarity_weight": 0.08,
+            "streak_diff_weight": 0.07,
+        },
+        "confidence_calibration": {},
+        "matches_learned": 0,
+        "learning_rate": 0.08,
+        "last_learned_match_ids": [],
+        "gw_accuracy_history": {},
+    }
+
+
+def _load_ml_state():
+    if os.path.exists(ML_STATE_FILE):
+        try:
+            with open(ML_STATE_FILE, "r") as f:
+                state = json.load(f)
+            defaults = _default_ml_state()
+            for k, v in defaults.items():
+                if k not in state:
+                    state[k] = v
+            return state
+        except Exception:
+            pass
+    return _default_ml_state()
+
+
+def _save_ml_state(state):
+    with open(ML_STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def _load_ml_history():
+    if os.path.exists(ML_HISTORY_FILE):
+        try:
+            with open(ML_HISTORY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"matches": []}
+
+
+def _save_ml_history(history):
+    history["matches"] = history["matches"][-2000:]
+    with open(ML_HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+
+def _extract_match_features(home_id, away_id, gw):
+    """Extract all features for a match for learning purposes."""
+    team_map = build_team_map()
+    standings = build_standings(up_to_gw=gw - 1 if gw > 1 else None)
+    pos_map = {r["team"]["id"]: r["position"] for r in standings}
+    home_team = team_map.get(home_id, {})
+    away_team = team_map.get(away_id, {})
+    h_stats = compute_team_stats(home_id, 5, gw)
+    a_stats = compute_team_stats(away_id, 5, gw)
+    h_all = _get_all_team_matches(home_id, gw)
+    a_all = _get_all_team_matches(away_id, gw)
+
+    h_pos = pos_map.get(home_id, 10)
+    a_pos = pos_map.get(away_id, 10)
+    position_gap = abs(h_pos - a_pos)
+    form_diff = abs(h_stats["form_score"] - a_stats["form_score"])
+
+    h_str = (home_team.get("strength_attack_home", 1000) + home_team.get("strength_defence_home", 1000)) / 2
+    a_str = (away_team.get("strength_attack_away", 1000) + away_team.get("strength_defence_away", 1000)) / 2
+
+    h2h = _head_to_head(home_id, away_id)
+    h2h_clarity = abs(h2h["home_wins"] - h2h["away_wins"]) / max(h2h["matches"], 1)
+
+    h_streak = _streak_score(h_all, 5)
+    a_streak = _streak_score(a_all, 5)
+    streak_diff = abs(h_streak - a_streak)
+
+    h_draw = _draw_tendency(h_all)
+    a_draw = _draw_tendency(a_all)
+    avg_draw_tend = (h_draw + a_draw) / 2
+
+    h_cs = _clean_sheet_rate(h_all[-5:])
+    a_cs = _clean_sheet_rate(a_all[-5:])
+
+    home_is_favorite = h_pos < a_pos and h_stats["form_score"] > a_stats["form_score"]
+
+    return {
+        "home_id": home_id,
+        "away_id": away_id,
+        "gw": gw,
+        "home_pos": h_pos,
+        "away_pos": a_pos,
+        "position_gap": position_gap,
+        "form_diff": form_diff,
+        "home_form": h_stats["form_score"],
+        "away_form": a_stats["form_score"],
+        "home_strength": h_str,
+        "away_strength": a_str,
+        "h2h_clarity": round(h2h_clarity, 3),
+        "h2h_home_wins": h2h["home_wins"],
+        "h2h_away_wins": h2h["away_wins"],
+        "streak_diff": round(streak_diff, 1),
+        "home_streak": h_streak,
+        "away_streak": a_streak,
+        "avg_draw_tendency": round(avg_draw_tend, 1),
+        "home_cs_rate": h_cs,
+        "away_cs_rate": a_cs,
+        "home_is_favorite": home_is_favorite,
+    }
+
+
+def _compute_factor_predictions(home_id, away_id, gw):
+    """What each factor predicts for this match."""
+    team_map = build_team_map()
+    standings = build_standings(up_to_gw=gw - 1 if gw > 1 else None)
+    pos_map = {r["team"]["id"]: r["position"] for r in standings}
+    ht = team_map.get(home_id, {})
+    at = team_map.get(away_id, {})
+    h_stats = compute_team_stats(home_id, 5, gw)
+    a_stats = compute_team_stats(away_id, 5, gw)
+    h_all = _get_all_team_matches(home_id, gw)
+    a_all = _get_all_team_matches(away_id, gw)
+
+    factors = {}
+    factors["form"] = "home" if h_stats["form_score"] > a_stats["form_score"] else "away" if a_stats["form_score"] > h_stats["form_score"] else "draw"
+    h_str = (ht.get("strength_attack_home", 1000) + ht.get("strength_defence_home", 1000)) / 2
+    a_str = (at.get("strength_attack_away", 1000) + at.get("strength_defence_away", 1000)) / 2
+    factors["strength"] = "home" if h_str > a_str else "away" if a_str > h_str else "draw"
+    factors["position"] = "home" if pos_map.get(home_id, 10) < pos_map.get(away_id, 10) else "away" if pos_map.get(away_id, 10) < pos_map.get(home_id, 10) else "draw"
+    factors["home_adv"] = "home"
+    factors["streak"] = "home" if _streak_score(h_all) > _streak_score(a_all) else "away"
+    h2h = _head_to_head(home_id, away_id)
+    factors["h2h"] = "home" if h2h["home_wins"] > h2h["away_wins"] else "away" if h2h["away_wins"] > h2h["home_wins"] else "draw"
+    h_split = _home_away_split(h_all, True)
+    a_split = _home_away_split(a_all, False)
+    factors["home_away_split"] = "home" if h_split["win_rate"] > a_split["win_rate"] else "away"
+    h_trend = sum(m["gf"] for m in h_all[-3:]) / max(len(h_all[-3:]), 1) if h_all else 1
+    a_trend = sum(m["gf"] for m in a_all[-3:]) / max(len(a_all[-3:]), 1) if a_all else 1
+    factors["goals_trend"] = "home" if h_trend > a_trend else "away"
+    h_upset = _upset_potential(h_all, away_id, pos_map)
+    a_upset = _upset_potential(a_all, home_id, pos_map)
+    factors["upset"] = "home" if h_upset > a_upset else "away" if a_upset > h_upset else "draw"
+    h_cs = _clean_sheet_rate(h_all[-5:])
+    a_cs = _clean_sheet_rate(a_all[-5:])
+    factors["clean_sheet"] = "home" if h_cs > a_cs else "away" if a_cs > h_cs else "draw"
+    h_draw = _draw_tendency(h_all)
+    a_draw = _draw_tendency(a_all)
+    avg_draw = (h_draw + a_draw) / 2
+    factors["draw_tendency"] = "draw" if avg_draw > 30 else ("home" if h_stats["form_score"] > a_stats["form_score"] else "away")
+    return factors
+
+
+def learn_from_match(match_id, home_id, away_id, actual_hs, actual_as, gw, pred_hs=None, pred_as=None):
+    """Core learning function: called after every finished match to update the model."""
+    state = _load_ml_state()
+    history = _load_ml_history()
+
+    if match_id in state.get("last_learned_match_ids", []):
+        return
+
+    actual_winner = "home" if actual_hs > actual_as else "draw" if actual_hs == actual_as else "away"
+    lr = state.get("learning_rate", 0.08)
+
+    # 1. Factor accuracy update (online EMA)
+    try:
+        factor_preds = _compute_factor_predictions(home_id, away_id, gw)
+        fa = state["factor_accuracy"]
+        for k, pred_winner in factor_preds.items():
+            correct = 1.0 if pred_winner == actual_winner else 0.0
+            old_acc = fa.get(k, 0.5)
+            fa[k] = round(old_acc * (1 - lr) + correct * lr, 6)
+        state["factor_accuracy"] = fa
+
+        total_acc = sum(fa.values())
+        if total_acc > 0:
+            new_weights = {k: round(v / total_acc, 4) for k, v in fa.items()}
+            _save_weights(new_weights)
+    except Exception:
+        pass
+
+    # 2. Team goal bias correction
+    if pred_hs is not None and pred_as is not None:
+        tgb = state.get("team_goal_bias", {})
+        h_key = str(home_id)
+        a_key = str(away_id)
+        bias_lr = 0.12
+
+        old_h_bias = tgb.get(h_key, 0.0)
+        h_goal_error = pred_hs - actual_hs
+        tgb[h_key] = round(old_h_bias * (1 - bias_lr) + h_goal_error * bias_lr, 3)
+
+        old_a_bias = tgb.get(a_key, 0.0)
+        a_goal_error = pred_as - actual_as
+        tgb[a_key] = round(old_a_bias * (1 - bias_lr) + a_goal_error * bias_lr, 3)
+
+        state["team_goal_bias"] = tgb
+
+    # 3. Team result bias (did we predict the right winner?)
+    trb = state.get("team_result_bias", {})
+    h_key = str(home_id)
+    a_key = str(away_id)
+    bias_lr = 0.1
+
+    if actual_winner == "home":
+        old_h = trb.get(h_key, 0.0)
+        trb[h_key] = round(old_h * (1 - bias_lr) + 0.1 * bias_lr, 4)
+        old_a = trb.get(a_key, 0.0)
+        trb[a_key] = round(old_a * (1 - bias_lr) + (-0.1) * bias_lr, 4)
+    elif actual_winner == "away":
+        old_h = trb.get(h_key, 0.0)
+        trb[h_key] = round(old_h * (1 - bias_lr) + (-0.1) * bias_lr, 4)
+        old_a = trb.get(a_key, 0.0)
+        trb[a_key] = round(old_a * (1 - bias_lr) + 0.1 * bias_lr, 4)
+    state["team_result_bias"] = trb
+
+    # 4. Poisson blend calibration
+    try:
+        pred = predict_match(home_id, away_id, gw)
+        pred_winner_from_pct = "home" if pred["home_win_pct"] > pred["away_win_pct"] and pred["home_win_pct"] > pred["draw_pct"] else \
+                               "away" if pred["away_win_pct"] > pred["home_win_pct"] and pred["away_win_pct"] > pred["draw_pct"] else "draw"
+        poisson_winner = "home" if pred["poisson_score"][0] > pred["poisson_score"][1] else \
+                         "away" if pred["poisson_score"][1] > pred["poisson_score"][0] else "draw"
+
+        overall_correct = pred_winner_from_pct == actual_winner
+        poisson_correct = poisson_winner == actual_winner
+
+        pb = state.get("poisson_blend", 0.6)
+        if poisson_correct and not overall_correct:
+            state["poisson_blend"] = round(min(pb + 0.01, 0.80), 3)
+            state["factor_blend"] = round(1 - state["poisson_blend"], 3)
+        elif overall_correct and not poisson_correct:
+            state["poisson_blend"] = round(max(pb - 0.01, 0.35), 3)
+            state["factor_blend"] = round(1 - state["poisson_blend"], 3)
+    except Exception:
+        pass
+
+    # 5. Confidence calibration
+    try:
+        features = _extract_match_features(home_id, away_id, gw)
+        pred = predict_match(home_id, away_id, gw)
+        max_pct = max(pred["home_win_pct"], pred["draw_pct"], pred["away_win_pct"])
+        pred_winner = "home" if pred["home_win_pct"] >= pred["away_win_pct"] and pred["home_win_pct"] >= pred["draw_pct"] else \
+                      "away" if pred["away_win_pct"] >= pred["home_win_pct"] else "draw"
+        was_correct = pred_winner == actual_winner
+
+        conf_bin = str(int(max_pct // 5) * 5)
+        cal = state.get("confidence_calibration", {})
+        if conf_bin not in cal:
+            cal[conf_bin] = {"total": 0, "correct": 0}
+        cal[conf_bin]["total"] += 1
+        if was_correct:
+            cal[conf_bin]["correct"] += 1
+        state["confidence_calibration"] = cal
+
+        cf = state["confidence_features"]
+        adapt_lr = 0.05
+
+        pos_gap_signal = features["position_gap"] / 20.0
+        if was_correct and pos_gap_signal > 0.3:
+            cf["position_gap_weight"] = round(min(cf["position_gap_weight"] + adapt_lr * 0.3, 0.30), 4)
+        elif not was_correct and pos_gap_signal > 0.3:
+            cf["position_gap_weight"] = round(max(cf["position_gap_weight"] - adapt_lr * 0.1, 0.05), 4)
+
+        form_signal = features["form_diff"] / 100.0
+        if was_correct and form_signal > 0.2:
+            cf["form_diff_weight"] = round(min(cf["form_diff_weight"] + adapt_lr * 0.2, 0.35), 4)
+        elif not was_correct and form_signal > 0.2:
+            cf["form_diff_weight"] = round(max(cf["form_diff_weight"] - adapt_lr * 0.1, 0.05), 4)
+
+        if was_correct and features.get("avg_draw_tendency", 0) < 20:
+            cf["draw_penalty_weight"] = round(min(cf["draw_penalty_weight"] + adapt_lr * 0.1, 0.20), 4)
+
+        state["confidence_features"] = cf
+
+        history["matches"].append({
+            "match_id": match_id, "gw": gw,
+            "home_id": home_id, "away_id": away_id,
+            "actual_hs": actual_hs, "actual_as": actual_as,
+            "actual_winner": actual_winner,
+            "pred_winner": pred_winner,
+            "pred_hs": pred_hs, "pred_as": pred_as,
+            "max_pct": max_pct,
+            "was_correct": was_correct,
+            "features": features,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    except Exception:
+        pass
+
+    state["matches_learned"] = state.get("matches_learned", 0) + 1
+
+    learned_ids = state.get("last_learned_match_ids", [])
+    learned_ids.append(match_id)
+    state["last_learned_match_ids"] = learned_ids[-500:]
+
+    _save_ml_state(state)
+    _save_ml_history(history)
+
+    print(f"[ML] Learned from match {match_id} (GW{gw}): {actual_hs}-{actual_as} | "
+          f"Total learned: {state['matches_learned']} | Poisson blend: {state.get('poisson_blend', 0.6)}")
+
+
+def check_and_learn():
+    """Check for newly finished matches and learn from them."""
+    state = _load_ml_state()
+    learned_ids = set(state.get("last_learned_match_ids", []))
+
+    try:
+        all_fix = get_all_fixtures()
+    except Exception:
+        return 0
+
+    ai_acc = _load_accuracy()
+    pred_map = {}
+    for p in ai_acc.get("predictions", []):
+        pred_map[p.get("match_id")] = p
+
+    count = 0
+    for f in all_fix:
+        if not f.get("finished") or f.get("team_h_score") is None:
+            continue
+        mid = f["id"]
+        if mid in learned_ids:
+            continue
+
+        pred_hs = None
+        pred_as = None
+        if mid in pred_map:
+            pred_hs = pred_map[mid].get("pred_hs")
+            pred_as = pred_map[mid].get("pred_as")
+
+        try:
+            learn_from_match(
+                match_id=mid,
+                home_id=f["team_h"],
+                away_id=f["team_a"],
+                actual_hs=f["team_h_score"],
+                actual_as=f["team_a_score"],
+                gw=f.get("event", 0),
+                pred_hs=pred_hs,
+                pred_as=pred_as,
+            )
+            count += 1
+        except Exception as e:
+            print(f"[ML] Error learning from match {mid}: {e}")
+
+    if count > 0:
+        print(f"[ML] Learned from {count} new matches")
+        try:
+            track_prediction_accuracy()
+        except Exception:
+            pass
+        try:
+            refreshed = refresh_future_predictions()
+            if refreshed:
+                for r in refreshed:
+                    print(f"[ML] Refreshed GW{r['gw']} predictions: {r['changes']} changes")
+        except Exception as e:
+            print(f"[ML] Failed to refresh predictions: {e}")
+
+    return count
+
+
+def learned_confidence_score(match_features, prediction):
+    """Calculate confidence using the learned model (replaces naive formula)."""
+    state = _load_ml_state()
+    cf = state.get("confidence_features", _default_ml_state()["confidence_features"])
+
+    max_pct = max(prediction["home_win_pct"], prediction["draw_pct"], prediction["away_win_pct"])
+
+    position_gap_norm = min(match_features.get("position_gap", 0) / 19.0, 1.0)
+    form_diff_norm = min(match_features.get("form_diff", 0) / 100.0, 1.0)
+    streak_diff_norm = min(match_features.get("streak_diff", 0) / 100.0, 1.0)
+    h2h_clarity = min(match_features.get("h2h_clarity", 0), 1.0)
+    draw_penalty = min(match_features.get("avg_draw_tendency", 0) / 50.0, 1.0)
+    home_fav_bonus = 1.0 if match_features.get("home_is_favorite", False) else 0.0
+
+    score = (
+        max_pct * cf.get("max_pct_weight", 0.30) +
+        position_gap_norm * 100 * cf.get("position_gap_weight", 0.15) +
+        form_diff_norm * 100 * cf.get("form_diff_weight", 0.20) +
+        streak_diff_norm * 80 * cf.get("streak_diff_weight", 0.07) +
+        h2h_clarity * 60 * cf.get("h2h_clarity_weight", 0.08) +
+        home_fav_bonus * 15 * cf.get("home_fav_bonus", 0.10) -
+        draw_penalty * 30 * cf.get("draw_penalty_weight", 0.10)
+    )
+
+    cal = state.get("confidence_calibration", {})
+    conf_bin = str(int(max_pct // 5) * 5)
+    if conf_bin in cal and cal[conf_bin].get("total", 0) >= 5:
+        actual_accuracy = cal[conf_bin]["correct"] / cal[conf_bin]["total"]
+        score = score * 0.7 + actual_accuracy * 100 * 0.3
+
+    return round(max(score, 1.0), 1)
+
+
+def get_ml_status():
+    """Return current ML learning status for monitoring."""
+    state = _load_ml_state()
+    history = _load_ml_history()
+
+    recent = history.get("matches", [])[-50:]
+    recent_correct = sum(1 for m in recent if m.get("was_correct")) if recent else 0
+    recent_total = len(recent)
+    recent_accuracy = round(recent_correct / max(recent_total, 1) * 100, 1)
+
+    last10 = history.get("matches", [])[-10:]
+    last10_correct = sum(1 for m in last10 if m.get("was_correct"))
+
+    cal = state.get("confidence_calibration", {})
+    calibration_summary = {}
+    for band, data in sorted(cal.items(), key=lambda x: int(x[0])):
+        if data.get("total", 0) > 0:
+            calibration_summary[f"{band}-{int(band)+5}%"] = {
+                "total": data["total"],
+                "correct": data["correct"],
+                "accuracy": round(data["correct"] / data["total"] * 100, 1),
+            }
+
+    return {
+        "matches_learned": state.get("matches_learned", 0),
+        "poisson_blend": state.get("poisson_blend", 0.6),
+        "factor_blend": state.get("factor_blend", 0.4),
+        "learning_rate": state.get("learning_rate", 0.08),
+        "recent_accuracy_50": recent_accuracy,
+        "last_10_accuracy": f"{last10_correct}/{len(last10)}",
+        "factor_accuracy": state.get("factor_accuracy", {}),
+        "confidence_features": state.get("confidence_features", {}),
+        "confidence_calibration": calibration_summary,
+        "top_biased_teams": dict(sorted(
+            state.get("team_goal_bias", {}).items(),
+            key=lambda x: abs(x[1]), reverse=True
+        )[:10]),
+    }
 
 def _load_accuracy():
     if os.path.exists(AI_ACCURACY_FILE):
@@ -986,15 +1438,31 @@ def predict_match(home_id, away_id, current_gw):
     if h_concede > 2.0:
         lambda_away *= 1.08
 
+    # Apply learned team goal bias correction
+    _ml_state = _load_ml_state()
+    h_bias = _ml_state.get("team_goal_bias", {}).get(str(home_id), 0.0)
+    a_bias = _ml_state.get("team_goal_bias", {}).get(str(away_id), 0.0)
+    lambda_home -= h_bias * 0.5
+    lambda_away -= a_bias * 0.5
+
+    # Apply team result bias (subtle shift toward historically under-predicted teams)
+    h_rbias = _ml_state.get("team_result_bias", {}).get(str(home_id), 0.0)
+    a_rbias = _ml_state.get("team_result_bias", {}).get(str(away_id), 0.0)
+    lambda_home += h_rbias * 2.0
+    lambda_away += a_rbias * 2.0
+
     lambda_home = max(lambda_home, 0.3)
     lambda_away = max(lambda_away, 0.3)
 
     # Poisson probabilities
     poisson = _poisson_match_probs(lambda_home, lambda_away)
 
-    # Blend Poisson probabilities with factor-based probabilities
-    final_home_pct = round(home_pct * 0.4 + poisson["home_win"] * 0.6, 1)
-    final_draw_pct = round(draw_pct * 0.4 + poisson["draw"] * 0.6, 1)
+    # Blend Poisson probabilities with factor-based probabilities (learned blend)
+    ml_state = _load_ml_state()
+    poisson_w = ml_state.get("poisson_blend", 0.6)
+    factor_w = ml_state.get("factor_blend", 0.4)
+    final_home_pct = round(home_pct * factor_w + poisson["home_win"] * poisson_w, 1)
+    final_draw_pct = round(draw_pct * factor_w + poisson["draw"] * poisson_w, 1)
     final_away_pct = round(100 - final_home_pct - final_draw_pct, 1)
 
     pred_home_goals = round(lambda_home, 1)
@@ -1607,31 +2075,40 @@ def save_ai_preds(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def store_ai_predictions_for_gw(gw):
-    """Generate and store AI predictions for a gameweek. Only before matches start."""
+def store_ai_predictions_for_gw(gw, force_refresh=False):
+    """Generate and store AI predictions for a gameweek. Only before matches start.
+    If force_refresh=True, regenerate even if predictions exist (for post-learning updates)."""
     ai_data = load_ai_preds()
     key = str(gw)
-    if key in ai_data:
+
+    if key in ai_data and not force_refresh:
         return ai_data[key]
 
     matches = fixtures_for_gameweek(gw)
 
-    # Block if ANY match has already started
+    # Block if ANY match has already started (can't change predictions mid-game)
     if any(m.get("started") or m.get("finished") for m in matches):
+        if force_refresh:
+            return ai_data.get(key, {"predictions": [], "locked": True, "reason": "Matches already started"})
         return {"predictions": [], "locked": True, "reason": "Matches already started"}
+
+    old_preds = ai_data.get(key, {}).get("predictions", [])
+    old_map = {p["match_id"]: p for p in old_preds}
+
     preds = []
+    changes = []
     for m in matches:
         pred = predict_match(m["home_id"], m["away_id"], gw)
         home_score = round(pred["predicted_home_goals"])
         away_score = round(pred["predicted_away_goals"])
-        # Winner must match the predicted score: 2-2 → Draw, 3-1 → home, etc.
         if home_score > away_score:
             winner = "home"
         elif home_score < away_score:
             winner = "away"
         else:
             winner = "draw"
-        preds.append({
+
+        new_pred = {
             "match_id": m["id"],
             "winner": winner,
             "home_score": home_score,
@@ -1639,10 +2116,61 @@ def store_ai_predictions_for_gw(gw):
             "home_win_pct": pred["home_win_pct"],
             "draw_pct": pred["draw_pct"],
             "away_win_pct": pred["away_win_pct"],
-        })
-    ai_data[key] = {"predictions": preds, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        }
+        preds.append(new_pred)
+
+        old = old_map.get(m["id"])
+        if old and (old.get("winner") != winner or old.get("home_score") != home_score or old.get("away_score") != away_score):
+            changes.append({
+                "match_id": m["id"],
+                "home": m.get("home_short", "?"),
+                "away": m.get("away_short", "?"),
+                "old_winner": old.get("winner"),
+                "new_winner": winner,
+                "old_score": f"{old.get('home_score')}-{old.get('away_score')}",
+                "new_score": f"{home_score}-{away_score}",
+            })
+
+    version = ai_data.get(key, {}).get("version", 0) + 1 if force_refresh else 1
+    ai_data[key] = {
+        "predictions": preds,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "version": version,
+        "model_updated": force_refresh,
+    }
+    if changes:
+        ai_data[key]["changes_from_learning"] = changes
+        print(f"[ML] GW{gw} predictions updated: {len(changes)} changes after learning")
+        for c in changes:
+            print(f"  {c['home']} vs {c['away']}: {c['old_winner']}({c['old_score']}) → {c['new_winner']}({c['new_score']})")
+
     save_ai_preds(ai_data)
     return ai_data[key]
+
+
+def refresh_future_predictions():
+    """After ML learning, refresh predictions for all unstarted gameweeks."""
+    try:
+        current_gw = get_current_gameweek()
+        refreshed = []
+
+        for gw in [current_gw, current_gw + 1]:
+            if gw > 38:
+                continue
+            matches = fixtures_for_gameweek(gw)
+            if not matches:
+                continue
+            if any(m.get("started") or m.get("finished") for m in matches):
+                continue
+            result = store_ai_predictions_for_gw(gw, force_refresh=True)
+            changes = result.get("changes_from_learning", [])
+            if changes:
+                refreshed.append({"gw": gw, "changes": len(changes)})
+
+        return refreshed
+    except Exception as e:
+        print(f"[ML] Failed to refresh future predictions: {e}")
+        return []
 
 
 def score_ai_for_gw(gw):
@@ -1797,7 +2325,16 @@ def api_predictions(gw):
             pred = league_predict_match(m["home_id"], m["away_id"], gw, league)
             max_pct = max(pred["home_win_pct"], pred["draw_pct"], pred["away_win_pct"])
             form_diff = abs(pred["home_form"]["form_score"] - pred["away_form"]["form_score"])
-            confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+
+            if league == "pl":
+                try:
+                    features = _extract_match_features(m["home_id"], m["away_id"], gw)
+                    confidence = learned_confidence_score(features, pred)
+                except Exception:
+                    confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+            else:
+                confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+
             row = {
                 "match": m,
                 "prediction": pred,
@@ -1825,7 +2362,19 @@ def api_predictions(gw):
                 if pp["match"]["id"] == p["match"]["id"]:
                     pp["bet_rank"] = i + 1
 
-        return jsonify({"gameweek": gw, "predictions": predictions})
+        ml_info = {}
+        if league == "pl":
+            try:
+                ml_s = _load_ml_state()
+                ml_info = {
+                    "model_version": ml_s.get("matches_learned", 0),
+                    "poisson_blend": ml_s.get("poisson_blend", 0.6),
+                    "last_update": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            except Exception:
+                pass
+
+        return jsonify({"gameweek": gw, "predictions": predictions, "ml": ml_info})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2039,7 +2588,16 @@ def _get_top5_best_bets(gw, league="pl"):
         pred = league_predict_match(m["home_id"], m["away_id"], gw, league)
         max_pct = max(pred["home_win_pct"], pred["draw_pct"], pred["away_win_pct"])
         form_diff = abs(pred["home_form"]["form_score"] - pred["away_form"]["form_score"])
-        confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+
+        if league == "pl":
+            try:
+                features = _extract_match_features(m["home_id"], m["away_id"], gw)
+                confidence = learned_confidence_score(features, pred)
+            except Exception:
+                confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+        else:
+            confidence = round(max_pct * 0.6 + form_diff * 0.4, 1)
+
         preds.append({"match": m, "prediction": pred, "confidence": confidence})
     sorted_preds = sorted(preds, key=lambda x: x["confidence"], reverse=True)
     top5 = []
@@ -2455,8 +3013,65 @@ def api_ai_accuracy():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/ml-status")
+def api_ml_status():
+    """Monitor the ML learning model status and accuracy."""
+    try:
+        status = get_ml_status()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ml-learn", methods=["POST"])
+def api_ml_learn():
+    """Manually trigger ML learning from all finished matches."""
+    try:
+        count = check_and_learn()
+        status = get_ml_status()
+        return jsonify({
+            "ok": True,
+            "newly_learned": count,
+            "total_learned": status.get("matches_learned", 0),
+            "recent_accuracy": status.get("recent_accuracy_50", 0),
+            "poisson_blend": status.get("poisson_blend", 0.6),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ml-reset", methods=["POST"])
+def api_ml_reset():
+    """Reset ML state to defaults (fresh start)."""
+    try:
+        _save_ml_state(_default_ml_state())
+        _save_ml_history({"matches": []})
+        return jsonify({"ok": True, "message": "ML state reset to defaults"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ml-changes/<int:gw>")
+def api_ml_changes(gw):
+    """Show what predictions changed for a gameweek after ML learning."""
+    try:
+        ai_data = load_ai_preds()
+        key = str(gw)
+        gw_data = ai_data.get(key, {})
+        return jsonify({
+            "gameweek": gw,
+            "version": gw_data.get("version", 1),
+            "model_updated": gw_data.get("model_updated", False),
+            "created_at": gw_data.get("created_at", ""),
+            "changes": gw_data.get("changes_from_learning", []),
+            "predictions_count": len(gw_data.get("predictions", [])),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def auto_update_mobile():
-    """Auto-update: calibrate AI weights + track accuracy + push to GitHub Pages on startup."""
+    """Auto-update: ML learning + calibrate AI weights + track accuracy + push to GitHub Pages on startup."""
     import subprocess, sys, threading
     def run():
         try:
@@ -2472,6 +3087,13 @@ def auto_update_mobile():
             print(f"[AI] Weights: {new_w}")
         except Exception as e:
             print(f"[AI] Calibration failed: {e}")
+        try:
+            ml_status = get_ml_status()
+            print(f"[ML] Status: {ml_status.get('matches_learned', 0)} matches learned, "
+                  f"Recent accuracy: {ml_status.get('recent_accuracy_50', 'N/A')}%, "
+                  f"Poisson blend: {ml_status.get('poisson_blend', 0.6)}")
+        except Exception as e:
+            print(f"[ML] Status check failed: {e}")
         try:
             script = os.path.join(os.path.dirname(__file__), "website", "update_pl_mobile.py")
             if os.path.exists(script):
@@ -2501,6 +3123,36 @@ def _trigger_ci_workflow():
             print(f"[Live-push] CI workflow triggered")
     except Exception as e:
         print(f"[Live-push] CI trigger failed: {e}")
+
+
+ML_LEARN_INTERVAL = 90  # Check for finished matches every 90 seconds
+
+
+def start_ml_learning_watcher():
+    """Background thread: learns from newly finished matches every 90 seconds."""
+    import threading
+
+    def learner():
+        time.sleep(30)
+        print("[ML] Initial learning pass on startup...")
+        try:
+            count = check_and_learn()
+            if count > 0:
+                print(f"[ML] Startup: learned from {count} historical matches")
+        except Exception as e:
+            print(f"[ML] Startup learning failed: {e}")
+
+        while True:
+            time.sleep(ML_LEARN_INTERVAL)
+            try:
+                count = check_and_learn()
+                if count > 0:
+                    print(f"[ML] Background: learned from {count} newly finished matches at {time.strftime('%H:%M:%S')}")
+            except Exception as e:
+                print(f"[ML] Background learning error: {e}")
+
+    threading.Thread(target=learner, daemon=True).start()
+    print("[ML] Learning watcher started — checks every 90s for finished matches")
 
 
 def start_live_push_watcher():
@@ -2535,6 +3187,11 @@ def start_live_push_watcher():
             elif was_live:
                 was_live = False
                 push_count = 0
+                print("[ML] Matches ended — triggering post-matchday learning...")
+                try:
+                    check_and_learn()
+                except Exception as e:
+                    print(f"[ML] Post-match learning failed: {e}")
                 try:
                     script = os.path.join(os.path.dirname(__file__), "website", "update_pl_mobile.py")
                     if os.path.exists(script):
@@ -2553,5 +3210,6 @@ def start_live_push_watcher():
 if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "1") == "1"
     auto_update_mobile()
+    start_ml_learning_watcher()
     start_live_push_watcher()
     app.run(debug=debug, host="0.0.0.0", port=5000)

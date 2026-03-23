@@ -679,8 +679,8 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
 /* ══ GUESS (3 sub-tabs + history) ══ */
 function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
   h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;sessionStorage.setItem(\'plSub\',0);rGuess()">Predictions</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;sessionStorage.setItem(\'plSub\',1);rGuess()">Fill Guesses</button><button class="stab'+(D.sub===2?" a":"")+'" onclick="D.sub=2;sessionStorage.setItem(\'plSub\',2);rGuess()">You vs AI</button></div>';
-  if(D.sub===0)h+=rPred();else if(D.sub===1)h+=rGF();else h+=rVsAI();
-  h+=rGH();c.innerHTML=h;}
+  if(D.sub===0)h+=rPred();else if(D.sub===1){h+=rGF();h+=rGH()}else h+=rVsAI();
+  c.innerHTML=h;}
 
 function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var pds=[];ms.forEach(function(m){pds.push({m:m,p:pred(m.h,m.a,gw)})});
@@ -696,17 +696,6 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
       '<div class="pb"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div>'+
       '<div class="psc">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>'+
       '<div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div></div>'});
-  // Best Bets Score Table
-  var ag=gG(),gg=ag[gw]||{},bb=[];
-  so.slice(0,5).forEach(function(x){var m=x.m,p=x.p,g=gg[m.id]||{},hm=T(m.h),am=T(m.a);
-    var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
-    var uw=g.w||null,wok=!!(aw&&uw&&uw===aw),lb={home:hm.s,draw:"Draw",away:am.s};
-    var aiW=(p.rh===p.ra)?"draw":p.rec,aiOk=!!(aw&&aiW===aw);
-    bb.push({hm:hm,am:am,rk:rm[m.id],aw:aw?lb[aw]:"–",as2:ah!=null?ah+"-"+aa:"–",uw:uw?lb[uw]:"–",us:g.hs!=null?g.hs+"-"+g.as:"–",wok:wok,adv:lb[p.rec]+" ("+p.rh+"-"+p.ra+")",aiOk:aiOk,fin:!!aw})});
-  var wC=0,aiC=0;bb.forEach(function(b){if(b.fin&&b.wok)wC++;if(b.fin&&b.aiOk)aiC++});
-  h+='<div class="bb"><h5>Best Bets Score</h5><table><thead><tr><th>#</th><th>Match</th><th>Actual</th><th>Pick</th><th>W</th><th>AI Advice</th><th>AI</th></tr></thead><tbody>';
-  bb.forEach(function(b){h+='<tr><td>'+b.rk+'</td><td><b>'+b.hm.s+' v '+b.am.s+'</b></td><td>'+b.aw+' '+b.as2+'</td><td>'+b.uw+' '+b.us+'</td><td>'+(b.fin?(b.wok?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td><td>'+b.adv+'</td><td>'+(b.fin?(b.aiOk?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td></tr>'});
-  h+='<tr class="sm"><td colspan="2"><b>Out of 5</b></td><td colspan="2"></td><td><b>'+wC+'/5</b></td><td></td><td><b>'+aiC+'/5</b></td></tr></tbody></table></div>';
   return h;}
 
 function _rndGoal(){var r=Math.random();if(r<.28)return 0;if(r<.62)return 1;if(r<.84)return 2;if(r<.94)return 3;return 4}
@@ -756,6 +745,20 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
 
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0;
+  // Best Bets Score Table
+  var pds=[];ms.forEach(function(m){pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
+  var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
+  var bb=[];
+  so.slice(0,5).forEach(function(x){var m=x.m,p=x.p,g=gg[m.id]||{},hm=T(m.h),am=T(m.a);
+    var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
+    var uw=g.w||null,wok=!!(aw&&uw&&uw===aw),lb={home:hm.s,draw:"Draw",away:am.s};
+    var aiW=(p.rh===p.ra)?"draw":p.rec,aiOk=!!(aw&&aiW===aw);
+    bb.push({hm:hm,am:am,rk:rm[m.id],aw:aw?lb[aw]:"–",as2:ah!=null?ah+"-"+aa:"–",uw:uw?lb[uw]:"–",us:g.hs!=null?g.hs+"-"+g.as:"–",wok:wok,adv:lb[p.rec]+" ("+p.rh+"-"+p.ra+")",aiOk:aiOk,fin:!!aw})});
+  var wC=0,aiC=0;bb.forEach(function(b){if(b.fin&&b.wok)wC++;if(b.fin&&b.aiOk)aiC++});
+  var bbH='<div class="bb"><h5>Best Bets Score</h5><table><thead><tr><th>#</th><th>Match</th><th>Actual</th><th>Pick</th><th>W</th><th>AI Advice</th><th>AI</th></tr></thead><tbody>';
+  bb.forEach(function(b){bbH+='<tr><td>'+b.rk+'</td><td><b>'+b.hm.s+' v '+b.am.s+'</b></td><td>'+b.aw+' '+b.as2+'</td><td>'+b.uw+' '+b.us+'</td><td>'+(b.fin?(b.wok?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td><td>'+b.adv+'</td><td>'+(b.fin?(b.aiOk?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td></tr>'});
+  bbH+='<tr class="sm"><td colspan="2"><b>Out of 5</b></td><td colspan="2"></td><td><b>'+wC+'/5</b></td><td></td><td><b>'+aiC+'/5</b></td></tr></tbody></table></div>';
   var rows="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var lb={home:hm.s,draw:"Draw",away:am.s};
@@ -772,7 +775,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
     var actWd=live?'<span style="color:var(--pk)">'+( lm4||"LIVE")+'</span> '+actW:actW;
     rows+='<tr'+(live?' style="background:rgba(233,0,82,.05)"':'')+'><td class="cmp-match"><img src="'+hm.b+'" onerror="this.style.display=\'none\'">'+hm.s+' v '+am.s+'<img src="'+am.b+'" onerror="this.style.display=\'none\'"></td><td class="cmp-c cmp-act">'+actWd+'</td>'+wCell(uWS,uwOk,uw)+wCell(aWS,awOk,true)+'<td class="cmp-c cmp-act">'+actS+'</td>'+sCell(uSS,usOk,g.hs!=null)+sCell(aSS,asOk,true)+'</tr>'});
   var uPts=uW*3+uS*5,aPts=aW*3+aS*5;
-  var h='<div class="csb"><div class="csc'+(uPts>aPts?" win":"")+'"><div class="cw">You</div><div class="cp" style="color:'+(uPts>aPts?"var(--g)":"var(--tx)")+'">'+uPts+' pts</div><div class="cd">'+uW+' winners / '+uS+' exact</div></div>'+
+  var h=bbH+'<div class="csb"><div class="csc'+(uPts>aPts?" win":"")+'"><div class="cw">You</div><div class="cp" style="color:'+(uPts>aPts?"var(--g)":"var(--tx)")+'">'+uPts+' pts</div><div class="cd">'+uW+' winners / '+uS+' exact</div></div>'+
     '<div class="csc'+(aPts>uPts?" win":"")+'"><div class="cw">AI</div><div class="cp" style="color:'+(aPts>uPts?"var(--cy)":"var(--tx)")+'">'+aPts+' pts</div><div class="cd">'+aW+' winners / '+aS+' exact</div></div></div>';
   h+='<div class="tw"><table class="tbl cmp"><thead><tr><th rowspan="2">Match</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--bd)">Winner</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--bd)">Score</th></tr><tr><th class="cmp-th">Actual</th><th class="cmp-th" style="color:var(--g)">You</th><th class="cmp-th" style="color:var(--cy)">AI</th><th class="cmp-th">Actual</th><th class="cmp-th" style="color:var(--g)">You</th><th class="cmp-th" style="color:var(--cy)">AI</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   return h;}
