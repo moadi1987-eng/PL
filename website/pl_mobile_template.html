@@ -299,6 +299,23 @@ function fetchLive(){
   _fLiveJson();
 }
 
+function _rebuildGW(fix){
+  var maxMd=0;fix.forEach(function(f){if(f.e>maxMd)maxMd=f.e});
+  var gws=[];
+  for(var md=1;md<=maxMd;md++){
+    var mdf=fix.filter(function(f){return f.e===md});
+    var allFin=mdf.length>0&&mdf.every(function(f){return f.fin});
+    var isLive=mdf.some(function(f){return f.st&&!f.fin});
+    gws.push({id:md,fin:allFin,cur:isLive});
+  }
+  if(!gws.some(function(g){return g.cur})){
+    var lf=0;gws.forEach(function(g){if(g.fin&&g.id>lf)lf=g.id});
+    gws.forEach(function(g){g.cur=(g.id===lf+1)});
+    if(!gws.some(function(g){return g.cur}))gws.forEach(function(g){if(g.id===lf)g.cur=true});
+  }
+  return gws;
+}
+
 function _fLiveJson(){
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
@@ -313,38 +330,28 @@ function _fLiveJson(){
         var d=JSON.parse(x.responseText);
         if(d&&d.fix){
           var now=new Date();
-          var fix=[];
-          d.fix.forEach(function(f){
-            if(f.e==null)return;
-            var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
-            if(st&&!fin&&ko){
-              var el=Math.floor((now-new Date(ko))/60000);
-              if(mn===0&&el>0)mn=Math.max(0,el);
-              if(el>115){fin=true;mn=90}
-            }
-            fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
-          });
-          var tm=D.tm||{};var gw=D.gw||[];
-          if(gw.length){
-            var fxByGW={};fix.forEach(function(f){if(!fxByGW[f.e])fxByGW[f.e]=[];fxByGW[f.e].push(f)});
-            var hasLiveCur=false;
-            gw.forEach(function(g){
-              var gf=fxByGW[g.id]||[];
-              g.fin=gf.length>0&&gf.every(function(f){return f.fin});
-              var isLive=gf.some(function(f){return f.st&&!f.fin});
-              if(isLive){g.cur=true;hasLiveCur=true}
+
+          if(D.league==='pl'){
+            var fix=[];
+            d.fix.forEach(function(f){
+              if(f.e==null)return;
+              var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
+              if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
+              fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
             });
-            if(!hasLiveCur){
-              var lastFin=0;
-              gw.forEach(function(g){if(g.fin&&g.id>lastFin)lastFin=g.id});
-              gw.forEach(function(g){g.cur=(g.id===lastFin+1)||(lastFin===0&&g.id===1)});
-              if(!gw.some(function(g){return g.cur}))gw.forEach(function(g){if(g.id===lastFin)g.cur=true});
-            }
+            var plGW=_rebuildGW(fix);
+            _applyData('pl',D.tm||{},plGW,fix);_updDone(true);return;
           }
-          if(D.league==='pl'){_applyData('pl',tm,gw,fix);_updDone(true);return}
+
           if(D.league==='laliga'&&d.fix_ll){
-            var llFix=[];d.fix_ll.forEach(function(f){llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:f.fin||false,st:f.st||false,ko:f.ko||'',mn:f.mn||0})});
-            _applyData('laliga',D.tm,D.gw,llFix);_updDone(true);return;
+            var llFix=[];
+            d.fix_ll.forEach(function(f){
+              var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
+              if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
+              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
+            });
+            var llGW=_rebuildGW(llFix);
+            _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);return;
           }
         }
       }catch(e){}
