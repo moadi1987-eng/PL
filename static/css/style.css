@@ -292,6 +292,19 @@ body > * { position: relative; z-index: 1; }
     flex-shrink: 0;
 }
 .btn-gw-nav:hover { background: var(--pl-green); color: var(--pl-dark); }
+.btn-gw-today {
+    background: rgba(233,0,82,.15);
+    color: #e90052;
+    border: 1px solid rgba(233,0,82,.35);
+    border-radius: 20px;
+    padding: .25rem .6rem;
+    font-size: .72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: .25rem;
+}
+.btn-gw-today:hover { background: #e90052; color: #fff; border-color: #e90052; }
 
 /* ── Match Cards ── */
 .match-card {

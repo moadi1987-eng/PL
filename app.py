@@ -1,7 +1,8 @@
 import time
 import json
 import os
-from flask import Flask, render_template, jsonify, request, send_from_directory
+import logging
+from flask import Flask, render_template, jsonify, request
 import requests
 from functools import wraps
 
@@ -10,6 +11,13 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -44,6 +52,19 @@ LEAGUES = {
 _cache = {}
 CACHE_TTL = 300
 LIVE_CACHE_TTL = 3
+_CACHE_MAX_SIZE = 200
+
+
+def _evict_cache():
+    """Remove expired entries; if still too large, drop oldest half."""
+    now = time.time()
+    expired = [k for k, v in _cache.items() if now - v["ts"] > CACHE_TTL * 2]
+    for k in expired:
+        _cache.pop(k, None)
+    if len(_cache) > _CACHE_MAX_SIZE:
+        sorted_keys = sorted(_cache, key=lambda k: _cache[k]["ts"])
+        for k in sorted_keys[: len(sorted_keys) // 2]:
+            _cache.pop(k, None)
 
 
 def cached(key_fn, ttl=CACHE_TTL):
@@ -55,6 +76,8 @@ def cached(key_fn, ttl=CACHE_TTL):
             if key in _cache and now - _cache[key]["ts"] < ttl:
                 return _cache[key]["data"]
             result = fn(*args, **kwargs)
+            if len(_cache) >= _CACHE_MAX_SIZE:
+                _evict_cache()
             _cache[key] = {"data": result, "ts": now}
             return result
         return wrapper
@@ -91,8 +114,22 @@ def get_all_fixtures_live():
 
 def check_live_matches():
     """Check if any matches are currently in progress."""
+    from datetime import datetime, timezone
     all_fix = get_all_fixtures()
-    return any(f.get("started") and not f.get("finished") for f in all_fix)
+    now = datetime.now(timezone.utc)
+    for f in all_fix:
+        if not (f.get("started") and not f.get("finished") and not f.get("finished_provisional")):
+            continue
+        ko = f.get("kickoff_time", "")
+        if ko:
+            try:
+                kick = datetime.fromisoformat(ko.replace("Z", "+00:00"))
+                if (now - kick).total_seconds() / 60 > 115:
+                    continue  # treat as finished
+            except Exception:
+                pass
+        return True
+    return False
 
 
 def build_team_map():
@@ -2286,7 +2323,7 @@ def api_standings():
 def api_team_form(team_id):
     try:
         league = _get_league()
-        n = request.args.get("n", 5, type=int)
+        n = min(max(request.args.get("n", 5, type=int), 1), 50)
         before_gw = request.args.get("before_gw", None, type=int)
         stats = league_compute_stats(team_id, league, n, before_gw)
         team_map = league_get_team_map(league)
@@ -2300,7 +2337,7 @@ def api_team_form(team_id):
 def api_compare(team1, team2):
     try:
         league = _get_league()
-        n = request.args.get("n", 5, type=int)
+        n = min(max(request.args.get("n", 5, type=int), 1), 50)
         stats1 = league_compute_stats(team1, league, n)
         stats2 = league_compute_stats(team2, league, n)
         team_map = league_get_team_map(league)
@@ -2417,8 +2454,8 @@ def score_guesses_for_gw(gw):
             continue
 
         total += 1
-        actual_h = f["home_score"]
-        actual_a = f["away_score"]
+        actual_h = f["home_score"] or 0
+        actual_a = f["away_score"] or 0
 
         if actual_h > actual_a:
             actual_winner = "home"
@@ -2534,8 +2571,8 @@ def _trigger_background_push():
             if os.path.exists(script):
                 subprocess.run([sys.executable, script], cwd=os.path.dirname(__file__),
                                timeout=120, capture_output=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("[Background push] Failed: %s", e)
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -2829,25 +2866,37 @@ def api_guess_advice(gw):
 @app.route("/api/live-status")
 def api_live_status():
     try:
+        from datetime import datetime, timezone
         league = _get_league()
         all_fix = league_get_all_fixtures(league, live=True)
         team_map = league_get_team_map(league)
+        now = datetime.now(timezone.utc)
         live = []
         has_live = False
         for f in all_fix:
-            if f.get("started") and not f.get("finished"):
-                has_live = True
-                home = team_map.get(f["team_h"], {})
-                away = team_map.get(f["team_a"], {})
-                live.append({
-                    "id": f["id"],
-                    "event": f.get("event"),
-                    "home_team": home.get("short_name", "???"),
-                    "away_team": away.get("short_name", "???"),
-                    "home_score": f.get("team_h_score"),
-                    "away_score": f.get("team_a_score"),
-                    "minutes": f.get("minutes", 0),
-                })
+            if not (f.get("started") and not f.get("finished") and not f.get("finished_provisional")):
+                continue
+            # Apply elapsed-time heuristic: >115 min since kickoff → treat as finished
+            ko = f.get("kickoff_time", "")
+            if ko:
+                try:
+                    kick = datetime.fromisoformat(ko.replace("Z", "+00:00"))
+                    if (now - kick).total_seconds() / 60 > 115:
+                        continue
+                except Exception:
+                    pass
+            has_live = True
+            home = team_map.get(f["team_h"], {})
+            away = team_map.get(f["team_a"], {})
+            live.append({
+                "id": f["id"],
+                "event": f.get("event"),
+                "home_team": home.get("short_name", "???"),
+                "away_team": away.get("short_name", "???"),
+                "home_score": f.get("team_h_score"),
+                "away_score": f.get("team_a_score"),
+                "minutes": f.get("minutes", 0),
+            })
         return jsonify({"has_live": has_live, "live_matches": live})
     except Exception as e:
         return jsonify({"has_live": False, "error": str(e)})
@@ -3208,7 +3257,7 @@ def start_live_push_watcher():
 
 
 if __name__ == "__main__":
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     auto_update_mobile()
     start_ml_learning_watcher()
     start_live_push_watcher()

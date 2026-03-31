@@ -89,6 +89,15 @@ function renderGWPills() {
         container.appendChild(pill);
     });
     scrollToActiveGW();
+    const todayBtn = $("#gwToday");
+    if (todayBtn) {
+        if (STATE.selectedGW !== STATE.currentGW) {
+            todayBtn.classList.remove("d-none");
+            todayBtn.innerHTML = `<i class="bi bi-record-circle"></i> ${label}${STATE.currentGW}`;
+        } else {
+            todayBtn.classList.add("d-none");
+        }
+    }
 }
 
 function scrollToActiveGW() {
@@ -134,13 +143,17 @@ function initGWNav() {
         const max = STATE.gameweeks.length;
         if (STATE.selectedGW < max) selectGW(STATE.selectedGW + 1);
     });
+    $("#gwToday").addEventListener("click", () => {
+        selectGW(STATE.currentGW);
+    });
 }
 
 // ── Fixtures / Results ──
 
-let _liveRefreshTimer = null;
+let _fixturesReqId = 0;
 
 async function loadFixtures(gw, isLiveRefresh) {
+    const reqId = ++_fixturesReqId;
     const container = $("#fixturesContainer");
     if (!isLiveRefresh) {
         container.innerHTML = `<div class="col-12 text-center py-4">
@@ -150,17 +163,15 @@ async function loadFixtures(gw, isLiveRefresh) {
 
     try {
         const data = await api(`/api/fixtures/${gw}?live=1`);
+        // Discard stale responses from previous GW switches
+        if (reqId !== _fixturesReqId) return;
         if (!data.fixtures || data.fixtures.length === 0) {
             container.innerHTML = `<div class="col-12 text-center py-4 text-muted">No fixtures for this gameweek</div>`;
             return;
         }
         container.innerHTML = data.fixtures.map(renderMatchCard).join("");
-
-        clearInterval(_liveRefreshTimer);
-        if (data.has_live) {
-            _liveRefreshTimer = setInterval(() => loadFixtures(STATE.selectedGW, true), 3000);
-        }
     } catch (err) {
+        if (reqId !== _fixturesReqId) return;
         if (!isLiveRefresh) {
             container.innerHTML = `<div class="col-12 text-center py-4 text-danger">Error loading fixtures</div>`;
         }
@@ -1403,7 +1414,9 @@ async function checkLiveStatus() {
         } else {
             badge.classList.add("d-none");
         }
-    } catch (e) { /* silent */ }
+    } catch (e) {
+        console.warn("[Live] Status check failed:", e);
+    }
 }
 
 async function refreshAllLive() {
@@ -1412,17 +1425,18 @@ async function refreshAllLive() {
     const id = activeTab.id;
 
     try {
-        // Always refresh the cache
-        _cache["fixtures"] = null;
-
         if (id === "tab-results") {
             await loadFixtures(STATE.selectedGW, true);
             standingsLoaded = false;
             await loadStandings();
         } else if (id === "tab-guess") {
             await loadGuessCards();
+        } else if (id === "tab-compare") {
+            // Compare tab has no live data to refresh
         }
-    } catch(e) { /* silent */ }
+    } catch(e) {
+        console.warn("[Live] refreshAllLive error:", e);
+    }
 }
 
 // ── Guess Sub-tabs ──

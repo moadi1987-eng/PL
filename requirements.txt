@@ -1,4 +1,4 @@
-flask
-requests
-gunicorn
-python-dotenv
+flask>=2.3,<4.0
+requests>=2.31,<3.0
+gunicorn>=21.0,<23.0
+python-dotenv>=1.0,<2.0

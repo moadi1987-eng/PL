@@ -21,6 +21,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk)
 .gwbar{display:flex;align-items:center;gap:.3rem;padding:.35rem .5rem;background:var(--cd);border-bottom:1px solid var(--bd);position:sticky;top:37px;z-index:90}
 .gwbtn{width:30px;height:30px;border-radius:50%;border:none;background:rgba(255,255,255,.06);color:var(--tx);font-size:.8rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer}
 .gwbtn:active{background:var(--g);color:var(--p)}
+.gwbtn-today{border:1px solid rgba(233,0,82,.4);background:rgba(233,0,82,.12);color:#e90052;border-radius:16px;padding:.2rem .55rem;font-size:.6rem;font-weight:700;white-space:nowrap;flex-shrink:0;cursor:pointer}
+.gwbtn-today:active{background:#e90052;color:#fff}
 .gwscr{display:flex;gap:.25rem;overflow-x:auto;flex:1;scrollbar-width:none;-webkit-overflow-scrolling:touch}.gwscr::-webkit-scrollbar{display:none}
 .gp{border:none;background:rgba(255,255,255,.06);color:var(--tm);font-size:.65rem;font-weight:700;padding:.25rem .55rem;border-radius:20px;white-space:nowrap;cursor:pointer;flex-shrink:0}.gp.a{background:var(--g);color:var(--p)}.gp.cur{}
 .gp.nxt{border:2px solid gold}
@@ -163,7 +165,7 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 </head>
 <body>
 <div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
-<div class="gwbar"><button class="gwbtn" onclick="nGW(-1)">&#9664;</button><div class="gwscr" id="gws"></div><button class="gwbtn" onclick="nGW(1)">&#9654;</button></div>
+<div class="gwbar"><button class="gwbtn" onclick="nGW(-1)">&#9664;</button><div class="gwscr" id="gws"></div><button class="gwbtn" onclick="nGW(1)">&#9654;</button><button class="gwbtn-today" id="gwToday" onclick="goToCur()" title="Jump to current gameweek" style="display:none">&#9679;</button></div>
 <div class="tab a" id="t0"></div><div class="tab" id="t1"></div><div class="tab" id="t2"></div>
 <div class="rov" id="rmod" onclick="if(event.target===this)cReas()"><div class="rpop"><div class="rhead"><span id="rtitle"></span><button class="rclose" onclick="cReas()">&#10005;</button></div><div class="rbody" id="rbody"></div></div></div>
 <nav class="bnav">
@@ -506,8 +508,15 @@ function _fLL(){
       var state=st.state||'pre';var started=state==='in'||state==='post';var finished=!!st.completed;
       var hs=null,as2=null;
       if(started){hs=parseInt(hm.score,10)||0;as2=parseInt(aw.score,10)||0}
+      var mn=0;
+      if(started&&!finished){
+        var clk=(comp.status||{}).displayClock||'';
+        if(clk){try{mn=parseInt(clk.replace('+','').split(':')[0])||0}catch(e){}}
+        if(!mn)mn=((comp.status||{}).period||0)>=2?45:0;
+      }
+      if(finished)mn=90;
       fix.push({id:+(ev.id||0),e:Math.floor(idx/10)+1,h:+(hm.team.id),a:+(aw.team.id),
-        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:0});
+        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     var maxMd=0;fix.forEach(function(f){if(f.e>maxMd)maxMd=f.e});
@@ -593,9 +602,10 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
   reasons.push("Predicted: "+rh+"-"+ra+" (Poisson most likely score)");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
-function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"})}
+function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});var tb=$("gwToday");if(tb){if(D.cur&&D.sel!==D.cur){tb.textContent='\u25CF '+lbl+D.cur;tb.style.display="flex"}else{tb.style.display="none"}}}
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
+function goToCur(){if(D.cur)sGW(D.cur)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
@@ -608,8 +618,8 @@ function _calcMatch(ko,mn){
   var m=mn&&mn>0?mn:(el>0?Math.floor(el):0);
   if(m<=0)return{st:"LIVE",m:0,ht:false};
   if(m>=90||el>110)return{st:"90+",m:90,ht:false};
-  if(el>=47&&el<=65)return{st:"HT",m:45,ht:true};
-  if(m>45&&m<=48&&el<65)return{st:"45+",m:45,ht:false};
+  if(el>=47&&el<=62)return{st:"HT",m:45,ht:true};
+  if(m>45&&m<=48&&el<62)return{st:"45+",m:45,ht:false};
   return{st:null,m:m,ht:false};
 }
 
@@ -814,7 +824,9 @@ function setS(gw,mid){
   var hv=$("h"+mid).value,av=$("a"+mid).value;
   var a=gG();if(!a[gw])a[gw]={};if(!a[gw][mid])a[gw][mid]={};
   if(hv!==""&&av!==""){
-    var h2=+hv,v2=+av;a[gw][mid].hs=h2;a[gw][mid].as=v2;
+    var h2=Math.min(Math.max(Math.floor(+hv||0),0),20),v2=Math.min(Math.max(Math.floor(+av||0),0),20);
+    $("h"+mid).value=h2;$("a"+mid).value=v2;
+    a[gw][mid].hs=h2;a[gw][mid].as=v2;
     a[gw][mid].w=h2>v2?"home":h2===v2?"draw":"away";
     sG(a);
     var card=document.querySelector('[data-mid="'+mid+'"]');if(!card)return;

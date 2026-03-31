@@ -28,8 +28,12 @@ ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standing
 
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
-bs = requests.get(f"{FPL}/bootstrap-static/", headers=hdr, timeout=20).json()
-fx = requests.get(f"{FPL}/fixtures/", headers=hdr, timeout=20).json()
+try:
+    bs = requests.get(f"{FPL}/bootstrap-static/", headers=hdr, timeout=20).json()
+    fx = requests.get(f"{FPL}/fixtures/", headers=hdr, timeout=20).json()
+except Exception as e:
+    print(f"FPL API fetch failed: {e}")
+    raise SystemExit(1)
 
 teams = {}
 team_xg = {}
@@ -203,9 +207,9 @@ try:
         mn = 0
         if started:
             try: hs = int(home.get("score", "0"))
-            except: hs = 0
+            except (ValueError, TypeError): hs = 0
             try: as_score = int(away.get("score", "0"))
-            except: as_score = 0
+            except (ValueError, TypeError): as_score = 0
             detail = status.get("shortDetail", "")
             if detail:
                 mn_match = _re.search(r"(\d+)'", detail)
