@@ -234,136 +234,696 @@
   "32": {
     "guesses": [
       {
+        "away_score": 2,
+        "home_score": 1,
         "match_id": 311,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 4,
+        "match_id": 312,
         "winner": "home"
       },
       {
-        "match_id": 312,
-        "winner": "draw"
-      },
-      {
+        "away_score": 1,
+        "home_score": 1,
         "match_id": 313,
         "winner": "draw"
       },
       {
+        "away_score": 2,
+        "home_score": 2,
         "match_id": 314,
         "winner": "draw"
       },
       {
+        "away_score": 0,
+        "home_score": 0,
         "match_id": 315,
-        "winner": "away"
+        "winner": "draw"
       },
       {
+        "away_score": 2,
+        "home_score": 2,
         "match_id": 316,
-        "winner": "home"
+        "winner": "draw"
       },
       {
+        "away_score": 1,
+        "home_score": 2,
         "match_id": 317,
         "winner": "home"
       },
       {
+        "away_score": 0,
+        "home_score": 0,
         "match_id": 318,
         "winner": "draw"
       },
       {
+        "away_score": 0,
+        "home_score": 1,
         "match_id": 319,
         "winner": "home"
       },
       {
+        "away_score": 0,
+        "home_score": 2,
         "match_id": 320,
-        "winner": "draw"
+        "winner": "home"
       }
     ],
-    "saved_at": "2026-03-22 16:54:34"
+    "saved_at": "2026-03-23 18:51:22"
   },
   "33": {
     "guesses": [
       {
+        "away_score": 0,
+        "home_score": 2,
         "match_id": 321,
-        "winner": "draw"
+        "winner": "home"
       },
       {
+        "away_score": 1,
+        "home_score": 0,
         "match_id": 322,
         "winner": "away"
       },
       {
+        "away_score": 0,
+        "home_score": 2,
         "match_id": 323,
-        "winner": "draw"
+        "winner": "home"
       },
       {
+        "away_score": 2,
+        "home_score": 0,
         "match_id": 324,
-        "winner": "home"
+        "winner": "away"
       },
       {
+        "away_score": 1,
+        "home_score": 3,
         "match_id": 325,
-        "winner": "away"
-      },
-      {
-        "match_id": 326,
-        "winner": "draw"
-      },
-      {
-        "match_id": 327,
-        "winner": "draw"
-      },
-      {
-        "match_id": 328,
-        "winner": "draw"
-      },
-      {
-        "match_id": 329,
         "winner": "home"
       },
       {
+        "away_score": 0,
+        "home_score": 2,
+        "match_id": 326,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 2,
+        "match_id": 327,
+        "winner": "home"
+      },
+      {
+        "away_score": 0,
+        "home_score": 3,
+        "match_id": 328,
+        "winner": "home"
+      },
+      {
+        "away_score": 2,
+        "home_score": 2,
+        "match_id": 329,
+        "winner": "draw"
+      },
+      {
+        "away_score": 0,
+        "home_score": 1,
         "match_id": 330,
-        "winner": "away"
+        "winner": "home"
       }
     ],
-    "saved_at": "2026-03-22 16:54:34"
+    "saved_at": "2026-03-23 18:51:03"
   },
   "38": {
     "guesses": [
       {
-        "match_id": 371,
+        "away_score": 1,
+        "home_score": 3,
+        "match_id": 351,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 0,
+        "match_id": 352,
+        "winner": "away"
+      },
+      {
+        "away_score": 4,
+        "home_score": 1,
+        "match_id": 353,
+        "winner": "away"
+      },
+      {
+        "away_score": 0,
+        "home_score": 1,
+        "match_id": 354,
+        "winner": "home"
+      },
+      {
+        "away_score": 0,
+        "home_score": 2,
+        "match_id": 355,
+        "winner": "home"
+      },
+      {
+        "away_score": 3,
+        "home_score": 1,
+        "match_id": 356,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 1,
+        "match_id": 357,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 0,
+        "match_id": 358,
+        "winner": "away"
+      },
+      {
+        "away_score": 0,
+        "home_score": 2,
+        "match_id": 359,
+        "winner": "home"
+      },
+      {
+        "away_score": 2,
+        "home_score": 0,
+        "match_id": 360,
+        "winner": "away"
+      },
+      {
+        "away_score": 1,
+        "home_score": 0,
+        "match_id": 361,
+        "winner": "away"
+      },
+      {
+        "away_score": 4,
+        "home_score": 0,
+        "match_id": 362,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 1,
+        "match_id": 363,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 3,
+        "match_id": 364,
+        "winner": "home"
+      },
+      {
+        "away_score": 3,
+        "home_score": 1,
+        "match_id": 365,
+        "winner": "away"
+      },
+      {
+        "away_score": 1,
+        "home_score": 2,
+        "match_id": 366,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 1,
+        "match_id": 367,
         "winner": "draw"
       },
       {
+        "away_score": 2,
+        "home_score": 2,
+        "match_id": 368,
+        "winner": "draw"
+      },
+      {
+        "away_score": 3,
+        "home_score": 0,
+        "match_id": 369,
+        "winner": "away"
+      },
+      {
+        "away_score": 1,
+        "home_score": 2,
+        "match_id": 370,
+        "winner": "home"
+      },
+      {
+        "match_id": 371,
+        "home_score": 3,
+        "away_score": 4,
+        "winner": "away"
+      },
+      {
         "match_id": 372,
+        "home_score": 3,
+        "away_score": 3,
         "winner": "draw"
       },
       {
         "match_id": 373,
-        "winner": "away"
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
       },
       {
         "match_id": 374,
+        "home_score": 1,
+        "away_score": 1,
         "winner": "draw"
       },
       {
         "match_id": 375,
-        "winner": "away"
-      },
-      {
-        "match_id": 376,
+        "home_score": 1,
+        "away_score": 0,
         "winner": "home"
       },
       {
+        "match_id": 376,
+        "home_score": 0,
+        "away_score": 1,
+        "winner": "away"
+      },
+      {
         "match_id": 377,
+        "home_score": 1,
+        "away_score": 1,
         "winner": "draw"
       },
       {
         "match_id": 378,
+        "home_score": 4,
+        "away_score": 0,
         "winner": "home"
       },
       {
         "match_id": 379,
+        "home_score": 1,
+        "away_score": 2,
         "winner": "away"
       },
       {
         "match_id": 380,
+        "home_score": 0,
+        "away_score": 0,
         "winner": "draw"
       }
     ],
-    "saved_at": "2026-03-22 16:54:34"
+    "saved_at": "2026-03-23 18:50:19"
+  },
+  "35": {
+    "guesses": [
+      {
+        "away_score": 0,
+        "home_score": 0,
+        "match_id": 331,
+        "winner": "draw"
+      },
+      {
+        "away_score": 0,
+        "home_score": 1,
+        "match_id": 332,
+        "winner": "home"
+      },
+      {
+        "away_score": 2,
+        "home_score": 1,
+        "match_id": 333,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 2,
+        "match_id": 334,
+        "winner": "draw"
+      },
+      {
+        "away_score": 0,
+        "home_score": 0,
+        "match_id": 335,
+        "winner": "draw"
+      },
+      {
+        "away_score": 1,
+        "home_score": 1,
+        "match_id": 336,
+        "winner": "draw"
+      },
+      {
+        "away_score": 1,
+        "home_score": 0,
+        "match_id": 337,
+        "winner": "away"
+      },
+      {
+        "away_score": 4,
+        "home_score": 1,
+        "match_id": 338,
+        "winner": "away"
+      },
+      {
+        "away_score": 3,
+        "home_score": 1,
+        "match_id": 339,
+        "winner": "away"
+      },
+      {
+        "away_score": 2,
+        "home_score": 2,
+        "match_id": 340,
+        "winner": "draw"
+      },
+      {
+        "match_id": 341,
+        "home_score": 2,
+        "away_score": 4,
+        "winner": "away"
+      },
+      {
+        "match_id": 342,
+        "home_score": 4,
+        "away_score": 3,
+        "winner": "home"
+      },
+      {
+        "match_id": 343,
+        "home_score": 2,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 344,
+        "home_score": 0,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 345,
+        "home_score": 0,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 346,
+        "home_score": 4,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 347,
+        "home_score": 0,
+        "away_score": 1,
+        "winner": "away"
+      },
+      {
+        "match_id": 348,
+        "home_score": 3,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 349,
+        "home_score": 2,
+        "away_score": 3,
+        "winner": "away"
+      },
+      {
+        "match_id": 350,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      }
+    ],
+    "saved_at": "2026-03-23 18:50:42"
+  },
+  "37": {
+    "guesses": [
+      {
+        "match_id": 361,
+        "home_score": 1,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 362,
+        "home_score": 1,
+        "away_score": 4,
+        "winner": "away"
+      },
+      {
+        "match_id": 363,
+        "home_score": 0,
+        "away_score": 0,
+        "winner": "draw"
+      },
+      {
+        "match_id": 364,
+        "home_score": 3,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 365,
+        "home_score": 1,
+        "away_score": 4,
+        "winner": "away"
+      },
+      {
+        "match_id": 366,
+        "home_score": 4,
+        "away_score": 3,
+        "winner": "home"
+      },
+      {
+        "match_id": 367,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      },
+      {
+        "match_id": 368,
+        "home_score": 1,
+        "away_score": 0,
+        "winner": "home"
+      },
+      {
+        "match_id": 369,
+        "home_score": 1,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 370,
+        "home_score": 1,
+        "away_score": 0,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 3,
+        "match_id": 371,
+        "winner": "home"
+      },
+      {
+        "away_score": 0,
+        "home_score": 4,
+        "match_id": 372,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 3,
+        "match_id": 373,
+        "winner": "home"
+      },
+      {
+        "away_score": 2,
+        "home_score": 1,
+        "match_id": 374,
+        "winner": "away"
+      },
+      {
+        "away_score": 0,
+        "home_score": 2,
+        "match_id": 375,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 2,
+        "match_id": 376,
+        "winner": "home"
+      },
+      {
+        "away_score": 0,
+        "home_score": 4,
+        "match_id": 377,
+        "winner": "home"
+      },
+      {
+        "away_score": 1,
+        "home_score": 2,
+        "match_id": 378,
+        "winner": "home"
+      },
+      {
+        "away_score": 3,
+        "home_score": 3,
+        "match_id": 379,
+        "winner": "draw"
+      },
+      {
+        "away_score": 0,
+        "home_score": 1,
+        "match_id": 380,
+        "winner": "home"
+      }
+    ],
+    "saved_at": "2026-03-23 18:50:29"
+  },
+  "36": {
+    "guesses": [
+      {
+        "match_id": 351,
+        "home_score": 0,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 352,
+        "home_score": 2,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 353,
+        "home_score": 0,
+        "away_score": 0,
+        "winner": "draw"
+      },
+      {
+        "match_id": 354,
+        "home_score": 1,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 355,
+        "home_score": 1,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 356,
+        "home_score": 1,
+        "away_score": 0,
+        "winner": "home"
+      },
+      {
+        "match_id": 357,
+        "home_score": 2,
+        "away_score": 1,
+        "winner": "home"
+      },
+      {
+        "match_id": 358,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      },
+      {
+        "match_id": 359,
+        "home_score": 0,
+        "away_score": 1,
+        "winner": "away"
+      },
+      {
+        "match_id": 360,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      }
+    ],
+    "saved_at": "2026-03-23 18:50:38"
+  },
+  "34": {
+    "guesses": [
+      {
+        "match_id": 331,
+        "home_score": 1,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 332,
+        "home_score": 0,
+        "away_score": 4,
+        "winner": "away"
+      },
+      {
+        "match_id": 333,
+        "home_score": 2,
+        "away_score": 2,
+        "winner": "draw"
+      },
+      {
+        "match_id": 334,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      },
+      {
+        "match_id": 335,
+        "home_score": 0,
+        "away_score": 1,
+        "winner": "away"
+      },
+      {
+        "match_id": 336,
+        "home_score": 0,
+        "away_score": 1,
+        "winner": "away"
+      },
+      {
+        "match_id": 337,
+        "home_score": 3,
+        "away_score": 2,
+        "winner": "home"
+      },
+      {
+        "match_id": 338,
+        "home_score": 0,
+        "away_score": 2,
+        "winner": "away"
+      },
+      {
+        "match_id": 339,
+        "home_score": 1,
+        "away_score": 1,
+        "winner": "draw"
+      },
+      {
+        "match_id": 340,
+        "home_score": 1,
+        "away_score": 0,
+        "winner": "home"
+      }
+    ],
+    "saved_at": "2026-03-23 18:50:51"
   }
 }
