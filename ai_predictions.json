@@ -645,5 +645,393 @@
       }
     ],
     "created_at": "2026-03-21 17:46:01"
+  },
+  "34": {
+    "predictions": [
+      {
+        "match_id": 338,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 41.9,
+        "draw_pct": 25.6,
+        "away_win_pct": 32.5
+      },
+      {
+        "match_id": 335,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 47.3,
+        "draw_pct": 22.8,
+        "away_win_pct": 29.9
+      },
+      {
+        "match_id": 332,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 44.9,
+        "draw_pct": 30.1,
+        "away_win_pct": 25.0
+      },
+      {
+        "match_id": 336,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 41.5,
+        "draw_pct": 23.0,
+        "away_win_pct": 35.5
+      },
+      {
+        "match_id": 339,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 28.4,
+        "draw_pct": 24.9,
+        "away_win_pct": 46.7
+      },
+      {
+        "match_id": 340,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 47.3,
+        "draw_pct": 25.1,
+        "away_win_pct": 27.6
+      },
+      {
+        "match_id": 331,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 57.6,
+        "draw_pct": 19.8,
+        "away_win_pct": 22.6
+      },
+      {
+        "match_id": 334,
+        "winner": "away",
+        "home_score": 1,
+        "away_score": 2,
+        "home_win_pct": 19.8,
+        "draw_pct": 21.5,
+        "away_win_pct": 58.7
+      },
+      {
+        "match_id": 333,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 46.1,
+        "draw_pct": 22.4,
+        "away_win_pct": 31.5
+      },
+      {
+        "match_id": 337,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 47.8,
+        "draw_pct": 23.3,
+        "away_win_pct": 28.9
+      }
+    ],
+    "created_at": "2026-03-23 18:49:56",
+    "version": 1,
+    "model_updated": false
+  },
+  "35": {
+    "predictions": [
+      {
+        "match_id": 341,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 55.1,
+        "draw_pct": 20.8,
+        "away_win_pct": 24.1
+      },
+      {
+        "match_id": 342,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 51.9,
+        "draw_pct": 22.3,
+        "away_win_pct": 25.8
+      },
+      {
+        "match_id": 343,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 38.4,
+        "draw_pct": 27.5,
+        "away_win_pct": 34.1
+      },
+      {
+        "match_id": 344,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 53.5,
+        "draw_pct": 24.1,
+        "away_win_pct": 22.4
+      },
+      {
+        "match_id": 345,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 47.1,
+        "draw_pct": 23.9,
+        "away_win_pct": 29.0
+      },
+      {
+        "match_id": 346,
+        "winner": "away",
+        "home_score": 1,
+        "away_score": 2,
+        "home_win_pct": 34.3,
+        "draw_pct": 23.3,
+        "away_win_pct": 42.4
+      },
+      {
+        "match_id": 347,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 41.5,
+        "draw_pct": 27.4,
+        "away_win_pct": 31.1
+      },
+      {
+        "match_id": 348,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 51.0,
+        "draw_pct": 21.0,
+        "away_win_pct": 28.0
+      },
+      {
+        "match_id": 349,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 37.3,
+        "draw_pct": 23.5,
+        "away_win_pct": 39.2
+      },
+      {
+        "match_id": 350,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 36.2,
+        "draw_pct": 27.2,
+        "away_win_pct": 36.6
+      }
+    ],
+    "created_at": "2026-03-23 18:49:59",
+    "version": 1,
+    "model_updated": false
+  },
+  "36": {
+    "predictions": [
+      {
+        "match_id": 351,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 50.8,
+        "draw_pct": 24.9,
+        "away_win_pct": 24.3
+      },
+      {
+        "match_id": 352,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 31.5,
+        "draw_pct": 23.8,
+        "away_win_pct": 44.7
+      },
+      {
+        "match_id": 353,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 36.4,
+        "draw_pct": 23.5,
+        "away_win_pct": 40.1
+      },
+      {
+        "match_id": 354,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 39.5,
+        "draw_pct": 27.7,
+        "away_win_pct": 32.8
+      },
+      {
+        "match_id": 355,
+        "winner": "draw",
+        "home_score": 2,
+        "away_score": 2,
+        "home_win_pct": 40.5,
+        "draw_pct": 22.4,
+        "away_win_pct": 37.1
+      },
+      {
+        "match_id": 356,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 54.2,
+        "draw_pct": 22.2,
+        "away_win_pct": 23.6
+      },
+      {
+        "match_id": 357,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 36.9,
+        "draw_pct": 24.1,
+        "away_win_pct": 39.0
+      },
+      {
+        "match_id": 359,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 37.4,
+        "draw_pct": 26.5,
+        "away_win_pct": 36.1
+      },
+      {
+        "match_id": 358,
+        "winner": "away",
+        "home_score": 1,
+        "away_score": 2,
+        "home_win_pct": 30.4,
+        "draw_pct": 22.8,
+        "away_win_pct": 46.8
+      },
+      {
+        "match_id": 360,
+        "winner": "away",
+        "home_score": 1,
+        "away_score": 2,
+        "home_win_pct": 20.5,
+        "draw_pct": 22.2,
+        "away_win_pct": 57.3
+      }
+    ],
+    "created_at": "2026-03-23 18:50:00",
+    "version": 1,
+    "model_updated": false
+  },
+  "37": {
+    "predictions": [
+      {
+        "match_id": 361,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 68.5,
+        "draw_pct": 17.6,
+        "away_win_pct": 13.9
+      },
+      {
+        "match_id": 362,
+        "winner": "away",
+        "home_score": 1,
+        "away_score": 2,
+        "home_win_pct": 32.5,
+        "draw_pct": 23.8,
+        "away_win_pct": 43.7
+      },
+      {
+        "match_id": 363,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 30.0,
+        "draw_pct": 26.3,
+        "away_win_pct": 43.7
+      },
+      {
+        "match_id": 364,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 38.2,
+        "draw_pct": 24.7,
+        "away_win_pct": 37.1
+      },
+      {
+        "match_id": 365,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 59.7,
+        "draw_pct": 19.6,
+        "away_win_pct": 20.7
+      },
+      {
+        "match_id": 366,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 48.4,
+        "draw_pct": 24.1,
+        "away_win_pct": 27.5
+      },
+      {
+        "match_id": 367,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 27.9,
+        "draw_pct": 26.2,
+        "away_win_pct": 45.9
+      },
+      {
+        "match_id": 368,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 51.4,
+        "draw_pct": 22.8,
+        "away_win_pct": 25.8
+      },
+      {
+        "match_id": 369,
+        "winner": "home",
+        "home_score": 2,
+        "away_score": 1,
+        "home_win_pct": 48.7,
+        "draw_pct": 23.5,
+        "away_win_pct": 27.8
+      },
+      {
+        "match_id": 370,
+        "winner": "draw",
+        "home_score": 1,
+        "away_score": 1,
+        "home_win_pct": 31.0,
+        "draw_pct": 26.1,
+        "away_win_pct": 42.9
+      }
+    ],
+    "created_at": "2026-03-23 18:50:04",
+    "version": 1,
+    "model_updated": false
   }
 }

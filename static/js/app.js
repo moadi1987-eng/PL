@@ -119,9 +119,7 @@ function selectGW(gw) {
         loadGuessHistory();
         const activeSub = document.querySelector(".guess-subtab.active");
         const sub = activeSub ? activeSub.dataset.subtab : "fill";
-        if (sub === "predictions") {
-            loadGuessPredictions();
-        } else if (sub === "compare") {
+        if (sub === "compare") {
             loadGuessComparison();
             loadBestBetsScore();
         }
@@ -1436,13 +1434,9 @@ function initGuessSubtabs() {
             btn.classList.add("active");
             const sub = btn.dataset.subtab;
             sessionStorage.setItem("plSub", sub);
-            $("#guessPredictionsSection").classList.add("d-none");
             $("#guessFillSection").classList.add("d-none");
             $("#guessCompareSection").classList.add("d-none");
-            if (sub === "predictions") {
-                $("#guessPredictionsSection").classList.remove("d-none");
-                loadGuessPredictions();
-            } else if (sub === "fill") {
+            if (sub === "fill") {
                 $("#guessFillSection").classList.remove("d-none");
             } else {
                 $("#guessCompareSection").classList.remove("d-none");
