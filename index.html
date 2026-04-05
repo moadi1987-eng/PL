@@ -363,7 +363,7 @@ function _fLiveJson(){
             d.fix_ll.forEach(function(f){
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
               if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
-              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
+              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
             var llGW=_rebuildGW(llFix);
             _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);return;
@@ -529,7 +529,7 @@ function _fLL(){
       }
       if(finished)mn=90;
       fix.push({id:+(ev.id||0),e:Math.floor(idx/10)+1,h:+(hm.team.id),a:+(aw.team.id),
-        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn});
+        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||''});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     var maxMd=0;fix.forEach(function(f){if(f.e>maxMd)maxMd=f.e});
@@ -625,21 +625,25 @@ function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(functio
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 var _tickBase={},_tickTmr=null;
 
-function _calcMatch(ko,mn){
+function _calcMatch(ko,mn,sx){
+  if(sx==='STATUS_HALFTIME'||sx==='STATUS_END_PERIOD')return{st:"HT",m:45,ht:true};
+  if(sx==='STATUS_POSTPONED'||sx==='STATUS_CANCELED')return{st:"PPD",m:0,ht:false};
+  if(sx==='STATUS_DELAYED')return{st:"DEL",m:0,ht:false};
+  if(sx==='STATUS_SUSPENDED')return{st:"SUSP",m:0,ht:false};
   var el=0;
   if(ko){try{el=(Date.now()-new Date(ko).getTime())/60000}catch(e){}}
   var m=mn&&mn>0?mn:(el>0?Math.floor(el):0);
   if(m<=0)return{st:"LIVE",m:0,ht:false};
   if(m>=90||el>110)return{st:"90+",m:90,ht:false};
-  if(el>=47&&el<=62)return{st:"HT",m:45,ht:true};
+  if(el>=50&&el<=62)return{st:"HT",m:45,ht:true};
   if(m>45&&m<=48&&el<62)return{st:"45+",m:45,ht:false};
   return{st:null,m:m,ht:false};
 }
 
-function liveMin(ko,mn){var c=_calcMatch(ko,mn);return c.st||(c.m+"'")}
+function liveMin(ko,mn,sx){var c=_calcMatch(ko,mn,sx);return c.st||(c.m+"'")}
 
-function setTick(mid,ko,mn){
-  var c=_calcMatch(ko,mn);
+function setTick(mid,ko,mn,sx){
+  var c=_calcMatch(ko,mn,sx);
   _tickBase[mid]={ko:ko,mn:mn,baseM:c.m,ts:Date.now(),ht:c.ht,fixed:c.st};
 }
 
@@ -690,8 +694,8 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
     var isLive=m.st&&!m.fin;
-    if(isLive)setTick(m.id,m.ko,m.mn);
-    var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
+    if(isLive)setTick(m.id,m.ko,m.mn,m.sx||'');
+    var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
   h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';

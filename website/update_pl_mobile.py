@@ -229,6 +229,7 @@ try:
             "h": hid, "a": aid,
             "hs": hs, "as": as_score,
             "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
+            "sx": status.get("name", ""),
         })
 
     # Real matchday = based on team games played
