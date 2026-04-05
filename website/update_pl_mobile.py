@@ -332,6 +332,34 @@ html = html.replace("/*__GUESSES_LL__*/", "var EMBEDDED_GUESSES_LL=" + ll_guesse
 html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if server_url else "")
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
 
+# ── ML Learning Engine ────────────────────────────────────────────────────
+try:
+    import sys as _sys_ml; _sys_ml.path.insert(0, HERE)
+    from ml_engine import run_pl_learning
+
+    # Compute standings (for position factor in weight updates)
+    _pts = {}
+    for _f in fx:
+        if not _f.get("finished"): continue
+        _hs, _as = _f.get("team_h_score"), _f.get("team_a_score")
+        if _hs is None or _as is None: continue
+        for _tid, _sf, _sa in [(_f["team_h"], _hs, _as), (_f["team_a"], _as, _hs)]:
+            if _tid not in _pts: _pts[_tid] = {"pts": 0, "gd": 0}
+            _pts[_tid]["pts"] += 3 if _sf > _sa else (1 if _sf == _sa else 0)
+            _pts[_tid]["gd"]  += _sf - _sa
+    _pos = {tid: i + 1 for i, (tid, _) in enumerate(
+        sorted(_pts.items(), key=lambda x: (-x[1]["pts"], -x[1]["gd"]))
+    )}
+    teams_ml = {tid: {**t, "position": _pos.get(tid, 10)} for tid, t in teams.items()}
+    learning_history = run_pl_learning(fx, teams_ml)
+    print("ML learning complete")
+except Exception as _ml_err:
+    learning_history = {"pl": {"gw_results": []}, "laliga": {"gw_results": []}}
+    print(f"ML learning skipped: {_ml_err}")
+
+_lh_json = json.dumps(learning_history, separators=(",", ":"))
+html = html.replace("/*__LEARNING_HISTORY__*/", "var LEARNING_HISTORY=" + _lh_json + ";")
+
 weights_file = os.path.join(ROOT, "ai_weights.json")
 if os.path.exists(weights_file):
     with open(weights_file, "r") as wf:
@@ -377,6 +405,21 @@ if GITHUB_TOKEN:
     resp_live = requests.put(live_url, headers=headers, json=live_payload, timeout=15)
     if resp_live.status_code in (200, 201):
         print("live.json uploaded!")
+
+    # Upload learning_history.json + ai_weights.json (ML state)
+    for _ml_file in ("learning_history.json", "ai_weights.json"):
+        _ml_path = os.path.join(ROOT, _ml_file)
+        if not os.path.exists(_ml_path): continue
+        try:
+            _ml_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{_ml_file}"
+            _ml_existing = requests.get(_ml_url, headers=headers, timeout=10)
+            _ml_sha = _ml_existing.json().get("sha", "") if _ml_existing.status_code == 200 else ""
+            _ml_b64 = base64.b64encode(open(_ml_path, "rb").read()).decode()
+            _ml_payload = {"message": f"Update {_ml_file}", "content": _ml_b64}
+            if _ml_sha: _ml_payload["sha"] = _ml_sha
+            _r = requests.put(_ml_url, headers=headers, json=_ml_payload, timeout=15)
+            if _r.status_code in (200, 201): print(f"{_ml_file} uploaded!")
+        except Exception as _e: print(f"{_ml_file} upload failed: {_e}")
 
     # Upload index.html (full page rebuild)
     print("Uploading index.html...")
