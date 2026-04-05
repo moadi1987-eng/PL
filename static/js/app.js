@@ -1398,10 +1398,11 @@ function closeReasoning() {
 // ── Live Polling ──
 
 let _liveInterval = null;
+let _lastLiveKey = null;
 
 function startLivePolling() {
     checkLiveStatus();
-    _liveInterval = setInterval(checkLiveStatus, 3000);
+    _liveInterval = setInterval(checkLiveStatus, 15000);
 }
 
 async function checkLiveStatus() {
@@ -1410,9 +1411,14 @@ async function checkLiveStatus() {
         const badge = $("#liveBadge");
         if (data.has_live) {
             badge.classList.remove("d-none");
-            refreshAllLive();
+            const key = JSON.stringify(data.live_matches);
+            if (key !== _lastLiveKey) {
+                _lastLiveKey = key;
+                refreshAllLive();
+            }
         } else {
             badge.classList.add("d-none");
+            _lastLiveKey = null;
         }
     } catch (e) {
         console.warn("[Live] Status check failed:", e);
