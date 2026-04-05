@@ -232,31 +232,22 @@ try:
             "sx": status.get("name", ""),
         })
 
-    # Real matchday = based on team games played
-    min_played = min(team_finished.values()) if team_finished else 0
-    current_md = min_played + 1
-
-    # Split into finished and unfinished
-    finished_raw = [f for f in ll_raw if f["fin"]]
-    upcoming_raw = [f for f in ll_raw if not f["fin"]]
-
-    # Assign matchday for finished: count each team's game number
-    team_game_num = {}
+    # Assign matchdays by sorting all matches by date → idx // 10 + 1
+    # This guarantees exactly 10 matches per matchday (matches played order)
+    ll_raw.sort(key=lambda x: x.get("ko", ""))
     ll_fixtures = []
-    for f in finished_raw:
-        hid, aid = f["h"], f["a"]
-        team_game_num[hid] = team_game_num.get(hid, 0) + 1
-        team_game_num[aid] = team_game_num.get(aid, 0) + 1
-        f["e"] = max(team_game_num[hid], team_game_num[aid])
+    for i, f in enumerate(ll_raw):
+        f["e"] = i // 10 + 1
         ll_fixtures.append(f)
 
-    # Assign matchday for upcoming: every 10 matches = 1 matchday
-    upcoming_raw.sort(key=lambda x: x.get("ko", ""))
-    for i, f in enumerate(upcoming_raw):
-        f["e"] = current_md + (i // 10)
-        ll_fixtures.append(f)
-
-    print(f"La Liga: {len(finished_raw)} finished (MD1-{min_played}), {len(upcoming_raw)} upcoming (MD{current_md}+)")
+    n_fin = sum(1 for f in ll_fixtures if f["fin"])
+    n_up  = len(ll_fixtures) - n_fin
+    cur_md = ll_fixtures[-1]["e"] if ll_fixtures else 1
+    # Find current matchday (first with live or first unfinished)
+    for f in ll_fixtures:
+        if f["st"] and not f["fin"]:
+            cur_md = f["e"]; break
+    print(f"La Liga: {n_fin} finished, {n_up} upcoming, current MD~{cur_md}")
 
     max_md = max((f["e"] for f in ll_fixtures), default=38)
     ll_gws = []

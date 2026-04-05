@@ -525,7 +525,7 @@ function _fLL(){
       });
     });
     var fix=[];
-    evts.forEach(function(ev,idx){
+    evts.forEach(function(ev){
       var comps=ev.competitions||[];if(!comps.length)return;
       var comp=comps[0];var cpts=comp.competitors||[];if(cpts.length!==2)return;
       var hm=null,aw=null;
@@ -542,7 +542,8 @@ function _fLL(){
         if(!mn)mn=((comp.status||{}).period||0)>=2?45:0;
       }
       if(finished)mn=90;
-      fix.push({id:+(ev.id||0),e:Math.floor(idx/10)+1,h:+(hm.team.id),a:+(aw.team.id),
+      // Use fix.length as index (not evts index) so skipped events don't shift MDs
+      fix.push({id:+(ev.id||0),e:Math.floor(fix.length/10)+1,h:+(hm.team.id),a:+(aw.team.id),
         hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||''});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
