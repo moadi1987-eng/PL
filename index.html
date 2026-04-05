@@ -343,6 +343,7 @@ function _fLiveJson(){
       try{
         var d=JSON.parse(x.responseText);
         if(d&&d.fix){
+          if(d.ts&&(Date.now()-new Date(d.ts).getTime())>180000){if(D.league==='pl')_fPL();else _fLL();return;}
           var now=new Date();
 
           if(D.league==='pl'){
