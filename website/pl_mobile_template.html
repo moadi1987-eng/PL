@@ -8,6 +8,7 @@
 <meta name="theme-color" content="#37003c">
 <title>PL Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root{--p:#37003c;--pl:#590060;--g:#00ff87;--pk:#e90052;--cy:#04f5ff;--dk:#1a0a1f;--cd:#2a1230;--ch:#3a1a42;--bd:rgba(255,255,255,.08);--tx:#f0eaf2;--tm:#a89aad;--r:12px;--rs:8px}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -166,12 +167,13 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 <body>
 <div class="topbar"><span class="brand" id="mbrand">PL Dashboard</span><div class="ltog" id="ltog"><button class="lb a" data-l="pl" onclick="swL('pl')">PL</button><button class="lb" data-l="laliga" onclick="swL('laliga')">LL</button></div><span class="upd" id="upd" onclick="fetchLive()" title="Tap to refresh"></span></div>
 <div class="gwbar"><button class="gwbtn" onclick="nGW(-1)">&#9664;</button><div class="gwscr" id="gws"></div><button class="gwbtn" onclick="nGW(1)">&#9654;</button><button class="gwbtn-today" id="gwToday" onclick="goToCur()" title="Jump to current gameweek" style="display:none">&#9679;</button></div>
-<div class="tab a" id="t0"></div><div class="tab" id="t1"></div><div class="tab" id="t2"></div>
+<div class="tab a" id="t0"></div><div class="tab" id="t1"></div><div class="tab" id="t2"></div><div class="tab" id="t3"></div>
 <div class="rov" id="rmod" onclick="if(event.target===this)cReas()"><div class="rpop"><div class="rhead"><span id="rtitle"></span><button class="rclose" onclick="cReas()">&#10005;</button></div><div class="rbody" id="rbody"></div></div></div>
 <nav class="bnav">
 <button class="nb a" onclick="sw(0)" id="n0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Results</button>
 <button class="nb" onclick="sw(1)" id="n1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>Guess</button>
 <button class="nb" onclick="sw(2)" id="n2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>Compare</button>
+<button class="nb" onclick="sw(3)" id="n3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>AI</button>
 </nav>
 <script>
 /*__DATA__*/
@@ -181,8 +183,9 @@ body.ll .htot .hl,.htot .hp{color:#ff6b35}
 /*__SERVER__*/
 /*__WEIGHTS__*/
 /*__BUILD_TIME__*/
+/*__LEARNING_HISTORY__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
-var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,cn:5,league:"pl",gwl:"GW"};
+var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,ct3:null,ct4:null,cn:5,league:"pl",gwl:"GW"};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]}};
 function $(i){return document.getElementById(i)}
 function T(id){return D.tm[id]||{s:"?",b:"",n:"?"}}
@@ -195,7 +198,7 @@ function swL(lg){
   $("mbrand").textContent=lg==="laliga"?"La Liga Dashboard":"PL Dashboard";
   var ld=LDATA[lg];
   if(ld&&ld.tm&&Object.keys(ld.tm).length){D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;_gMerged=false;initAfterData();render();fetchLive()}
-  else{var msg='<div class="emp">Fetching live '+lg+' data...</div>';for(var ti=0;ti<3;ti++)$("t"+ti).innerHTML=msg;fetchLive()}
+  else{var msg='<div class="emp">Fetching live '+lg+' data...</div>';for(var ti=0;ti<4;ti++)$("t"+ti).innerHTML=msg;fetchLive()}
 }
 function initAfterData(){
   var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
@@ -228,7 +231,7 @@ function init(){
   var sSub=sessionStorage.getItem("plSub")!=null?parseInt(sessionStorage.getItem("plSub")):1;
   D.tab=sTab;D.sub=sSub;
   bSt();rGW();
-  for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===D.tab?" a":"");$("n"+j).className="nb"+(j===D.tab?" a":"")}
+  for(var j=0;j<4;j++){$("t"+j).className="tab"+(j===D.tab?" a":"");$("n"+j).className="nb"+(j===D.tab?" a":"")}
   render();
   if(typeof EMBEDDED_BUILD_TIME!=="undefined"){
     var bt=new Date(EMBEDDED_BUILD_TIME);_lastOk=bt.getTime();
@@ -340,7 +343,7 @@ function _fLiveJson(){
               if(f.e==null)return;
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
               if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
-              fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
+              fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
             var plGW=_rebuildGW(fix);
             _applyData('pl',D.tm||{},plGW,fix);_updDone(true);return;
@@ -351,7 +354,7 @@ function _fLiveJson(){
             d.fix_ll.forEach(function(f){
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
               if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
-              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn});
+              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
             var llGW=_rebuildGW(llFix);
             _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);return;
@@ -453,7 +456,7 @@ function _fPL(){
         if(el>115){fin=true;mn=90}
       }
       fix.push({id:f.id,e:f.event,h:f.team_h,a:f.team_a,
-        hs:f.team_h_score,as:f.team_a_score,fin:fin,st:st,ko:ko,mn:mn});
+        hs:f.team_h_score,as:f.team_a_score,fin:fin,st:st,ko:ko,mn:mn,sx:''});
     });
 
     if(gw.length){
@@ -517,7 +520,7 @@ function _fLL(){
       }
       if(finished)mn=90;
       fix.push({id:+(ev.id||0),e:Math.floor(idx/10)+1,h:+(hm.team.id),a:+(aw.team.id),
-        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn});
+        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||''});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     var maxMd=0;fix.forEach(function(f){if(f.e>maxMd)maxMd=f.e});
@@ -607,27 +610,41 @@ function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
 function goToCur(){if(D.cur)sGW(D.cur)}
-function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<3;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
-function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else rCmp()}
+function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<4;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
+function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 var _tickBase={},_tickTmr=null;
 
-function _calcMatch(ko,mn){
+function _calcMatch(ko,mn,sx){
+  if(sx==='STATUS_HALFTIME'||sx==='STATUS_END_PERIOD')return{st:"HT",m:45,ht:true};
+  if(sx==='STATUS_POSTPONED'||sx==='STATUS_CANCELED')return{st:"PPD",m:0,ht:false};
+  if(sx==='STATUS_DELAYED')return{st:"DEL",m:0,ht:false};
+  if(sx==='STATUS_SUSPENDED')return{st:"SUSP",m:0,ht:false};
   var el=0;
   if(ko){try{el=(Date.now()-new Date(ko).getTime())/60000}catch(e){}}
   var m=mn&&mn>0?mn:(el>0?Math.floor(el):0);
   if(m<=0)return{st:"LIVE",m:0,ht:false};
   if(m>=90||el>110)return{st:"90+",m:90,ht:false};
-  if(el>=47&&el<=62)return{st:"HT",m:45,ht:true};
+  if(el>=50&&el<=62)return{st:"HT",m:45,ht:true};
   if(m>45&&m<=48&&el<62)return{st:"45+",m:45,ht:false};
   return{st:null,m:m,ht:false};
 }
 
-function liveMin(ko,mn){var c=_calcMatch(ko,mn);return c.st||(c.m+"'")}
+function liveMin(ko,mn,sx){var c=_calcMatch(ko,mn,sx);return c.st||(c.m+"'")}
 
-function setTick(mid,ko,mn){
-  var c=_calcMatch(ko,mn);
+function setTick(mid,ko,mn,sx){
+  var c=_calcMatch(ko,mn,sx);
+  var ex=_tickBase[mid];
+  // If already counting for this match and not transitioning to a fixed state,
+  // don't reset ts — just sync if the API reports a higher minute
+  if(ex&&!c.st&&!ex.fixed){
+    var secSince=Math.floor((Date.now()-ex.ts)/1000);
+    var calcMin=Math.floor((ex.baseM*60+secSince)/60);
+    if(mn>calcMin+1){ex.baseM=mn;ex.ts=Date.now()}
+    ex.ht=c.ht;
+    return;
+  }
   _tickBase[mid]={ko:ko,mn:mn,baseM:c.m,ts:Date.now(),ht:c.ht,fixed:c.st};
 }
 
@@ -678,8 +695,8 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
     var isLive=m.st&&!m.fin;
-    if(isLive)setTick(m.id,m.ko,m.mn);
-    var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
+    if(isLive)setTick(m.id,m.ko,m.mn,m.sx||'');
+    var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
   h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
@@ -700,7 +717,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
   pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:"Draw",away:am.s};
     var li="";if(m.fin)li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--g);font-weight:700">FT</span> <b>'+(m.hs!=null?m.hs:"-")+' - '+(m.as!=null?m.as:"-")+'</b></div>';
-    else if(m.st){setTick(m.id,m.ko,m.mn);li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span></span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st){setTick(m.id,m.ko,m.mn,m.sx||'');li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span></span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     h+='<div class="pc'+(rk?" tb":"")+'">'+(rk?'<span class="tbg">#'+rk+' Best Bet</span>':"")+
       '<div class="mr" style="margin-bottom:.2rem"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+li+
@@ -751,7 +768,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&g.w){var aw=m.hs>m.as?"home":m.hs===m.as?"draw":"away",ex=g.hs===m.hs&&g.as===m.as;cls=ex?"rex":g.w===aw?"rok":"rbad";bdg=ex?'<span class="rb re">★</span>':g.w===aw?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b></div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
-    if(m.st&&!m.fin){setTick(m.id,m.ko,m.mn);act='<div class="act"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span>: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    if(m.st&&!m.fin){setTick(m.id,m.ko,m.mn,m.sx||'');act='<div class="act"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span>: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
@@ -784,7 +801,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
     var actW=aw?lb[aw]:"–",actS=ah!=null?ah+"-"+aa:"–";
     var uWS=uw?lb[uw]:"–",uSS=g.hs!=null?g.hs+"-"+g.as:"–";
     var aWS=lb[aiW],aSS=p.rh+"-"+p.ra;
-    var live=m.st&&!m.fin;if(live)setTick(m.id,m.ko,m.mn);var lm4=live?'<span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn)+'</span>':"";
+    var live=m.st&&!m.fin;if(live)setTick(m.id,m.ko,m.mn,m.sx||'');var lm4=live?'<span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span>':"";
     function wCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ok">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     function sCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ex">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     var actWd=live?'<span style="color:var(--pk)">'+( lm4||"LIVE")+'</span> '+actW:actW;
@@ -862,6 +879,95 @@ function rCmp(){var c=$("t2"),h='<div class="sec">Team Comparison</div><div clas
   }else if(D.ct1||D.ct2){h+='<div class="emp">Pick one more team</div>'}
   c.innerHTML=h;}
 function pickT(id){if(D.ct1===id){D.ct1=null}else if(D.ct2===id){D.ct2=null}else if(!D.ct1){D.ct1=id}else if(!D.ct2){D.ct2=id}else{D.ct2=id}rCmp()}
+
+/* ══ AI LEARNING TAB ══ */
+var _aiChartAcc=null,_aiChartW=null;
+function rAI(){
+  var c=$("t3");
+  var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]}};
+  var pl=lh.pl||{gw_results:[]};
+  var ll=lh.laliga||{gw_results:[]};
+  var plR=pl.gw_results||[];
+  var llR=ll.gw_results||[];
+  var plAcc=pl.overall_accuracy||0;
+  var llAcc=ll.overall_accuracy||0;
+  var plTot=pl.total_evaluated||0;
+  var llTot=ll.total_evaluated||0;
+  var wts=pl.current_weights||{};
+
+  // Trend: compare last 3 GWs vs previous 3
+  function trend(rows){
+    if(rows.length<4)return null;
+    var last=rows.slice(-3),prev=rows.slice(-6,-3);
+    if(!prev.length)return null;
+    var la=last.reduce(function(s,r){return s+r.accuracy_pct},0)/last.length;
+    var pa=prev.reduce(function(s,r){return s+r.accuracy_pct},0)/prev.length;
+    return la-pa;
+  }
+  var plTrend=trend(plR),llTrend=trend(llR);
+  function trendHtml(t){
+    if(t===null)return'<span style="color:var(--tm)">–</span>';
+    var s=t>=0?'+':'';
+    return'<span style="color:'+(t>=0?'var(--g)':'var(--pk)')+'">'+s+t.toFixed(1)+'%</span>';
+  }
+
+  var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
+  // Stat cards
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.6rem">';
+  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;text-align:center"><div style="font-size:.55rem;color:var(--tm);margin-bottom:.15rem">PL Accuracy</div><div style="font-size:1.2rem;font-weight:800;color:var(--g)">'+plAcc+'%</div><div style="font-size:.5rem;color:var(--tm)">'+plTot+' matches '+trendHtml(plTrend)+'</div></div>';
+  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;text-align:center"><div style="font-size:.55rem;color:var(--tm);margin-bottom:.15rem">La Liga Accuracy</div><div style="font-size:1.2rem;font-weight:800;color:#ff6b35">'+llAcc+'%</div><div style="font-size:.5rem;color:var(--tm)">'+llTot+' matches '+trendHtml(llTrend)+'</div></div>';
+  h+='</div>';
+
+  // Charts
+  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:.4rem"><div style="font-size:.6rem;color:var(--tm);margin-bottom:.3rem;font-weight:600">Accuracy per Gameweek</div><canvas id="aiAccChart" height="140"></canvas></div>';
+  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:.4rem"><div style="font-size:.6rem;color:var(--tm);margin-bottom:.3rem;font-weight:600">Factor Weights</div><canvas id="aiWtChart" height="160"></canvas></div>';
+
+  // GW history table
+  if(plR.length||llR.length){
+    h+='<div class="sec" style="margin-bottom:.3rem">GW History</div>';
+    h+='<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>GW</th><th>League</th><th>Correct</th><th>Total</th><th>Acc%</th></tr></thead><tbody>';
+    var rows=[];
+    plR.forEach(function(r){rows.push({gw:r.gw,lg:'PL',cw:r.correct_winner,tot:r.total,acc:r.accuracy_pct})});
+    llR.forEach(function(r){rows.push({gw:r.gw,lg:'LL',cw:r.correct_winner,tot:r.total,acc:r.accuracy_pct})});
+    rows.sort(function(a,b){return b.gw-a.gw||a.lg.localeCompare(b.lg)});
+    rows.forEach(function(r){
+      var col=r.acc>=60?'var(--g)':r.acc>=45?'var(--cy)':'var(--pk)';
+      h+='<tr><td>'+r.gw+'</td><td>'+r.lg+'</td><td>'+r.cw+'</td><td>'+r.tot+'</td><td style="color:'+col+';font-weight:700">'+r.acc+'%</td></tr>';
+    });
+    h+='</tbody></table></div>';
+  } else {
+    h+='<div class="emp" style="margin-top:.5rem">No evaluated gameweeks yet. Data builds up after each completed GW.</div>';
+  }
+
+  c.innerHTML=h;
+
+  // Destroy old charts
+  if(_aiChartAcc){_aiChartAcc.destroy();_aiChartAcc=null}
+  if(_aiChartW){_aiChartW.destroy();_aiChartW=null}
+
+  // Accuracy line chart
+  var accEl=document.getElementById('aiAccChart');
+  if(accEl&&(plR.length||llR.length)){
+    var allGWs=[];
+    plR.forEach(function(r){if(allGWs.indexOf(r.gw)<0)allGWs.push(r.gw)});
+    llR.forEach(function(r){if(allGWs.indexOf(r.gw)<0)allGWs.push(r.gw)});
+    allGWs.sort(function(a,b){return a-b});
+    var plMap={},llMap={};
+    plR.forEach(function(r){plMap[r.gw]=r.accuracy_pct});
+    llR.forEach(function(r){llMap[r.gw]=r.accuracy_pct});
+    var lbl=D.gwl||'GW';
+    _aiChartAcc=new Chart(accEl,{type:'line',data:{labels:allGWs.map(function(g){return lbl+g}),datasets:[{label:'PL',data:allGWs.map(function(g){return plMap[g]!=null?plMap[g]:null}),borderColor:'#00ff87',backgroundColor:'rgba(0,255,135,.1)',tension:.3,spanGaps:true,pointRadius:3},{label:'La Liga',data:allGWs.map(function(g){return llMap[g]!=null?llMap[g]:null}),borderColor:'#ff6b35',backgroundColor:'rgba(255,107,53,.1)',tension:.3,spanGaps:true,pointRadius:3}]},options:{responsive:true,plugins:{legend:{labels:{color:'#a89aad',font:{size:10}}}},scales:{x:{ticks:{color:'#a89aad',font:{size:9}},grid:{color:'rgba(255,255,255,.05)'}},y:{min:0,max:100,ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.05)'}}}}});
+  }
+
+  // Weights bar chart
+  var wtEl=document.getElementById('aiWtChart');
+  if(wtEl&&Object.keys(wts).length){
+    var entries=Object.entries(wts).sort(function(a,b){return b[1]-a[1]});
+    var maxW=entries.length?entries[0][1]:0.25;
+    var colors=entries.map(function(e){var pct=e[1]/maxW;return pct>0.7?'#00ff87':pct>0.4?'#04f5ff':'#a89aad'});
+    _aiChartW=new Chart(wtEl,{type:'bar',data:{labels:entries.map(function(e){return e[0]}),datasets:[{data:entries.map(function(e){return Math.round(e[1]*100)}),backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.05)'}},y:{ticks:{color:'#a89aad',font:{size:9}},grid:{display:false}}}}});
+  }
+}
 
 init();
 </script>
