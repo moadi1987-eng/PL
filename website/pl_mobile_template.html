@@ -334,28 +334,51 @@ function _fLiveJson(){
       try{
         var d=JSON.parse(x.responseText);
         if(d&&d.fix){
-          if(d.ts&&(Date.now()-new Date(d.ts).getTime())>180000){if(D.league==='pl')_fPL();else _fLL();return;}
           var now=new Date();
+          var ageMs=d.ts?(Date.now()-new Date(d.ts).getTime()):0;
+          // Only fall back to direct API when data is stale AND there are currently live matches
+          // (if no live matches, slightly stale live.json still has correct final scores)
+          var hasLiveInJson=(d.fix||[]).some(function(f){return f.st&&!f.fin});
+          if(ageMs>180000&&hasLiveInJson){if(D.league==='pl')_fPL();else _fLL();return;}
 
           if(D.league==='pl'){
             var fix=[];
+            var needFresh=false;
             d.fix.forEach(function(f){
               if(f.e==null)return;
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
-              if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
+              if(st&&!fin&&ko){
+                var el=Math.floor((now-new Date(ko))/60000);
+                if(mn===0&&el>0)mn=el;
+                if(el>115){
+                  // Match should be over — if live.json score is missing, fetch fresh
+                  if(f.hs==null||f.as==null){needFresh=true;return}
+                  fin=true;mn=90;
+                }
+              }
               fix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
+            if(needFresh){_fPL();return;}
             var plGW=_rebuildGW(fix);
             _applyData('pl',D.tm||{},plGW,fix);_updDone(true);return;
           }
 
           if(D.league==='laliga'&&d.fix_ll){
             var llFix=[];
+            var needFreshLL=false;
             d.fix_ll.forEach(function(f){
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
-              if(st&&!fin&&ko){var el=Math.floor((now-new Date(ko))/60000);if(mn===0&&el>0)mn=el;if(el>115){fin=true;mn=90}}
+              if(st&&!fin&&ko){
+                var el=Math.floor((now-new Date(ko))/60000);
+                if(mn===0&&el>0)mn=el;
+                if(el>115){
+                  if(f.hs==null||f.as==null){needFreshLL=true;return}
+                  fin=true;mn=90;
+                }
+              }
               llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
+            if(needFreshLL){_fLL();return;}
             var llGW=_rebuildGW(llFix);
             _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);return;
           }
