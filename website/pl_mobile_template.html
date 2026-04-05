@@ -905,91 +905,84 @@ function rCmp(){var c=$("t2"),h='<div class="sec">Team Comparison</div><div clas
 function pickT(id){if(D.ct1===id){D.ct1=null}else if(D.ct2===id){D.ct2=null}else if(!D.ct1){D.ct1=id}else if(!D.ct2){D.ct2=id}else{D.ct2=id}rCmp()}
 
 /* ══ AI LEARNING TAB ══ */
-var _aiChartAcc=null,_aiChartW=null;
+var _aiChartAcc=null,_aiChartW=null,_aiLg='pl';
+var _aiFL={form:'Form',strength:'Strength',position:'Table Pos',home_adv:'Home Adv',streak:'Win Streak',h2h:'H2H',home_away_split:'H/A Split',goals_trend:'Goals/xG',upset:'Upset Risk',clean_sheet:'Clean Sheet',draw_tendency:'Draw Tend'};
 function rAI(){
   var c=$("t3");
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]}};
-  var pl=lh.pl||{gw_results:[]};
-  var ll=lh.laliga||{gw_results:[]};
-  var plR=pl.gw_results||[];
-  var llR=ll.gw_results||[];
-  var plAcc=pl.overall_accuracy||0;
-  var llAcc=ll.overall_accuracy||0;
-  var plTot=pl.total_evaluated||0;
-  var llTot=ll.total_evaluated||0;
-  var wts=pl.current_weights||{};
-
-  // Trend: compare last 3 GWs vs previous 3
-  function trend(rows){
-    if(rows.length<4)return null;
-    var last=rows.slice(-3),prev=rows.slice(-6,-3);
+  var lgKey=_aiLg,isPL=lgKey==='pl';
+  var lgData=lh[lgKey]||{gw_results:[]};
+  var rows=lgData.gw_results||[];
+  var acc=lgData.overall_accuracy||0,tot=lgData.total_evaluated||0;
+  var wts=lgData.current_weights||(lh.pl||{}).current_weights||{};
+  var lgCol=isPL?'var(--g)':'#ff6b35';
+  var gwLbl=isPL?'GW':'MD';
+  var lgName=isPL?'Premier League':'La Liga';
+  function trendDelta(rs){
+    if(rs.length<2)return null;
+    var n=Math.min(2,rs.length),last=rs.slice(-n),prev=rs.slice(-(n*2),-n);
     if(!prev.length)return null;
-    var la=last.reduce(function(s,r){return s+r.accuracy_pct},0)/last.length;
-    var pa=prev.reduce(function(s,r){return s+r.accuracy_pct},0)/prev.length;
-    return la-pa;
+    return last.reduce(function(s,r){return s+r.accuracy_pct},0)/n - prev.reduce(function(s,r){return s+r.accuracy_pct},0)/prev.length;
   }
-  var plTrend=trend(plR),llTrend=trend(llR);
-  function trendHtml(t){
-    if(t===null)return'<span style="color:var(--tm)">–</span>';
-    var s=t>=0?'+':'';
-    return'<span style="color:'+(t>=0?'var(--g)':'var(--pk)')+'">'+s+t.toFixed(1)+'%</span>';
-  }
-
+  var delta=trendDelta(rows);
+  var tSpan=delta===null?'':'<span style="font-size:.65rem;color:'+(delta>=0?'var(--g)':'var(--pk)')+'">'+(delta>=0?'▲ +':'▼ ')+delta.toFixed(1)+'%</span>';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
-  // Stat cards
-  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.6rem">';
-  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;text-align:center"><div style="font-size:.55rem;color:var(--tm);margin-bottom:.15rem">PL Accuracy</div><div style="font-size:1.2rem;font-weight:800;color:var(--g)">'+plAcc+'%</div><div style="font-size:.5rem;color:var(--tm)">'+plTot+' matches '+trendHtml(plTrend)+'</div></div>';
-  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;text-align:center"><div style="font-size:.55rem;color:var(--tm);margin-bottom:.15rem">La Liga Accuracy</div><div style="font-size:1.2rem;font-weight:800;color:#ff6b35">'+llAcc+'%</div><div style="font-size:.5rem;color:var(--tm)">'+llTot+' matches '+trendHtml(llTrend)+'</div></div>';
+  // League tabs
+  h+='<div class="stabs" style="margin-bottom:.5rem">';
+  h+='<button class="stab'+(isPL?' a':'')+'" onclick="_aiLg=\'pl\';rAI()">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</button>';
+  h+='<button class="stab'+(!isPL?' a':'')+'" onclick="_aiLg=\'laliga\';rAI()">🇪🇸 La Liga</button>';
   h+='</div>';
-
-  // Charts
-  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:.4rem"><div style="font-size:.6rem;color:var(--tm);margin-bottom:.3rem;font-weight:600">Accuracy per Gameweek</div><canvas id="aiAccChart" height="140"></canvas></div>';
-  h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:.4rem"><div style="font-size:.6rem;color:var(--tm);margin-bottom:.3rem;font-weight:600">Factor Weights</div><canvas id="aiWtChart" height="160"></canvas></div>';
-
-  // GW history table
-  if(plR.length||llR.length){
-    h+='<div class="sec" style="margin-bottom:.3rem">GW History</div>';
-    h+='<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>GW</th><th>League</th><th>Correct</th><th>Total</th><th>Acc%</th></tr></thead><tbody>';
-    var rows=[];
-    plR.forEach(function(r){rows.push({gw:r.gw,lg:'PL',cw:r.correct_winner,tot:r.total,acc:r.accuracy_pct})});
-    llR.forEach(function(r){rows.push({gw:r.gw,lg:'LL',cw:r.correct_winner,tot:r.total,acc:r.accuracy_pct})});
-    rows.sort(function(a,b){return b.gw-a.gw||a.lg.localeCompare(b.lg)});
-    rows.forEach(function(r){
-      var col=r.acc>=60?'var(--g)':r.acc>=45?'var(--cy)':'var(--pk)';
-      h+='<tr><td>'+r.gw+'</td><td>'+r.lg+'</td><td>'+r.cw+'</td><td>'+r.tot+'</td><td style="color:'+col+';font-weight:700">'+r.acc+'%</td></tr>';
+  // Big accuracy card with ring
+  var ring=Math.round(acc);
+  h+='<div style="background:var(--cd);border-radius:var(--r);padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">';
+  h+='<div><div style="font-size:.5rem;color:var(--tm);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.1rem">'+lgName+' Overall Accuracy</div>';
+  h+='<div style="font-size:2rem;font-weight:900;color:'+lgCol+'">'+acc+'% '+tSpan+'</div>';
+  h+='<div style="font-size:.5rem;color:var(--tm)">'+tot+' matches · '+rows.length+' gameweeks evaluated</div></div>';
+  h+='<div style="position:relative;width:56px;height:56px;flex-shrink:0"><svg viewBox="0 0 36 36" style="width:56px;height:56px;transform:rotate(-90deg)"><circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="3.5"/><circle cx="18" cy="18" r="15.9" fill="none" stroke="'+lgCol+'" stroke-width="3.5" stroke-dasharray="'+ring+' '+(100-ring)+'" stroke-linecap="round"/></svg>';
+  h+='<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:'+lgCol+'">'+acc+'%</div></div></div>';
+  if(rows.length){
+    // Bar chart
+    h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:.4rem"><div style="font-size:.58rem;color:var(--tm);font-weight:600;margin-bottom:.3rem">Correct winner % per '+gwLbl+'</div><canvas id="aiAccChart" height="110"></canvas></div>';
+    // Table
+    h+='<div class="sec" style="margin-bottom:.25rem">Gameweek Breakdown</div>';
+    h+='<div style="margin-bottom:.5rem"><table class="tbl" style="width:100%"><thead><tr><th>'+gwLbl+'</th><th>✓/Total</th><th style="width:55%">Accuracy</th></tr></thead><tbody>';
+    rows.slice().reverse().forEach(function(r){
+      var col=r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)';
+      h+='<tr><td><b>'+gwLbl+r.gw+'</b></td><td>'+r.correct_winner+'/'+r.total+'</td>';
+      h+='<td><div style="display:flex;align-items:center;gap:.3rem"><div style="flex:1;background:rgba(255,255,255,.07);border-radius:3px;height:8px"><div style="width:'+Math.round(r.accuracy_pct)+'%;background:'+col+';height:8px;border-radius:3px"></div></div><span style="color:'+col+';font-weight:700;font-size:.58rem;min-width:32px;text-align:right">'+r.accuracy_pct+'%</span></div></td></tr>';
     });
     h+='</tbody></table></div>';
   } else {
-    h+='<div class="emp" style="margin-top:.5rem">No evaluated gameweeks yet. Data builds up after each completed GW.</div>';
+    h+='<div class="emp" style="margin:1.2rem 0;line-height:1.7">No '+lgName+' data yet.<br><span style="font-size:.55rem;color:var(--tm)">Builds automatically after each completed gameweek.</span></div>';
   }
-
+  // Weights
+  if(Object.keys(wts).length){
+    h+='<div class="sec" style="margin-bottom:.25rem">Prediction Factors</div>';
+    h+='<div style="background:var(--cd);border-radius:var(--rs);padding:.5rem;margin-bottom:1rem"><div style="font-size:.5rem;color:var(--tm);margin-bottom:.35rem">How much each factor influences the model (learned from results)</div><canvas id="aiWtChart" height="145"></canvas></div>';
+  }
   c.innerHTML=h;
-
-  // Destroy old charts
   if(_aiChartAcc){_aiChartAcc.destroy();_aiChartAcc=null}
   if(_aiChartW){_aiChartW.destroy();_aiChartW=null}
-
-  // Accuracy line chart
   var accEl=document.getElementById('aiAccChart');
-  if(accEl&&(plR.length||llR.length)){
-    var allGWs=[];
-    plR.forEach(function(r){if(allGWs.indexOf(r.gw)<0)allGWs.push(r.gw)});
-    llR.forEach(function(r){if(allGWs.indexOf(r.gw)<0)allGWs.push(r.gw)});
-    allGWs.sort(function(a,b){return a-b});
-    var plMap={},llMap={};
-    plR.forEach(function(r){plMap[r.gw]=r.accuracy_pct});
-    llR.forEach(function(r){llMap[r.gw]=r.accuracy_pct});
-    var lbl=D.gwl||'GW';
-    _aiChartAcc=new Chart(accEl,{type:'line',data:{labels:allGWs.map(function(g){return lbl+g}),datasets:[{label:'PL',data:allGWs.map(function(g){return plMap[g]!=null?plMap[g]:null}),borderColor:'#00ff87',backgroundColor:'rgba(0,255,135,.1)',tension:.3,spanGaps:true,pointRadius:3},{label:'La Liga',data:allGWs.map(function(g){return llMap[g]!=null?llMap[g]:null}),borderColor:'#ff6b35',backgroundColor:'rgba(255,107,53,.1)',tension:.3,spanGaps:true,pointRadius:3}]},options:{responsive:true,plugins:{legend:{labels:{color:'#a89aad',font:{size:10}}}},scales:{x:{ticks:{color:'#a89aad',font:{size:9}},grid:{color:'rgba(255,255,255,.05)'}},y:{min:0,max:100,ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.05)'}}}}});
+  if(accEl&&rows.length){
+    var sorted=rows.slice().sort(function(a,b){return a.gw-b.gw});
+    var bCols=sorted.map(function(r){return r.accuracy_pct>=60?'#00ff87':r.accuracy_pct>=45?'#04f5ff':'#e90052'});
+    _aiChartAcc=new Chart(accEl,{type:'bar',
+      data:{labels:sorted.map(function(r){return gwLbl+r.gw}),datasets:[{data:sorted.map(function(r){return r.accuracy_pct}),backgroundColor:bCols,borderRadius:6,borderSkipped:false}]},
+      options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){var r=sorted[ctx.dataIndex];return r.accuracy_pct+'% — '+r.correct_winner+'/'+r.total+' correct'}}}},
+        scales:{x:{ticks:{color:'#a89aad',font:{size:10,weight:'600'}},grid:{display:false}},
+          y:{min:0,max:100,ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.06)'}}}}});
   }
-
-  // Weights bar chart
   var wtEl=document.getElementById('aiWtChart');
   if(wtEl&&Object.keys(wts).length){
-    var entries=Object.entries(wts).sort(function(a,b){return b[1]-a[1]});
-    var maxW=entries.length?entries[0][1]:0.25;
-    var colors=entries.map(function(e){var pct=e[1]/maxW;return pct>0.7?'#00ff87':pct>0.4?'#04f5ff':'#a89aad'});
-    _aiChartW=new Chart(wtEl,{type:'bar',data:{labels:entries.map(function(e){return e[0]}),datasets:[{data:entries.map(function(e){return Math.round(e[1]*100)}),backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.05)'}},y:{ticks:{color:'#a89aad',font:{size:9}},grid:{display:false}}}}});
+    var ents=Object.entries(wts).sort(function(a,b){return b[1]-a[1]});
+    var mxW=ents[0][1]||0.25;
+    var wCols=ents.map(function(e){var p=e[1]/mxW;return p>0.72?lgCol:p>0.45?'#04f5ff':'rgba(168,154,173,.55)'});
+    _aiChartW=new Chart(wtEl,{type:'bar',
+      data:{labels:ents.map(function(e){return _aiFL[e[0]]||e[0]}),datasets:[{data:ents.map(function(e){return+(e[1]*100).toFixed(1)}),backgroundColor:wCols,borderRadius:4}]},
+      options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.parsed.x.toFixed(1)+'% influence'}}}},
+        scales:{x:{ticks:{color:'#a89aad',font:{size:9},callback:function(v){return v+'%'}},grid:{color:'rgba(255,255,255,.05)'}},
+          y:{ticks:{color:'#f0eaf2',font:{size:9}},grid:{display:false}}}}});
   }
 }
 
