@@ -927,11 +927,14 @@ function rAI(){
   var delta=trendDelta(rows);
   var tSpan=delta===null?'':'<span style="font-size:.65rem;color:'+(delta>=0?'var(--g)':'var(--pk)')+'">'+(delta>=0?'▲ +':'▼ ')+delta.toFixed(1)+'%</span>';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
-  // League tabs
-  h+='<div class="stabs" style="margin-bottom:.5rem">';
-  h+='<button class="stab'+(isPL?' a':'')+'" onclick="_aiLg=\'pl\';rAI()">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</button>';
-  h+='<button class="stab'+(!isPL?' a':'')+'" onclick="_aiLg=\'laliga\';rAI()">🇪🇸 La Liga</button>';
-  h+='</div>';
+  // League toggle — pill style, centred, auto width
+  h+='<div style="display:flex;justify-content:center;margin-bottom:.6rem">';
+  h+='<div style="display:inline-flex;background:var(--cd);border-radius:20px;padding:3px;gap:3px">';
+  var plBtn='background:'+(isPL?'var(--g)':'transparent')+';color:'+(isPL?'var(--p)':'var(--tm)')+';font-weight:'+(isPL?'700':'600');
+  var llBtn='background:'+(!isPL?'#ff6b35':'transparent')+';color:'+(!isPL?'#fff':'var(--tm)')+';font-weight:'+(!isPL?'700':'600');
+  h+='<button style="'+plBtn+';border:none;border-radius:17px;padding:.3rem .8rem;font-size:.6rem;cursor:pointer;white-space:nowrap" onclick="_aiLg=\'pl\';rAI()">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</button>';
+  h+='<button style="'+llBtn+';border:none;border-radius:17px;padding:.3rem .8rem;font-size:.6rem;cursor:pointer;white-space:nowrap" onclick="_aiLg=\'laliga\';rAI()">🇪🇸 La Liga</button>';
+  h+='</div></div>';
   // Big accuracy card with ring
   var ring=Math.round(acc);
   h+='<div style="background:var(--cd);border-radius:var(--r);padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">';
