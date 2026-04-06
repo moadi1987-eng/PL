@@ -905,12 +905,12 @@ function rCmp(){var c=$("t2"),h='<div class="sec">Team Comparison</div><div clas
 function pickT(id){if(D.ct1===id){D.ct1=null}else if(D.ct2===id){D.ct2=null}else if(!D.ct1){D.ct1=id}else if(!D.ct2){D.ct2=id}else{D.ct2=id}rCmp()}
 
 /* ══ AI LEARNING TAB ══ */
-var _aiChartAcc=null,_aiChartW=null,_aiLg='pl';
+var _aiChartAcc=null,_aiChartW=null;
 var _aiFL={form:'Form',strength:'Strength',position:'Table Pos',home_adv:'Home Adv',streak:'Win Streak',h2h:'H2H',home_away_split:'H/A Split',goals_trend:'Goals/xG',upset:'Upset Risk',clean_sheet:'Clean Sheet',draw_tendency:'Draw Tend'};
 function rAI(){
   var c=$("t3");
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]}};
-  var lgKey=_aiLg,isPL=lgKey==='pl';
+  var lgKey=D.league,isPL=lgKey==='pl';
   var lgData=lh[lgKey]||{gw_results:[]};
   var rows=lgData.gw_results||[];
   var acc=lgData.overall_accuracy||0,tot=lgData.total_evaluated||0;
@@ -927,14 +927,6 @@ function rAI(){
   var delta=trendDelta(rows);
   var tSpan=delta===null?'':'<span style="font-size:.65rem;color:'+(delta>=0?'var(--g)':'var(--pk)')+'">'+(delta>=0?'▲ +':'▼ ')+delta.toFixed(1)+'%</span>';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
-  // League toggle — pill style, centred, auto width
-  h+='<div style="display:flex;justify-content:center;margin-bottom:.6rem">';
-  h+='<div style="display:inline-flex;background:var(--cd);border-radius:20px;padding:3px;gap:3px">';
-  var plBtn='background:'+(isPL?'var(--g)':'transparent')+';color:'+(isPL?'var(--p)':'var(--tm)')+';font-weight:'+(isPL?'700':'600');
-  var llBtn='background:'+(!isPL?'#ff6b35':'transparent')+';color:'+(!isPL?'#fff':'var(--tm)')+';font-weight:'+(!isPL?'700':'600');
-  h+='<button style="'+plBtn+';border:none;border-radius:17px;padding:.3rem .8rem;font-size:.6rem;cursor:pointer;white-space:nowrap" onclick="_aiLg=\'pl\';rAI()">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</button>';
-  h+='<button style="'+llBtn+';border:none;border-radius:17px;padding:.3rem .8rem;font-size:.6rem;cursor:pointer;white-space:nowrap" onclick="_aiLg=\'laliga\';rAI()">🇪🇸 La Liga</button>';
-  h+='</div></div>';
   // Big accuracy card with ring
   var ring=Math.round(acc);
   h+='<div style="background:var(--cd);border-radius:var(--r);padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">';
