@@ -30,7 +30,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GH_PAT }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -119,7 +118,7 @@ jobs:
         if: steps.check.outputs.should_update == 'true'
         run: python website/update_pl_mobile.py
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
 
       - name: Commit & push if changed
