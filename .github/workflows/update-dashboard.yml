@@ -56,6 +56,7 @@ jobs:
 
           pl_live = 0
           ll_live = 0
+          now = datetime.datetime.now(datetime.timezone.utc)
 
           # --- Check Premier League ---
           try:
@@ -68,12 +69,10 @@ jobs:
               write_output("true")
               raise SystemExit(0)
 
-          # --- Check La Liga ---
+          # --- Check La Liga (query today's date only — ESPN won't return live state for date ranges) ---
           try:
-              now = datetime.datetime.now(datetime.timezone.utc)
-              sy = now.year if now.month >= 7 else now.year - 1
-              dr = f"{sy}0801-{sy+1}0630"
-              espn = requests.get(ESPN_SB, params={"dates": dr, "limit": "1000"}, headers=HDR, timeout=15).json()
+              today = now.strftime("%Y%m%d")
+              espn = requests.get(ESPN_SB, params={"dates": today, "limit": "50"}, headers=HDR, timeout=15).json()
               for ev in espn.get("events", []):
                   for comp in ev.get("competitions", []):
                       state = comp.get("status", {}).get("type", {}).get("state", "pre")

@@ -422,15 +422,12 @@ function _updDone(ok){
   var u=$('upd');
   if(ok){
     _lastOk=Date.now();_fetchFails=0;
-    if(_hasLive)u.innerHTML='<span style="color:#e90052;font-weight:700">● LIVE</span> '+t;
-    else if(_justEnded>0)u.innerHTML='<span style="color:#ffc107;font-weight:700">Finishing</span> '+t;
-    else u.innerHTML='<span style="color:#00ff87">✓ Updated</span> '+t;
+    if(_hasLive)u.innerHTML='<span style="color:#e90052;font-weight:800;font-size:.65rem;letter-spacing:.5px">● LIVE</span>';
+    else u.innerHTML='<span style="color:#00ff87;font-size:.45rem">✓</span>';
   }else{
     _fetchFails++;
-    var age=_lastOk?Math.round((Date.now()-_lastOk)/60000):0;
-    var ageStr=age>0?' ('+age+'m ago)':'';
-    if(_fetchFails>=2)u.innerHTML='<span style="color:#ff6b6b">✗ Offline'+ageStr+'</span> <span style="font-size:.5rem;text-decoration:underline" onclick="fetchLive()">Retry</span>';
-    else u.innerHTML='<span style="color:#ffc107">Embedded'+ageStr+'</span> '+t;
+    if(_fetchFails>=3)u.innerHTML='<span style="color:#ff6b6b;font-size:.45rem" onclick="fetchLive()" title="Tap to retry">✗</span>';
+    else u.innerHTML='<span style="color:#00ff87;font-size:.45rem">✓</span>';
   }
   u.removeAttribute('data-base');
   if(_rTmr)clearInterval(_rTmr);
@@ -448,10 +445,8 @@ function _applyData(lg,tm,gws,fix){
   if(!c){var fn2=gws.filter(function(g){return g.fin});c=fn2.length?fn2[fn2.length-1]:{id:1}}
   var cId=c.id;D.nxtId=0;
   for(var ni=0;ni<gws.length;ni++){if(gws[ni].id===cId+1){D.nxtId=gws[ni].id;break}}
-  if(lg==='pl'){
-    var td=new Date().toISOString().slice(0,10);
-    if(D.nxtId){for(var fi=0;fi<fix.length;fi++){if(fix[fi].e===D.nxtId&&fix[fi].ko&&fix[fi].ko.slice(0,10)===td){cId=D.nxtId;break}}}
-  }
+  var td=new Date().toISOString().slice(0,10);
+  if(D.nxtId){for(var fi=0;fi<fix.length;fi++){if(fix[fi].e===D.nxtId&&fix[fi].ko&&fix[fi].ko.slice(0,10)===td){cId=D.nxtId;break}}}
   D.cur=cId;D.sel=(oSel===oCur)?D.cur:oSel;
   bSt();rGW();render();
 }
@@ -553,10 +548,13 @@ function _fLL(){
       var mdf=fix.filter(function(f){return f.e===md});
       var allFin=mdf.length?mdf.every(function(f){return f.fin}):false;
       var isCur=mdf.some(function(f){return f.st&&!f.fin});
-      if(!isCur&&allFin){var nxtF=fix.filter(function(f){return f.e===md+1});if(nxtF.length&&!nxtF.some(function(f){return f.fin}))isCur=true}
       gws.push({id:md,fin:allFin,cur:isCur});
     }
-    if(!gws.some(function(g){return g.cur})){for(var gi=gws.length-1;gi>=0;gi--){if(gws[gi].fin){gws[gi].cur=true;break}}}
+    if(!gws.some(function(g){return g.cur})){
+      var found=false;
+      for(var gi=0;gi<gws.length;gi++){if(!gws[gi].fin){gws[gi].cur=true;found=true;break}}
+      if(!found){for(var gi=gws.length-1;gi>=0;gi--){if(gws[gi].fin){gws[gi].cur=true;break}}}
+    }
     _applyData('laliga',tm,gws,fix);
     _updDone(true);
   });
@@ -637,7 +635,7 @@ function goToCur(){if(D.cur)sGW(D.cur)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<4;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
-function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
+function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 var _tickBase={},_tickTmr=null;
 
 function _calcMatch(ko,mn,sx){
@@ -650,8 +648,9 @@ function _calcMatch(ko,mn,sx){
   var m=mn&&mn>0?mn:(el>0?Math.floor(el):0);
   if(m<=0)return{st:"LIVE",m:0,ht:false};
   if(m>=90||el>110)return{st:"90+",m:90,ht:false};
-  if(el>=50&&el<=62)return{st:"HT",m:45,ht:true};
-  if(m>45&&m<=48&&el<62)return{st:"45+",m:45,ht:false};
+  // HT only when API confirms ≤45 min (mn>45 means 2nd half already started)
+  if(el>=50&&el<=70&&mn<=45)return{st:"HT",m:45,ht:true};
+  if(m>45&&m<=50&&el<70&&mn<=45)return{st:"45+",m:45,ht:false};
   return{st:null,m:m,ht:false};
 }
 

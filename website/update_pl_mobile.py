@@ -147,6 +147,19 @@ try:
 
     espn_events = requests.get(ESPN_SCOREBOARD, params={"dates": date_range, "limit": "1000"},
                                 headers=hdr, timeout=30).json().get("events", [])
+
+    # ESPN doesn't return live status for historical date ranges — fetch today separately
+    today_str = now.strftime("%Y%m%d")
+    try:
+        today_events = requests.get(ESPN_SCOREBOARD, params={"dates": today_str},
+                                    headers=hdr, timeout=15).json().get("events", [])
+        today_by_id = {ev["id"]: ev for ev in today_events}
+        if today_by_id:
+            espn_events = [today_by_id.get(ev["id"], ev) for ev in espn_events]
+            print(f"La Liga: merged {len(today_by_id)} today's events with live status")
+    except Exception as e:
+        print(f"La Liga today-fetch: {e}")
+
     espn_events.sort(key=lambda e: e.get("date", ""))
 
     espn_standings = requests.get(ESPN_STANDINGS, headers=hdr, timeout=20).json()
@@ -254,17 +267,15 @@ try:
     for md in range(1, max_md + 1):
         md_fix = [f for f in ll_fixtures if f["e"] == md]
         all_fin = all(f["fin"] for f in md_fix) if md_fix else False
-        is_cur = False
-        for f in md_fix:
-            if f["st"] and not f["fin"]:
-                is_cur = True
-                break
-        if not is_cur and all_fin:
-            next_md_fix = [f for f in ll_fixtures if f["e"] == md + 1]
-            if next_md_fix and not any(f["fin"] for f in next_md_fix):
-                is_cur = True
+        is_cur = any(f["st"] and not f["fin"] for f in md_fix)
         ll_gws.append({"id": md, "fin": all_fin, "cur": is_cur})
 
+    # Current = first unfinished matchday (the upcoming one); fallback to last finished
+    if not any(g["cur"] for g in ll_gws):
+        for g in ll_gws:
+            if not g["fin"]:
+                g["cur"] = True
+                break
     if not any(g["cur"] for g in ll_gws):
         for g in reversed(ll_gws):
             if g["fin"]:
