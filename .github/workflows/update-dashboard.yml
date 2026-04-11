@@ -2,16 +2,11 @@ name: Update PL Dashboard
 
 on:
   schedule:
-    # ── PL + La Liga: Sat/Sun all day (every 5 min, 10:00-23:59 UTC) ──
-    - cron: '*/5 10-23 * * 0,6'
-    # ── PL + La Liga: Weekday evenings (every 5 min, 17:00-23:59 UTC) ──
-    - cron: '*/5 17-23 * * 1-5'
-    # ── La Liga: Friday early evening (every 10 min, 13:00-16:59 UTC) ──
-    - cron: '*/10 13-16 * * 5'
-    # ── Background refresh: weekday morning & afternoon ──
-    - cron: '0 8,14 * * 1-5'
-    # ── Background refresh: weekend morning ──
-    - cron: '0 8 * * 0,6'
+    - cron: "*/5 10-23 * * 0,6"
+    - cron: "*/5 17-23 * * 1-5"
+    - cron: "*/10 13-16 * * 5"
+    - cron: "0 8,14 * * 1-5"
+    - cron: "0 8 * * 0,6"
   workflow_dispatch:
 
 permissions:
@@ -29,11 +24,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:   
-        - name: Setup Python
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install requests python-dotenv
@@ -41,7 +36,7 @@ jobs:
       - name: Check if update needed (PL + La Liga)
         id: check
         run: |
-          python3 << 'PYEOF'
+          python3 << PYEOF
           import requests, os, subprocess, datetime
 
           is_manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -52,24 +47,23 @@ jobs:
 
           def write_output(value):
               with open(output_file, "a") as f:
-                  f.write(f"should_update={value}\n")
+                  f.write(f"should_update={value}
+")
 
           pl_live = 0
           ll_live = 0
           now = datetime.datetime.now(datetime.timezone.utc)
 
-          # --- Check Premier League ---
           try:
               fx = requests.get(f"{FPL}/fixtures/", headers=HDR, timeout=15).json()
               pl_live = len([f for f in fx if f.get("started") and not f.get("finished")])
               if pl_live:
                   print(f"PL LIVE: {pl_live} matches in progress")
           except Exception as e:
-              print(f"PL check failed ({e}) — will update as precaution")
+              print(f"PL check failed ({e}) - will update as precaution")
               write_output("true")
               raise SystemExit(0)
 
-          # --- Check La Liga (query today's date only — ESPN won't return live state for date ranges) ---
           try:
               today = now.strftime("%Y%m%d")
               espn = requests.get(ESPN_SB, params={"dates": today, "limit": "50"}, headers=HDR, timeout=15).json()
@@ -81,21 +75,19 @@ jobs:
               if ll_live:
                   print(f"La Liga LIVE: {ll_live} matches in progress")
           except Exception as e:
-              print(f"La Liga check failed ({e}) — ignoring")
+              print(f"La Liga check failed ({e}) - ignoring")
 
-          # --- Decision ---
           if is_manual:
-              print("Manual trigger — always updating")
+              print("Manual trigger - always updating")
               write_output("true")
               raise SystemExit(0)
 
           total_live = pl_live + ll_live
           if total_live:
-              print(f"TOTAL LIVE: {total_live} (PL={pl_live}, LL={ll_live}) — updating")
+              print(f"TOTAL LIVE: {total_live} (PL={pl_live}, LL={ll_live}) - updating")
               write_output("true")
               raise SystemExit(0)
 
-          # No live matches — check how old index.html is
           result = subprocess.run(
               ["git", "log", "-1", "--format=%ct", "--", "index.html"],
               capture_output=True, text=True
@@ -105,22 +97,22 @@ jobs:
           age_hours = (now_ts - last_ts) / 3600
 
           if age_hours > 3:
-              print(f"Last update was {age_hours:.1f}h ago — refreshing")
+              print(f"Last update was {age_hours:.1f}h ago - refreshing")
               write_output("true")
           else:
-              print(f"No live matches (PL=0, LL=0), last update {age_hours:.1f}h ago — skipping")
+              print(f"No live matches, last update {age_hours:.1f}h ago - skipping")
               write_output("false")
           PYEOF
 
       - name: Build dashboard
-        if: steps.check.outputs.should_update == 'true'
+        if: steps.check.outputs.should_update == "true"
         run: python website/update_pl_mobile.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
 
-      - name: Commit & push if changed
-        if: steps.check.outputs.should_update == 'true'
+      - name: Commit and push if changed
+        if: steps.check.outputs.should_update == "true"
         run: |
           cp -f website/pl_mobile.html index.html
           git config user.name "github-actions[bot]"
@@ -129,35 +121,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to deploy"
           else
-            LIVE_INFO=$(python3 -c "
-          import requests, datetime
-          HDR = {'User-Agent': 'PL/1.0'}
-          pl = ll = 0
-          try:
-              fx = requests.get('https://fantasy.premierleague.com/api/fixtures/', headers=HDR, timeout=10).json()
-              pl = len([f for f in fx if f.get('started') and not f.get('finished')])
-          except: pass
-          try:
-              now = datetime.datetime.now(datetime.timezone.utc)
-              sy = now.year if now.month >= 7 else now.year - 1
-              espn = requests.get(f'https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard',
-                  params={'dates': f'{sy}0801-{sy+1}0630', 'limit': '1000'}, headers=HDR, timeout=10).json()
-              for ev in espn.get('events', []):
-                  for comp in ev.get('competitions', []):
-                      if comp.get('status', {}).get('type', {}).get('state', 'pre') == 'in': ll += 1
-          except: pass
-          parts = []
-          if pl: parts.append(f'PL:{pl}')
-          if ll: parts.append(f'LL:{ll}')
-          print(' '.join(parts) if parts else '')
-          " 2>/dev/null || echo "")
-
-            if [ -n "$LIVE_INFO" ]; then
-              MSG="Live update ($LIVE_INFO)"
-            else
-              MSG="Auto-update dashboard data"
-            fi
-            git commit -m "$MSG"
+            git commit -m "Auto-update dashboard data"
             git pull --rebase origin main || true
             git push origin main
             echo "Deployed successfully"
