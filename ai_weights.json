@@ -1,13 +1,1 @@
-{
-  "form": 0.0917,
-  "strength": 0.1062,
-  "position": 0.1021,
-  "home_adv": 0.0708,
-  "streak": 0.0938,
-  "h2h": 0.1208,
-  "home_away_split": 0.0958,
-  "goals_trend": 0.0812,
-  "upset": 0.0958,
-  "clean_sheet": 0.075,
-  "draw_tendency": 0.0667
-}
+{"form":0.0906,"strength":0.1148,"position":0.1048,"home_adv":0.066,"streak":0.0926,"h2h":0.1193,"home_away_split":0.0946,"goals_trend":0.0868,"upset":0.0946,"clean_sheet":0.0701,"draw_tendency":0.0659}
