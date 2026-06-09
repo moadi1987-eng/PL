@@ -54,6 +54,54 @@ CACHE_TTL = 300
 LIVE_CACHE_TTL = 3
 _CACHE_MAX_SIZE = 200
 
+OUTCOME_CALIBRATION = {
+    "home": 1.25,
+    "draw": 1.80,
+    "away": 0.85,
+}
+
+
+def _pick_recommended_winner(home_pct, draw_pct, away_pct, calibrate=True):
+    """Pick the betting outcome from calibrated probabilities, not rounded score."""
+    scores = {"home": home_pct, "draw": draw_pct, "away": away_pct}
+    if calibrate:
+        scores = {k: v * OUTCOME_CALIBRATION[k] for k, v in scores.items()}
+    return max(scores, key=scores.get)
+
+
+def _align_score_to_winner(home_score, away_score, winner):
+    """Keep displayed score consistent with the selected winner."""
+    home_score = max(0, int(round(home_score)))
+    away_score = max(0, int(round(away_score)))
+
+    if winner == "draw":
+        score = max(0, int(round((home_score + away_score) / 2)))
+        return score, score
+    if winner == "home" and home_score <= away_score:
+        home_score = away_score + 1
+    elif winner == "away" and away_score <= home_score:
+        away_score = home_score + 1
+    return home_score, away_score
+
+
+def _recommended_prediction_from_probs(prediction):
+    winner = prediction.get("recommended_winner")
+    if winner not in ("home", "draw", "away"):
+        winner = _pick_recommended_winner(
+            prediction.get("home_win_pct", 0),
+            prediction.get("draw_pct", 0),
+            prediction.get("away_win_pct", 0),
+        )
+
+    poisson_score = prediction.get("poisson_score")
+    if poisson_score and len(poisson_score) == 2:
+        home_score, away_score = poisson_score
+    else:
+        home_score = prediction.get("predicted_home_goals", 0)
+        away_score = prediction.get("predicted_away_goals", 0)
+    home_score, away_score = _align_score_to_winner(home_score, away_score, winner)
+    return winner, home_score, away_score
+
 
 def _evict_cache():
     """Remove expired entries; if still too large, drop oldest half."""
@@ -1505,6 +1553,8 @@ def predict_match(home_id, away_id, current_gw):
     pred_home_goals = round(lambda_home, 1)
     pred_away_goals = round(lambda_away, 1)
     best_h, best_a = poisson["best_score"]
+    recommended_winner = _pick_recommended_winner(final_home_pct, final_draw_pct, final_away_pct)
+    recommended_home_score, recommended_away_score = _align_score_to_winner(best_h, best_a, recommended_winner)
 
     # Save prediction for accuracy tracking
     try:
@@ -1516,11 +1566,11 @@ def predict_match(home_id, away_id, current_gw):
                 match_id = f["id"]
                 break
         if match_id and not any(p.get("match_id") == match_id for p in acc["predictions"]):
-            recommended = "home" if final_home_pct > final_away_pct and final_home_pct > final_draw_pct else \
-                         "away" if final_away_pct > final_home_pct and final_away_pct > final_draw_pct else "draw"
             acc["predictions"].append({
                 "match_id": match_id, "gw": current_gw,
-                "pred_winner": recommended, "pred_hs": best_h, "pred_as": best_a,
+                "pred_winner": recommended_winner,
+                "pred_hs": recommended_home_score,
+                "pred_as": recommended_away_score,
                 "home_pct": final_home_pct, "draw_pct": final_draw_pct, "away_pct": final_away_pct,
             })
             acc["predictions"] = acc["predictions"][-500:]
@@ -1536,6 +1586,9 @@ def predict_match(home_id, away_id, current_gw):
         "predicted_away_goals": pred_away_goals,
         "poisson_score": (best_h, best_a),
         "poisson_prob": poisson["score_prob"],
+        "recommended_winner": recommended_winner,
+        "recommended_home_score": recommended_home_score,
+        "recommended_away_score": recommended_away_score,
         "home_xg": h_xg, "away_xg": a_xg,
         "home_injury_pen": h_injury_pen, "away_injury_pen": a_injury_pen,
         "home_form": home_stats,
@@ -2136,14 +2189,7 @@ def store_ai_predictions_for_gw(gw, force_refresh=False):
     changes = []
     for m in matches:
         pred = predict_match(m["home_id"], m["away_id"], gw)
-        home_score = round(pred["predicted_home_goals"])
-        away_score = round(pred["predicted_away_goals"])
-        if home_score > away_score:
-            winner = "home"
-        elif home_score < away_score:
-            winner = "away"
-        else:
-            winner = "draw"
+        winner, home_score, away_score = _recommended_prediction_from_probs(pred)
 
         new_pred = {
             "match_id": m["id"],
@@ -2834,17 +2880,7 @@ def api_guess_advice(gw):
         advice = []
         for m in matches:
             pred = league_predict_match(m["home_id"], m["away_id"], gw, league)
-            if pred["home_win_pct"] > pred["away_win_pct"] and pred["home_win_pct"] > pred["draw_pct"]:
-                rec_winner = "home"
-            elif pred["away_win_pct"] > pred["home_win_pct"] and pred["away_win_pct"] > pred["draw_pct"]:
-                rec_winner = "away"
-            else:
-                rec_winner = "draw"
-
-            rec_home = round(pred["predicted_home_goals"])
-            rec_away = round(pred["predicted_away_goals"])
-            if rec_home == rec_away:
-                rec_winner = "draw"
+            rec_winner, rec_home, rec_away = _recommended_prediction_from_probs(pred)
 
             reasons = build_reasoning(m, pred, rec_winner)
 

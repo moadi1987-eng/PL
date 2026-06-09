@@ -575,6 +575,8 @@ function h2h(hid,aid){var r={hw:0,d:0,aw:0,hg:0,ag:0,n:0};D.fx.forEach(function(
 
 function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++)f*=i;return Math.pow(lam,k)*Math.exp(-lam)/f}
 function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
+function pickOutcome(hp,dp,ap){var v={home:hp*1.25,draw:dp*1.8,away:ap*.85};return v.home>=v.away&&v.home>=v.draw?"home":v.away>=v.home&&v.away>=v.draw?"away":"draw"}
+function alignScore(h,a,w){h=Math.max(0,Math.round(h));a=Math.max(0,Math.round(a));if(w==="draw"){var s=Math.max(0,Math.round((h+a)/2));return[s,s]}if(w==="home"&&h<=a)h=a+1;if(w==="away"&&a<=h)a=h+1;return[h,a]}
 
 function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},at=D.tm[aid]||{};
   var pm={};D.st.forEach(function(r,i){pm[r.t.id]=i+1});
@@ -618,8 +620,8 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   var dp=Math.round((fdp*.4+poi.dr*.6)*10)/10;
   var ap=Math.round((100-hp-dp)*10)/10;
   var phg=Math.round(lamH*10)/10,pag=Math.round(lamA*10)/10;
-  var rh=poi.bs[0],ra=poi.bs[1];
-  var rec=rh>ra?"home":rh<ra?"away":"draw";
+  var rec=pickOutcome(hp,dp,ap),sc=alignScore(poi.bs[0],poi.bs[1],rec);
+  var rh=sc[0],ra=sc[1];
   // Reasoning
   var reasons=[];
   reasons.push("Form: "+T(hid).s+" "+hs.w+"W"+hs.d+"D"+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W"+as.d+"D"+as.l+"L ("+as.fs+"%)");
@@ -818,7 +820,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   so.slice(0,5).forEach(function(x){var m=x.m,p=x.p,g=gg[m.id]||{},hm=T(m.h),am=T(m.a);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var uw=g.w||null,wok=!!(aw&&uw&&uw===aw),lb={home:hm.s,draw:"Draw",away:am.s};
-    var aiW=(p.rh===p.ra)?"draw":p.rec,aiOk=!!(aw&&aiW===aw);
+    var aiW=p.rec,aiOk=!!(aw&&aiW===aw);
     bb.push({hm:hm,am:am,rk:rm[m.id],aw:aw?lb[aw]:"–",as2:ah!=null?ah+"-"+aa:"–",uw:uw?lb[uw]:"–",us:g.hs!=null?g.hs+"-"+g.as:"–",wok:wok,adv:lb[p.rec]+" ("+p.rh+"-"+p.ra+")",aiOk:aiOk,fin:!!aw})});
   var wC=0,aiC=0;bb.forEach(function(b){if(b.fin&&b.wok)wC++;if(b.fin&&b.aiOk)aiC++});
   var bbH='<div class="bb"><h5>Best Bets Score</h5><table><thead><tr><th>#</th><th>Match</th><th>Actual</th><th>Pick</th><th>W</th><th>AI Advice</th><th>AI</th></tr></thead><tbody>';
@@ -827,7 +829,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var rows="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var lb={home:hm.s,draw:"Draw",away:am.s};
-    var uw=g.w||null,aiW=(p.rh===p.ra)?"draw":p.rec;
+    var uw=g.w||null,aiW=p.rec;
     var uwOk=!!(aw&&uw&&uw===aw),usOk=!!(aw&&g.hs!=null&&g.hs===ah&&g.as===aa);
     var awOk=!!(aw&&aiW===aw),asOk=!!(aw&&p.rh===ah&&p.ra===aa);
     if(uwOk)uW++;if(usOk)uS++;if(awOk)aW++;if(asOk)aS++;

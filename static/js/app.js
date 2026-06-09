@@ -602,8 +602,7 @@ function renderPredCard(p) {
     let adviceHtml = "";
     if (adviceData) {
         const labels = { home: m.home_short, draw: "Draw", away: m.away_short };
-        const isDrawScore = adviceData.recommended_home_score === adviceData.recommended_away_score;
-        const adviceWinnerLabel = isDrawScore ? "Draw" : labels[adviceData.recommended_winner];
+        const adviceWinnerLabel = labels[adviceData.recommended_winner] || "Draw";
         const reasonsJson = adviceData.reasons ? encodeURIComponent(JSON.stringify(adviceData.reasons)) : "";
         const matchTitle = `${m.home_short} vs ${m.away_short}`;
         adviceHtml = `<div class="d-flex align-items-center gap-2 mt-2">
@@ -870,11 +869,17 @@ async function autoFillWithAI() {
                 as_ = adv.recommended_away_score;
                 w = adv.recommended_winner;
             } else if (pred) {
-                hs = Math.round(pred.predicted_home_goals);
-                as_ = Math.round(pred.predicted_away_goals);
-                if (hs > as_) w = "home";
-                else if (as_ > hs) w = "away";
-                else w = "draw";
+                hs = pred.recommended_home_score ?? Math.round(pred.predicted_home_goals);
+                as_ = pred.recommended_away_score ?? Math.round(pred.predicted_away_goals);
+                if (pred.recommended_winner) {
+                    w = pred.recommended_winner;
+                } else if (pred.home_win_pct >= pred.away_win_pct && pred.home_win_pct >= pred.draw_pct) {
+                    w = "home";
+                } else if (pred.away_win_pct >= pred.home_win_pct && pred.away_win_pct >= pred.draw_pct) {
+                    w = "away";
+                } else {
+                    w = "draw";
+                }
             } else {
                 return;
             }
@@ -1069,8 +1074,7 @@ function renderGuessCard(match, saved, scored, predRow) {
     let adviceHtml = "";
     if (adviceData) {
         const labels = { home: m.home_short, draw: "Draw", away: m.away_short };
-        const isDrawScore = adviceData.recommended_home_score === adviceData.recommended_away_score;
-        const adviceWinnerLabel = isDrawScore ? "Draw" : labels[adviceData.recommended_winner];
+        const adviceWinnerLabel = labels[adviceData.recommended_winner] || "Draw";
         const reasonsJson = adviceData.reasons ? encodeURIComponent(JSON.stringify(adviceData.reasons)) : "";
         const matchTitle = `${m.home_short} vs ${m.away_short}`;
         adviceHtml = `<div class="d-flex align-items-center gap-2 mt-2">
