@@ -43,6 +43,18 @@ ODDS_CACHE_TTL = 600  # 10 min to save quota
 ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 ESPN_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings"
 ESPN_SLUGS = {"laliga": "esp.1", "wc": "fifa.world"}
+WC_TEAM_STRENGTH = {
+    "ARG": 1410, "FRA": 1400, "ESP": 1390, "ENG": 1385, "BRA": 1380,
+    "POR": 1365, "NED": 1355, "BEL": 1340, "GER": 1335, "CRO": 1320,
+    "URU": 1315, "COL": 1305, "MAR": 1295, "USA": 1280, "SUI": 1275,
+    "JPN": 1270, "MEX": 1265, "SEN": 1260, "ECU": 1255, "AUT": 1250,
+    "NOR": 1240, "TUR": 1235, "SWE": 1230, "KOR": 1225, "CZE": 1220,
+    "CIV": 1215, "PAR": 1210, "IRN": 1205, "CAN": 1195, "AUS": 1190,
+    "SCO": 1185, "TUN": 1180, "ALG": 1175, "EGY": 1170, "GHA": 1165,
+    "QAT": 1150, "KSA": 1145, "BIH": 1140, "UZB": 1135, "COD": 1130,
+    "PAN": 1120, "RSA": 1110, "NZL": 1105, "IRQ": 1095, "CPV": 1090,
+    "JOR": 1080, "HAI": 1065, "CUW": 1045,
+}
 
 LEAGUES = {
     "pl": {"name": "Premier League", "short": "PL", "gw_label": "GW"},
@@ -62,11 +74,20 @@ OUTCOME_CALIBRATION = {
 }
 
 
-def _pick_recommended_winner(home_pct, draw_pct, away_pct, calibrate=True):
+def _wc_seed_strength(abbr):
+    return WC_TEAM_STRENGTH.get(str(abbr or "").upper(), 1120)
+
+
+def _wc_strength_bucket(base_strength):
+    return max(1, min(6, int(round((base_strength - 980) / 70))))
+
+
+def _pick_recommended_winner(home_pct, draw_pct, away_pct, calibrate=True, calibration=None):
     """Pick the betting outcome from calibrated probabilities, not rounded score."""
     scores = {"home": home_pct, "draw": draw_pct, "away": away_pct}
     if calibrate:
-        scores = {k: v * OUTCOME_CALIBRATION[k] for k, v in scores.items()}
+        factors = calibration or OUTCOME_CALIBRATION
+        scores = {k: v * factors[k] for k, v in scores.items()}
     return max(scores, key=scores.get)
 
 
@@ -83,6 +104,53 @@ def _align_score_to_winner(home_score, away_score, winner):
     elif winner == "away" and away_score <= home_score:
         away_score = home_score + 1
     return home_score, away_score
+
+
+def _scoreline_for_winner(lambda_home, lambda_away, winner, max_goals=5):
+    """Pick the most likely scoreline that matches the selected outcome."""
+    try:
+        lambda_home = max(float(lambda_home or 0), 0.0)
+        lambda_away = max(float(lambda_away or 0), 0.0)
+    except (TypeError, ValueError):
+        lambda_home = lambda_away = 0.0
+
+    best = (0, 0)
+    best_prob = -1.0
+    best_nonzero_draw = (1, 1)
+    best_nonzero_draw_prob = -1.0
+
+    for home_goals in range(max_goals + 1):
+        for away_goals in range(max_goals + 1):
+            if winner == "draw":
+                allowed = home_goals == away_goals
+            elif winner == "home":
+                allowed = home_goals > away_goals
+            else:
+                allowed = away_goals > home_goals
+            if not allowed:
+                continue
+
+            prob = _poisson_prob(lambda_home, home_goals) * _poisson_prob(lambda_away, away_goals)
+            if prob > best_prob:
+                best_prob = prob
+                best = (home_goals, away_goals)
+            if winner == "draw" and home_goals == away_goals and home_goals > 0 and prob > best_nonzero_draw_prob:
+                best_nonzero_draw_prob = prob
+                best_nonzero_draw = (home_goals, away_goals)
+
+    if winner == "draw" and best == (0, 0) and best_nonzero_draw_prob > best_prob * 0.72:
+        return best_nonzero_draw
+    if winner == "home" and best == (1, 0):
+        if lambda_home >= 1.65 and lambda_away <= 1.0:
+            return 2, 0
+        if lambda_home >= 1.45 and lambda_away >= 1.05:
+            return 2, 1
+    if winner == "away" and best == (0, 1):
+        if lambda_away >= 1.65 and lambda_home <= 1.0:
+            return 0, 2
+        if lambda_away >= 1.45 and lambda_home >= 1.05:
+            return 1, 2
+    return best
 
 
 def _recommended_prediction_from_probs(prediction):
@@ -1800,7 +1868,28 @@ def espn_build_team_map(league="laliga"):
         for s in entry.get("stats", []):
             stats_map[s["name"]] = s.get("value", 0)
         rank = len(teams) + 1
-        base_strength = 1400 - (rank - 1) * 30
+        if league == "wc":
+            base_strength = _wc_seed_strength(team.get("abbreviation", ""))
+            strength_fields = {
+                "strength": _wc_strength_bucket(base_strength),
+                "strength_overall_home": base_strength,
+                "strength_overall_away": base_strength,
+                "strength_attack_home": base_strength,
+                "strength_attack_away": base_strength,
+                "strength_defence_home": base_strength,
+                "strength_defence_away": base_strength,
+            }
+        else:
+            base_strength = 1400 - (rank - 1) * 30
+            strength_fields = {
+                "strength": max(1, 6 - rank // 4),
+                "strength_overall_home": base_strength + 30,
+                "strength_overall_away": base_strength - 30,
+                "strength_attack_home": base_strength + 40,
+                "strength_attack_away": base_strength - 20,
+                "strength_defence_home": base_strength + 20,
+                "strength_defence_away": base_strength - 40,
+            }
         teams[tid] = {
             "id": tid,
             "name": team.get("displayName", team.get("name", "")),
@@ -1808,13 +1897,7 @@ def espn_build_team_map(league="laliga"):
             "code": tid,
             "badge": badge,
             "placeholder": _espn_is_placeholder_team(team.get("displayName", team.get("name", ""))),
-            "strength": max(1, 6 - rank // 4),
-            "strength_overall_home": base_strength + 30,
-            "strength_overall_away": base_strength - 30,
-            "strength_attack_home": base_strength + 40,
-            "strength_attack_away": base_strength - 20,
-            "strength_defence_home": base_strength + 20,
-            "strength_defence_away": base_strength - 40,
+            **strength_fields,
         }
 
     # Fill from fixtures in case standings are incomplete
@@ -1828,6 +1911,27 @@ def espn_build_team_map(league="laliga"):
                 name = t.get("displayName", t.get("name", ""))
                 if tid and tid not in teams:
                     logo = t.get("logo", "")
+                    if league == "wc":
+                        base_strength = _wc_seed_strength(t.get("abbreviation", ""))
+                        strength_fields = {
+                            "strength": _wc_strength_bucket(base_strength),
+                            "strength_overall_home": base_strength,
+                            "strength_overall_away": base_strength,
+                            "strength_attack_home": base_strength,
+                            "strength_attack_away": base_strength,
+                            "strength_defence_home": base_strength,
+                            "strength_defence_away": base_strength,
+                        }
+                    else:
+                        strength_fields = {
+                            "strength": 3,
+                            "strength_overall_home": 1100,
+                            "strength_overall_away": 1050,
+                            "strength_attack_home": 1120,
+                            "strength_attack_away": 1060,
+                            "strength_defence_home": 1080,
+                            "strength_defence_away": 1030,
+                        }
                     teams[tid] = {
                         "id": tid,
                         "name": name,
@@ -1836,10 +1940,7 @@ def espn_build_team_map(league="laliga"):
                         "badge": logo,
                         "placeholder": _espn_is_placeholder_team(name),
                         "group": group if not _espn_is_placeholder_team(name) else None,
-                        "strength": 3,
-                        "strength_overall_home": 1100, "strength_overall_away": 1050,
-                        "strength_attack_home": 1120, "strength_attack_away": 1060,
-                        "strength_defence_home": 1080, "strength_defence_away": 1030,
+                        **strength_fields,
                     }
                 elif tid and group and tid in teams and not teams[tid].get("placeholder") and not teams[tid].get("group"):
                     teams[tid]["group"] = group
@@ -2099,7 +2200,7 @@ def league_compute_stats(team_id, league="pl", n=5, before_gw=None):
 
 
 def league_predict_match(home_id, away_id, gw, league="pl"):
-    """Unified prediction: uses existing predict_match for PL, same logic for La Liga."""
+    """Unified prediction: PL uses FPL data; ESPN leagues use local form plus score baselines."""
     if league == "pl":
         return predict_match(home_id, away_id, gw)
     team_map = league_get_team_map(league)
@@ -2126,14 +2227,20 @@ def league_predict_match(home_id, away_id, gw, league="pl"):
                             "result": "W" if gf > ga else "D" if gf == ga else "L"})
     h_all.sort(key=lambda x: x["gw"]); a_all.sort(key=lambda x: x["gw"])
     w = _load_weights(league)
+    neutral_site = league == "wc"
     home_form = home_stats["form_score"]; away_form = away_stats["form_score"]
-    h_str = (home_team.get("strength_attack_home", 1000) / max(away_team.get("strength_defence_away", 1000), 1)) * 50
-    a_str = (away_team.get("strength_attack_away", 1000) / max(home_team.get("strength_defence_home", 1000), 1)) * 50
+    h_ratio = home_team.get("strength_attack_home", 1000) / max(away_team.get("strength_defence_away", 1000), 1)
+    a_ratio = away_team.get("strength_attack_away", 1000) / max(home_team.get("strength_defence_home", 1000), 1)
+    if neutral_site:
+        h_ratio = h_ratio ** 1.45
+        a_ratio = a_ratio ** 1.45
+    h_str = h_ratio * 50
+    a_str = a_ratio * 50
     table_size = max(len(standings), 20)
     mid_pos = max(1, table_size // 2)
     h_pos_score = (table_size + 1 - pos_map.get(home_id, mid_pos)) / table_size * 100
     a_pos_score = (table_size + 1 - pos_map.get(away_id, mid_pos)) / table_size * 100
-    HOME_BOOST = 18
+    HOME_BOOST = 0 if neutral_site else 18
     h_streak = _streak_score(h_all, 5); a_streak = _streak_score(a_all, 5)
     h2h_data = {"home_wins": 0, "draws": 0, "away_wins": 0, "matches": 0}
     for f in all_fix:
@@ -2151,11 +2258,11 @@ def league_predict_match(home_id, away_id, gw, league="pl"):
                 if as_ > hs: h2h_data["home_wins"] += 1
                 elif as_ == hs: h2h_data["draws"] += 1
                 else: h2h_data["away_wins"] += 1
-    h2h_home = 55 if h2h_data["matches"] == 0 else (h2h_data["home_wins"] * 3 + h2h_data["draws"]) / max(h2h_data["matches"] * 3, 1) * 100
-    h2h_away = 45 if h2h_data["matches"] == 0 else (h2h_data["away_wins"] * 3 + h2h_data["draws"]) / max(h2h_data["matches"] * 3, 1) * 100
+    h2h_home = (50 if neutral_site else 55) if h2h_data["matches"] == 0 else (h2h_data["home_wins"] * 3 + h2h_data["draws"]) / max(h2h_data["matches"] * 3, 1) * 100
+    h2h_away = (50 if neutral_site else 45) if h2h_data["matches"] == 0 else (h2h_data["away_wins"] * 3 + h2h_data["draws"]) / max(h2h_data["matches"] * 3, 1) * 100
     h_split = _home_away_split(h_all, True); a_split = _home_away_split(a_all, False)
-    h_trend_gf = sum(m["gf"] for m in h_all[-3:]) / max(len(h_all[-3:]), 1) if h_all else 1.2
-    a_trend_gf = sum(m["gf"] for m in a_all[-3:]) / max(len(a_all[-3:]), 1) if a_all else 1.0
+    h_trend_gf = sum(m["gf"] for m in h_all[-3:]) / max(len(h_all[-3:]), 1) if h_all else (1.1 if neutral_site else 1.2)
+    a_trend_gf = sum(m["gf"] for m in a_all[-3:]) / max(len(a_all[-3:]), 1) if a_all else (1.1 if neutral_site else 1.0)
     h_draw_tend = _draw_tendency(h_all); a_draw_tend = _draw_tendency(a_all)
     h_cs = _clean_sheet_rate(h_all[-5:]); a_cs = _clean_sheet_rate(a_all[-5:])
     h_upset = _upset_potential(h_all, away_id, pos_map); a_upset = _upset_potential(a_all, home_id, pos_map)
@@ -2190,10 +2297,39 @@ def league_predict_match(home_id, away_id, gw, league="pl"):
                h_split["gf_avg"] * 0.2 + h_trend_gf * 0.1)
     pred_ag = (away_stats["goals_for"] / a_matches * 0.4 + home_stats["goals_against"] / h_matches * 0.3 +
                a_split["gf_avg"] * 0.2 + a_trend_gf * 0.1)
+    if neutral_site:
+        h_rating = (home_team.get("strength_attack_home", 1120) + home_team.get("strength_defence_home", 1120)) / 2
+        a_rating = (away_team.get("strength_attack_away", 1120) + away_team.get("strength_defence_away", 1120)) / 2
+        rating_gap = max(-320, min(320, h_rating - a_rating))
+        rating_share = max(0.28, min(0.72, 0.5 + rating_gap / 900))
+        factor_share = home_score / max(home_score + away_score, 1)
+        strength_share = rating_share * 0.75 + factor_share * 0.25
+        base_total_goals = 2.45 + min(abs(rating_gap) / 900, 0.35)
+        base_home = base_total_goals * strength_share
+        base_away = base_total_goals * (1 - strength_share)
+        h_data_weight = min(max(len(home_stats["matches"]), len(h_all)) / 3, 1)
+        a_data_weight = min(max(len(away_stats["matches"]), len(a_all)) / 3, 1)
+        pred_hg = pred_hg * h_data_weight + base_home * (1 - h_data_weight)
+        pred_ag = pred_ag * a_data_weight + base_away * (1 - a_data_weight)
+        pred_hg = max(pred_hg, 0.75)
+        pred_ag = max(pred_ag, 0.65)
     pred_hg = round(max(pred_hg, 0.2), 1); pred_ag = round(max(pred_ag, 0.2), 1)
+    winner_calibration = {"home": 1.0, "draw": 1.35, "away": 1.0} if neutral_site else None
+    recommended_winner = _pick_recommended_winner(
+        home_pct, draw_pct, away_pct, calibration=winner_calibration
+    )
+    recommended_home_score, recommended_away_score = _scoreline_for_winner(
+        pred_hg, pred_ag, recommended_winner
+    )
     return {
         "home_win_pct": home_pct, "draw_pct": draw_pct, "away_win_pct": away_pct,
         "predicted_home_goals": pred_hg, "predicted_away_goals": pred_ag,
+        "poisson_score": (recommended_home_score, recommended_away_score),
+        "recommended_winner": recommended_winner,
+        "recommended_home_score": recommended_home_score,
+        "recommended_away_score": recommended_away_score,
+        "neutral_site": neutral_site,
+        "score_model": "wc_tournament_baseline" if neutral_site else "league_form_poisson",
         "home_form": home_stats, "away_form": away_stats,
     }
 
@@ -2853,22 +2989,8 @@ def api_best_bets_score(gw):
             if score_ok:
                 score_ok_count += 1
 
-            # AI recommendation: use same logic as api_guess_advice (strict >) so table matches "Advice"
-            if pred["home_win_pct"] > pred["away_win_pct"] and pred["home_win_pct"] > pred["draw_pct"]:
-                ai_winner = "home"
-            elif pred["away_win_pct"] > pred["home_win_pct"] and pred["away_win_pct"] > pred["draw_pct"]:
-                ai_winner = "away"
-            else:
-                ai_winner = "draw"
-
-            ai_pred_home = int(round(float(pred.get("predicted_home_goals", 0))))
-            ai_pred_away = int(round(float(pred.get("predicted_away_goals", 0))))
-            # If predicted score is a draw (e.g. 2-2), AI recommendation counts as "draw" for ✓/✗
-            ai_winner_for_ok = "draw" if (ai_pred_home == ai_pred_away) else ai_winner
-            ai_winner_ok = bool(actual_winner and ai_winner_for_ok == actual_winner)
-            # Explicit: AI said draw but actual was not draw → must be ✗ (e.g. FUL 2-1)
-            if ai_pred_home == ai_pred_away and actual_winner and actual_winner != "draw":
-                ai_winner_ok = False
+            ai_winner, ai_pred_home, ai_pred_away = _recommended_prediction_from_probs(pred)
+            ai_winner_ok = bool(actual_winner and ai_winner == actual_winner)
             if ai_winner_ok:
                 ai_winner_ok_count += 1
 
@@ -2962,8 +3084,11 @@ def build_reasoning(m, pred, rec_winner):
             f"{away_name} scores {a_avg_gf}, concedes {a_avg_ga}"
         )
 
-    # Home advantage
-    reasons.append(f"{home_name} plays at HOME — home advantage boost applied")
+    # Venue model
+    if pred.get("neutral_site"):
+        reasons.append("Neutral-site tournament model: reduced home advantage and World Cup score baseline")
+    else:
+        reasons.append(f"{home_name} plays at HOME - home advantage boost applied")
 
     # Win probability
     reasons.append(
@@ -2973,10 +3098,11 @@ def build_reasoning(m, pred, rec_winner):
 
     # Conclusion
     winner_labels = {"home": home_name, "draw": "Draw", "away": away_name}
-    reasons.append(
-        f"Prediction: {winner_labels[rec_winner]} "
-        f"({round(pred['predicted_home_goals'])}-{round(pred['predicted_away_goals'])})"
-    )
+    rec_home = pred.get("recommended_home_score")
+    rec_away = pred.get("recommended_away_score")
+    if rec_home is None or rec_away is None:
+        _, rec_home, rec_away = _recommended_prediction_from_probs(pred)
+    reasons.append(f"Prediction: {winner_labels[rec_winner]} ({rec_home}-{rec_away})")
 
     return reasons
 

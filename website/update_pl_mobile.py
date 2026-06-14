@@ -27,6 +27,22 @@ ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/sc
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
 ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
 WC_DATE_RANGE = "20260611-20260719"
+WC_TEAM_STRENGTH = {
+    "ARG": 1410, "FRA": 1400, "ESP": 1390, "ENG": 1385, "BRA": 1380,
+    "POR": 1365, "NED": 1355, "BEL": 1340, "GER": 1335, "CRO": 1320,
+    "URU": 1315, "COL": 1305, "MAR": 1295, "USA": 1280, "SUI": 1275,
+    "JPN": 1270, "MEX": 1265, "SEN": 1260, "ECU": 1255, "AUT": 1250,
+    "NOR": 1240, "TUR": 1235, "SWE": 1230, "KOR": 1225, "CZE": 1220,
+    "CIV": 1215, "PAR": 1210, "IRN": 1205, "CAN": 1195, "AUS": 1190,
+    "SCO": 1185, "TUN": 1180, "ALG": 1175, "EGY": 1170, "GHA": 1165,
+    "QAT": 1150, "KSA": 1145, "BIH": 1140, "UZB": 1135, "COD": 1130,
+    "PAN": 1120, "RSA": 1110, "NZL": 1105, "IRQ": 1095, "CPV": 1090,
+    "JOR": 1080, "HAI": 1065, "CUW": 1045,
+}
+
+
+def wc_seed_strength(abbr):
+    return WC_TEAM_STRENGTH.get(str(abbr or "").upper(), 1120)
 
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
@@ -356,6 +372,7 @@ try:
                 wc_name.startswith("Quarterfinal ") or wc_name.startswith("Semifinal ") or \
                 wc_name.startswith("Third Place ")
             if tid and tid not in wc_teams:
+                wc_rating = 1080 if wc_ph else wc_seed_strength(ct.get("abbreviation", ""))
                 wc_teams[tid] = {
                     "id": tid,
                     "n": wc_name,
@@ -364,7 +381,7 @@ try:
                     "b": ct.get("logo", ""),
                     "ph": wc_ph,
                     "grp": wc_group if not wc_ph else None,
-                    "sah": 1120, "sdh": 1080, "saa": 1080, "sda": 1040,
+                    "sah": wc_rating, "sdh": wc_rating, "saa": wc_rating, "sda": wc_rating,
                 }
             elif tid and wc_group and not wc_ph and not wc_teams[tid].get("grp"):
                 wc_teams[tid]["grp"] = wc_group
