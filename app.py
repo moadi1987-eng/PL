@@ -1673,6 +1673,12 @@ def _espn_is_placeholder_team(name):
     )
 
 
+def _espn_group_from_note(note):
+    import re
+    m = re.search(r"Group\s+([A-L])", note or "")
+    return m.group(1) if m else None
+
+
 def espn_normalize_fixtures(events):
     """Convert ESPN events to FPL-like fixture list, sorted by date."""
     events_sorted = sorted(events, key=lambda e: e.get("date", ""))
@@ -1682,6 +1688,7 @@ def espn_normalize_fixtures(events):
         if not comps:
             continue
         comp = comps[0]
+        group = _espn_group_from_note(comp.get("altGameNote", ""))
         competitors = comp.get("competitors", [])
         if len(competitors) != 2:
             continue
@@ -1725,6 +1732,7 @@ def espn_normalize_fixtures(events):
             "started": started,
             "kickoff_time": ev.get("date", ""),
             "minutes": minutes,
+            "group": group,
         })
     return fixtures
 
@@ -1813,11 +1821,12 @@ def espn_build_team_map(league="laliga"):
     events = espn_get_all_events(league)
     for ev in events:
         for comp in ev.get("competitions", []):
+            group = _espn_group_from_note(comp.get("altGameNote", "")) if league == "wc" else None
             for c in comp.get("competitors", []):
                 t = c.get("team", {})
                 tid = int(t.get("id", 0))
+                name = t.get("displayName", t.get("name", ""))
                 if tid and tid not in teams:
-                    name = t.get("displayName", t.get("name", ""))
                     logo = t.get("logo", "")
                     teams[tid] = {
                         "id": tid,
@@ -1826,11 +1835,14 @@ def espn_build_team_map(league="laliga"):
                         "code": tid,
                         "badge": logo,
                         "placeholder": _espn_is_placeholder_team(name),
+                        "group": group if not _espn_is_placeholder_team(name) else None,
                         "strength": 3,
                         "strength_overall_home": 1100, "strength_overall_away": 1050,
                         "strength_attack_home": 1120, "strength_attack_away": 1060,
                         "strength_defence_home": 1080, "strength_defence_away": 1030,
                     }
+                elif tid and group and tid in teams and not teams[tid].get("placeholder") and not teams[tid].get("group"):
+                    teams[tid]["group"] = group
     _cache[key] = {"data": teams, "ts": time.time()}
     return teams
 
@@ -1944,9 +1956,62 @@ def league_fixtures_for_gw(gw, league="pl", live=False):
                 "kickoff_time": f.get("kickoff_time", ""),
                 "home_id": f.get("team_h"),
                 "away_id": f.get("team_a"),
+                "group": f.get("group"),
             })
         return matches
     return fixtures_for_gameweek(gw, live)
+
+
+def league_build_group_standings(league="pl", live=False, up_to_gw=None):
+    if league != "wc":
+        return {}
+    all_fix = league_get_all_fixtures(league, live)
+    team_map = league_get_team_map(league)
+    groups = {}
+    for tid, team in team_map.items():
+        group = team.get("group")
+        if team.get("placeholder") or not group:
+            continue
+        groups.setdefault(group, {})
+        groups[group][tid] = {"team": team, "played": 0, "won": 0, "drawn": 0,
+                              "lost": 0, "gf": 0, "ga": 0, "gd": 0, "points": 0}
+    for f in all_fix:
+        group = f.get("group")
+        if not group or group not in groups:
+            continue
+        if up_to_gw and f.get("event") and f["event"] > up_to_gw:
+            continue
+        has_score = f.get("team_h_score") is not None
+        is_relevant = f.get("finished") or (live and f.get("started") and has_score)
+        if not is_relevant or not has_score:
+            continue
+        h, a = f["team_h"], f["team_a"]
+        if h not in groups[group] or a not in groups[group]:
+            continue
+        hs, as_ = f["team_h_score"], f["team_a_score"]
+        home = groups[group][h]
+        away = groups[group][a]
+        home["played"] += 1; home["gf"] += hs; home["ga"] += as_
+        away["played"] += 1; away["gf"] += as_; away["ga"] += hs
+        if hs > as_:
+            home["won"] += 1; home["points"] += 3; away["lost"] += 1
+        elif hs == as_:
+            home["drawn"] += 1; home["points"] += 1
+            away["drawn"] += 1; away["points"] += 1
+        else:
+            away["won"] += 1; away["points"] += 3; home["lost"] += 1
+    out = {}
+    for group, rows_by_id in groups.items():
+        rows = []
+        for row in rows_by_id.values():
+            row["gd"] = row["gf"] - row["ga"]
+            rows.append(row)
+        rows.sort(key=lambda x: (x["points"], x["gd"], x["gf"]), reverse=True)
+        for i, row in enumerate(rows):
+            row["position"] = i + 1
+            row["group"] = group
+        out[group] = rows
+    return out
 
 
 def league_build_standings(league="pl", live=False, up_to_gw=None):
@@ -2362,7 +2427,8 @@ def api_teams():
     try:
         league = _get_league()
         team_map = league_get_team_map(league)
-        teams = sorted(team_map.values(), key=lambda t: t["name"])
+        teams = [t for t in team_map.values() if not (league == "wc" and t.get("placeholder"))]
+        teams = sorted(teams, key=lambda t: t["name"])
         return jsonify({"teams": teams, "league": league})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -2400,7 +2466,10 @@ def api_standings():
         live = request.args.get("live", "0") == "1"
         gw = request.args.get("gw", None, type=int)
         standings = league_build_standings(league, live, gw)
-        return jsonify({"standings": standings})
+        payload = {"standings": standings}
+        if league == "wc":
+            payload["groups"] = league_build_group_standings(league, live, gw)
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

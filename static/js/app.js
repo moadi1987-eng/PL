@@ -248,6 +248,38 @@ async function loadStandings() {
         teamsData.teams.forEach(t => teamMap[t.id] = t);
 
         const rows = standingsData.standings;
+        if (STATE.league === "wc" && standingsData.groups) {
+            const groupKeys = Object.keys(standingsData.groups).sort();
+            body.innerHTML = groupKeys.map(group => {
+                const groupRows = standingsData.groups[group] || [];
+                const header = `<tr class="wc-group-row"><td colspan="11">Group ${group}</td></tr>`;
+                const htmlRows = groupRows.map(r => {
+                    const posClass = r.position <= 2 ? "pos-champions" : r.position === 3 ? "pos-cl" : "";
+                    return `<tr>
+                        <td class="pos-cell ${posClass}">${r.position}</td>
+                        <td>
+                            <div class="team-cell">
+                                <img src="${r.team.badge || ""}" alt="" loading="lazy" onerror="this.style.display='none'">
+                                <span>${r.team.name}</span>
+                            </div>
+                        </td>
+                        <td>${r.played}</td>
+                        <td>${r.won}</td>
+                        <td>${r.drawn}</td>
+                        <td>${r.lost}</td>
+                        <td class="d-none d-sm-table-cell">${r.gf}</td>
+                        <td class="d-none d-sm-table-cell">${r.ga}</td>
+                        <td>${r.gd > 0 ? "+" + r.gd : r.gd}</td>
+                        <td class="pts-cell">${r.points}</td>
+                        <td class="d-none d-md-table-cell"></td>
+                    </tr>`;
+                }).join("");
+                return header + htmlRows;
+            }).join("");
+            standingsLoaded = true;
+            return;
+        }
+
         const formPromises = rows.map(r =>
             api(`/api/team/${r.team.id}/form?n=5&before_gw=${STATE.selectedGW + 1}`).catch(() => null)
         );
@@ -676,6 +708,8 @@ function applyLeagueTheme(league) {
     STATE.gwLabel = theme.gwLabel;
     const brand = $("#brandText");
     if (brand) brand.textContent = theme.brand;
+    const standingsTitle = $("#standingsTitle");
+    if (standingsTitle) standingsTitle.innerHTML = `<i class="bi bi-list-ol me-2"></i>${league === "wc" ? "Group Tables" : "League Table"}`;
     document.body.classList.remove("laliga-theme", "worldcup-theme");
     if (theme.cssClass) document.body.classList.add(theme.cssClass);
     $$("#leagueToggle .league-btn").forEach(b => {

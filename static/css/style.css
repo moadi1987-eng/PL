@@ -245,6 +245,14 @@ body > * { position: relative; z-index: 1; }
 .worldcup-theme .match-card .score-box .score-num.winner { color: #f7c948; }
 .worldcup-theme .guess-card.result-correct { border-color: #f7c948; }
 .worldcup-theme .guess-result-badge.correct { background: #f7c948; color: #06162b; }
+.wc-group-row td {
+    background: rgba(247,201,72,.12) !important;
+    color: #f7c948 !important;
+    font-size: .72rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+}
 
 /* ── Navbar ── */
 #mainNav {

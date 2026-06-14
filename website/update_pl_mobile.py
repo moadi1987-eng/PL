@@ -338,6 +338,8 @@ try:
         competitors = comp.get("competitors", [])
         if len(competitors) != 2:
             continue
+        group_match = _wc_re.search(r"Group\s+([A-L])", comp.get("altGameNote", "") or "")
+        wc_group = group_match.group(1) if group_match else None
         home = away = None
         for c in competitors:
             if c.get("homeAway") == "home":
@@ -361,8 +363,11 @@ try:
                     "c": tid,
                     "b": ct.get("logo", ""),
                     "ph": wc_ph,
+                    "grp": wc_group if not wc_ph else None,
                     "sah": 1120, "sdh": 1080, "saa": 1080, "sda": 1040,
                 }
+            elif tid and wc_group and not wc_ph and not wc_teams[tid].get("grp"):
+                wc_teams[tid]["grp"] = wc_group
 
         status = comp.get("status", {}).get("type", {})
         state = status.get("state", "pre")
@@ -398,6 +403,7 @@ try:
             "hs": hs, "as": as_score,
             "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
             "sx": status.get("name", ""),
+            "grp": wc_group,
         })
 
     max_wc_day = max((f["e"] for f in wc_fixtures), default=1)

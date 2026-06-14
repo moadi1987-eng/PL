@@ -585,6 +585,8 @@ function _fLL(){
     evts.forEach(function(ev){
       var comps=ev.competitions||[];if(!comps.length)return;
       var comp=comps[0];var cpts=comp.competitors||[];if(cpts.length!==2)return;
+      var gm=(comp.altGameNote||'').match(/Group\s+([A-L])/);
+      var grp=gm?gm[1]:null;
       var hm=null,aw=null;
       cpts.forEach(function(c){if(c.homeAway==='home')hm=c;else aw=c});
       if(!hm||!aw)return;
@@ -638,7 +640,8 @@ function _fWC(){
           var nm=ct.displayName||ct.name||'';
           var ph=nm.indexOf('Group ')===0||nm.indexOf('Round ')===0||nm.indexOf('Quarterfinal ')===0||nm.indexOf('Semifinal ')===0||nm.indexOf('Third Place ')===0;
           if(ctid&&!tm[ctid])tm[ctid]={id:ctid,n:nm,s:ct.abbreviation||'???',
-            c:ctid,b:ct.logo||'',ph:ph,sah:1120,sdh:1080,saa:1080,sda:1040};
+            c:ctid,b:ct.logo||'',ph:ph,grp:ph?null:grp,sah:1120,sdh:1080,saa:1080,sda:1040};
+          else if(ctid&&grp&&!ph&&tm[ctid]&&!tm[ctid].grp)tm[ctid].grp=grp;
         });
       });
     });
@@ -663,7 +666,7 @@ function _fWC(){
       var day=(ev.date||'').slice(0,10)||('m'+fix.length);
       if(!days[day])days[day]=Object.keys(days).length+1;
       fix.push({id:+(ev.id||0),e:days[day],h:+(hm.team.id),a:+(aw.team.id),
-        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||''});
+        hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||'',grp:grp});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
     var gws=_rebuildGW(fix);
@@ -841,6 +844,37 @@ function sReas(title,reasons){$("rtitle").textContent=title;var h='<div class="r
 function cReas(){$("rmod").classList.remove("show")}
 
 /* ══ RESULTS ══ */
+function wcGroupTables(upToGW){
+  var groups={};
+  Object.keys(D.tm).forEach(function(k){
+    var t=D.tm[k];if(!t||t.ph||!t.grp)return;
+    if(!groups[t.grp])groups[t.grp]=[];
+    groups[t.grp].push({t:t,p:0,w:0,d:0,l:0,gf:0,ga:0,gd:0,pts:0,fm:[]});
+  });
+  var byId={};Object.keys(groups).forEach(function(g){groups[g].forEach(function(r){byId[r.t.id]=r})});
+  D.fx.forEach(function(f){
+    if(!f.grp||!f.fin||f.hs==null)return;if(upToGW&&f.e>upToGW)return;
+    var h=byId[f.h],a=byId[f.a];if(!h||!a)return;
+    h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
+    if(f.hs>f.as){h.w++;h.pts+=3;a.l++;h.fm.push("W");a.fm.push("L")}
+    else if(f.hs===f.as){h.d++;h.pts++;a.d++;a.pts++;h.fm.push("D");a.fm.push("D")}
+    else{a.w++;a.pts+=3;h.l++;h.fm.push("L");a.fm.push("W")}
+  });
+  Object.keys(groups).forEach(function(g){groups[g].forEach(function(r){r.gd=r.gf-r.ga;r.fm=r.fm.slice(-5)});groups[g].sort(function(a,b){return b.pts-a.pts||b.gd-a.gd||b.gf-a.gf||a.t.s.localeCompare(b.t.s)})});
+  return groups;
+}
+function rWCGroups(){
+  var groups=wcGroupTables(D.sel),keys=Object.keys(groups).sort();
+  if(!keys.length)return'<div class="emp">No World Cup groups yet</div>';
+  var h='<div class="sec" style="margin-top:.6rem">Group Tables</div>';
+  keys.forEach(function(g){
+    h+='<div class="sec" style="font-size:.72rem;margin:.45rem 0 .2rem;color:var(--cy)">Group '+g+'</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
+    groups[g].forEach(function(r,i){var p=i+1,pc=p<=2?"pch":p===3?"pcl":"";var fm="";r.fm.forEach(function(f){fm+='<span class="fd '+f+'">'+f+'</span>'});
+      h+='<tr><td class="'+pc+'">'+p+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span></div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
+    h+='</tbody></table></div>';
+  });
+  return h;
+}
 function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl||"GW")+D.sel+'</div>';
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
@@ -849,6 +883,7 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
     var tag=isLive?'<span class="labs"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span></span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+'</div>'});
+  if(D.league==="wc"){h+=rWCGroups();c.innerHTML=h;return}
   h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
   D.st.forEach(function(r,i){var p=i+1,pc=p<=1?"pch":p<=4?"pcl":p>=18?"prl":"";var fm="";r.fm.forEach(function(f){fm+='<span class="fd '+f+'">'+f+'</span>'});
     h+='<tr><td class="'+pc+'">'+p+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span></div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
