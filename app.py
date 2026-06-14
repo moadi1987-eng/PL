@@ -42,11 +42,12 @@ ODDS_CACHE_TTL = 600  # 10 min to save quota
 
 ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 ESPN_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/soccer/{slug}/standings"
-ESPN_SLUGS = {"laliga": "esp.1"}
+ESPN_SLUGS = {"laliga": "esp.1", "wc": "fifa.world"}
 
 LEAGUES = {
     "pl": {"name": "Premier League", "short": "PL", "gw_label": "GW"},
     "laliga": {"name": "La Liga", "short": "LL", "gw_label": "MD"},
+    "wc": {"name": "World Cup", "short": "WC", "gw_label": "Day"},
 }
 
 _cache = {}
@@ -1598,7 +1599,9 @@ def predict_match(home_id, away_id, current_gw):
 
 # ─── ESPN / La Liga Data Layer ───
 
-def _espn_season_dates():
+def _espn_season_dates(league="laliga"):
+    if league == "wc":
+        return "20260611-20260719"
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     start_year = now.year if now.month >= 7 else now.year - 1
@@ -1608,24 +1611,14 @@ def _espn_season_dates():
 ESPN_LIVE_CACHE_TTL = 60
 
 
-@cached(lambda: "espn_laliga_events")
-def espn_get_all_events():
-    slug = ESPN_SLUGS["laliga"]
+def espn_get_all_events(league="laliga"):
+    key = f"espn_{league}_events"
+    cached = _cache.get(key)
+    if cached and time.time() - cached["ts"] < CACHE_TTL:
+        return cached["data"]
+    slug = ESPN_SLUGS[league]
     url = ESPN_SCOREBOARD_URL.format(slug=slug)
-    resp = requests.get(url, params={"dates": _espn_season_dates(), "limit": "1000"},
-                        headers={"User-Agent": "PL-Dashboard/1.0"}, timeout=60)
-    resp.raise_for_status()
-    return resp.json().get("events", [])
-
-
-def espn_get_all_events_live():
-    key = "espn_laliga_events"
-    now = time.time()
-    if key in _cache and now - _cache[key]["ts"] < ESPN_LIVE_CACHE_TTL:
-        return _cache[key]["data"]
-    slug = ESPN_SLUGS["laliga"]
-    url = ESPN_SCOREBOARD_URL.format(slug=slug)
-    resp = requests.get(url, params={"dates": _espn_season_dates(), "limit": "1000"},
+    resp = requests.get(url, params={"dates": _espn_season_dates(league), "limit": "1000"},
                         headers={"User-Agent": "PL-Dashboard/1.0"}, timeout=60)
     resp.raise_for_status()
     events = resp.json().get("events", [])
@@ -1633,13 +1626,33 @@ def espn_get_all_events_live():
     return events
 
 
-@cached(lambda: "espn_laliga_standings")
-def espn_get_standings_raw():
-    slug = ESPN_SLUGS["laliga"]
+def espn_get_all_events_live(league="laliga"):
+    key = f"espn_{league}_events"
+    now = time.time()
+    if key in _cache and now - _cache[key]["ts"] < ESPN_LIVE_CACHE_TTL:
+        return _cache[key]["data"]
+    slug = ESPN_SLUGS[league]
+    url = ESPN_SCOREBOARD_URL.format(slug=slug)
+    resp = requests.get(url, params={"dates": _espn_season_dates(league), "limit": "1000"},
+                        headers={"User-Agent": "PL-Dashboard/1.0"}, timeout=60)
+    resp.raise_for_status()
+    events = resp.json().get("events", [])
+    _cache[key] = {"data": events, "ts": time.time()}
+    return events
+
+
+def espn_get_standings_raw(league="laliga"):
+    key = f"espn_{league}_standings"
+    cached = _cache.get(key)
+    if cached and time.time() - cached["ts"] < CACHE_TTL:
+        return cached["data"]
+    slug = ESPN_SLUGS[league]
     url = ESPN_STANDINGS_URL.format(slug=slug)
     resp = requests.get(url, headers={"User-Agent": "PL-Dashboard/1.0"}, timeout=20)
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    _cache[key] = {"data": data, "ts": time.time()}
+    return data
 
 
 def _espn_parse_competitor(comp_list):
@@ -1650,6 +1663,14 @@ def _espn_parse_competitor(comp_list):
         else:
             away = c
     return home, away
+
+
+def _espn_is_placeholder_team(name):
+    return bool(name) and (
+        name.startswith("Group ") or name.startswith("Round ") or
+        name.startswith("Quarterfinal ") or name.startswith("Semifinal ") or
+        name.startswith("Third Place ")
+    )
 
 
 def espn_normalize_fixtures(events):
@@ -1708,47 +1729,55 @@ def espn_normalize_fixtures(events):
     return fixtures
 
 
-def espn_assign_matchdays(fixtures):
-    """Assign matchday numbers by grouping every 10 consecutive fixtures."""
+def espn_assign_matchdays(fixtures, league="laliga"):
+    """Assign matchday numbers for ESPN-backed competitions."""
+    if league == "wc":
+        days = {}
+        for f in fixtures:
+            day = (f.get("kickoff_time") or "")[:10] or f"match-{len(days) + 1}"
+            if day not in days:
+                days[day] = len(days) + 1
+            f["event"] = days[day]
+        return fixtures
     for i, f in enumerate(fixtures):
         f["event"] = (i // 10) + 1
     return fixtures
 
 
-def espn_get_all_fixtures():
-    key = "espn_laliga_fixtures"
+def espn_get_all_fixtures(league="laliga"):
+    key = f"espn_{league}_fixtures"
     now = time.time()
-    events_key = "espn_laliga_events"
+    events_key = f"espn_{league}_events"
     events_ts = _cache.get(events_key, {}).get("ts", 0)
     cached = _cache.get(key)
     if cached and cached["ts"] >= events_ts:
         return cached["data"]
-    events = espn_get_all_events()
-    fixtures = espn_assign_matchdays(espn_normalize_fixtures(events))
+    events = espn_get_all_events(league)
+    fixtures = espn_assign_matchdays(espn_normalize_fixtures(events), league)
     _cache[key] = {"data": fixtures, "ts": time.time()}
     return fixtures
 
 
-def espn_get_all_fixtures_live():
-    key = "espn_laliga_fixtures_live"
+def espn_get_all_fixtures_live(league="laliga"):
+    key = f"espn_{league}_fixtures_live"
     now = time.time()
-    events_key = "espn_laliga_events"
+    events_key = f"espn_{league}_events"
     events_ts = _cache.get(events_key, {}).get("ts", 0)
     cached = _cache.get(key)
     if cached and cached["ts"] >= events_ts:
         return cached["data"]
-    events = espn_get_all_events_live()
-    fixtures = espn_assign_matchdays(espn_normalize_fixtures(events))
+    events = espn_get_all_events_live(league)
+    fixtures = espn_assign_matchdays(espn_normalize_fixtures(events), league)
     _cache[key] = {"data": fixtures, "ts": time.time()}
     return fixtures
 
 
-def espn_build_team_map():
-    key = "espn_laliga_team_map"
+def espn_build_team_map(league="laliga"):
+    key = f"espn_{league}_team_map"
     if key in _cache and time.time() - _cache[key]["ts"] < CACHE_TTL:
         return _cache[key]["data"]
     try:
-        standings = espn_get_standings_raw()
+        standings = espn_get_standings_raw(league)
         children = standings.get("children", [])
         entries = children[0].get("standings", {}).get("entries", []) if children else []
     except Exception:
@@ -1770,6 +1799,7 @@ def espn_build_team_map():
             "short_name": team.get("abbreviation", "???"),
             "code": tid,
             "badge": badge,
+            "placeholder": _espn_is_placeholder_team(team.get("displayName", team.get("name", ""))),
             "strength": max(1, 6 - rank // 4),
             "strength_overall_home": base_strength + 30,
             "strength_overall_away": base_strength - 30,
@@ -1780,20 +1810,22 @@ def espn_build_team_map():
         }
 
     # Fill from fixtures in case standings are incomplete
-    events = espn_get_all_events()
+    events = espn_get_all_events(league)
     for ev in events:
         for comp in ev.get("competitions", []):
             for c in comp.get("competitors", []):
                 t = c.get("team", {})
                 tid = int(t.get("id", 0))
                 if tid and tid not in teams:
+                    name = t.get("displayName", t.get("name", ""))
                     logo = t.get("logo", "")
                     teams[tid] = {
                         "id": tid,
-                        "name": t.get("displayName", t.get("name", "")),
+                        "name": name,
                         "short_name": t.get("abbreviation", "???"),
                         "code": tid,
                         "badge": logo,
+                        "placeholder": _espn_is_placeholder_team(name),
                         "strength": 3,
                         "strength_overall_home": 1100, "strength_overall_away": 1050,
                         "strength_attack_home": 1120, "strength_attack_away": 1060,
@@ -1803,9 +1835,9 @@ def espn_build_team_map():
     return teams
 
 
-def espn_get_current_matchday():
+def espn_get_current_matchday(league="laliga"):
     from datetime import datetime, timezone
-    fixtures = espn_get_all_fixtures()
+    fixtures = espn_get_all_fixtures(league)
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
@@ -1825,18 +1857,19 @@ def espn_get_current_matchday():
     return current_md
 
 
-def espn_get_gameweeks_info():
-    fixtures = espn_get_all_fixtures()
+def espn_get_gameweeks_info(league="laliga"):
+    fixtures = espn_get_all_fixtures(league)
     max_md = max((f.get("event", 0) for f in fixtures), default=38)
-    current_md = espn_get_current_matchday()
+    current_md = espn_get_current_matchday(league)
     gws = []
+    label = LEAGUES.get(league, LEAGUES["laliga"]).get("gw_label", "MD")
     for md in range(1, max_md + 1):
         md_fixtures = [f for f in fixtures if f.get("event") == md]
         all_finished = all(f.get("finished") for f in md_fixtures) if md_fixtures else False
         first_ko = min((f.get("kickoff_time", "") for f in md_fixtures), default="")
         gws.append({
             "id": md,
-            "name": f"Matchday {md}",
+            "name": f"{label} {md}",
             "finished": all_finished,
             "is_current": md == current_md,
             "is_next": md == current_md + 1,
@@ -1850,35 +1883,36 @@ def espn_get_gameweeks_info():
 def _get_league(req=None):
     if req is None:
         req = request
-    return req.args.get("league", "pl")
+    league = req.args.get("league", "pl")
+    return league if league in LEAGUES else "pl"
 
 
 def league_get_team_map(league="pl"):
-    if league == "laliga":
-        return espn_build_team_map()
+    if league in ESPN_SLUGS:
+        return espn_build_team_map(league)
     return build_team_map()
 
 
 def league_get_all_fixtures(league="pl", live=False):
-    if league == "laliga":
-        return espn_get_all_fixtures_live() if live else espn_get_all_fixtures()
+    if league in ESPN_SLUGS:
+        return espn_get_all_fixtures_live(league) if live else espn_get_all_fixtures(league)
     return get_all_fixtures_live() if live else get_all_fixtures()
 
 
 def league_get_current_gw(league="pl"):
-    if league == "laliga":
-        return espn_get_current_matchday()
+    if league in ESPN_SLUGS:
+        return espn_get_current_matchday(league)
     return get_current_gameweek()
 
 
 def league_get_gameweeks(league="pl"):
-    if league == "laliga":
-        return espn_get_gameweeks_info()
+    if league in ESPN_SLUGS:
+        return espn_get_gameweeks_info(league)
     return get_gameweeks_info()
 
 
 def league_fixtures_for_gw(gw, league="pl", live=False):
-    if league == "laliga":
+    if league in ESPN_SLUGS:
         from datetime import datetime, timezone
         all_fix = league_get_all_fixtures(league, live)
         team_map = league_get_team_map(league)
@@ -1916,11 +1950,13 @@ def league_fixtures_for_gw(gw, league="pl", live=False):
 
 
 def league_build_standings(league="pl", live=False, up_to_gw=None):
-    if league == "laliga":
+    if league in ESPN_SLUGS:
         all_fix = league_get_all_fixtures(league, live)
         team_map = league_get_team_map(league)
         table = {}
-        for tid in team_map:
+        for tid, team in team_map.items():
+            if league == "wc" and team.get("placeholder"):
+                continue
             table[tid] = {"team": team_map[tid], "played": 0, "won": 0, "drawn": 0,
                           "lost": 0, "gf": 0, "ga": 0, "gd": 0, "points": 0}
         for f in all_fix:
@@ -2028,8 +2064,10 @@ def league_predict_match(home_id, away_id, gw, league="pl"):
     home_form = home_stats["form_score"]; away_form = away_stats["form_score"]
     h_str = (home_team.get("strength_attack_home", 1000) / max(away_team.get("strength_defence_away", 1000), 1)) * 50
     a_str = (away_team.get("strength_attack_away", 1000) / max(home_team.get("strength_defence_home", 1000), 1)) * 50
-    h_pos_score = (21 - pos_map.get(home_id, 10)) / 20 * 100
-    a_pos_score = (21 - pos_map.get(away_id, 10)) / 20 * 100
+    table_size = max(len(standings), 20)
+    mid_pos = max(1, table_size // 2)
+    h_pos_score = (table_size + 1 - pos_map.get(home_id, mid_pos)) / table_size * 100
+    a_pos_score = (table_size + 1 - pos_map.get(away_id, mid_pos)) / table_size * 100
     HOME_BOOST = 18
     h_streak = _streak_score(h_all, 5); a_streak = _streak_score(a_all, 5)
     h2h_data = {"home_wins": 0, "draws": 0, "away_wins": 0, "matches": 0}
@@ -2098,6 +2136,8 @@ def league_predict_match(home_id, away_id, gw, league="pl"):
 # ─── League-aware Storage ───
 
 def _league_file(base_path, league):
+    if league not in LEAGUES:
+        league = "pl"
     if league == "pl":
         return base_path
     name, ext = os.path.splitext(base_path)

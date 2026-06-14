@@ -83,6 +83,10 @@ body > * { position: relative; z-index: 1; }
     background: var(--ll-orange);
     color: #fff;
 }
+.worldcup-theme .league-btn.active {
+    background: #f7c948;
+    color: #06162b;
+}
 
 /* ── La Liga Theme ── */
 .laliga-theme {
@@ -168,6 +172,79 @@ body > * { position: relative; z-index: 1; }
 .laliga-theme .match-card .score-box .score-num.winner { color: #ff6b35; }
 .laliga-theme .guess-card.result-correct { border-color: #ff6b35; }
 .laliga-theme .guess-result-badge.correct { background: #ff6b35; color: #fff; }
+
+/* ── World Cup Theme ── */
+.worldcup-theme {
+    --pl-purple: #081f3d;
+    --pl-purple-light: #0d315f;
+    --pl-green: #2adf7f;
+    --pl-pink: #d4213d;
+    --pl-cyan: #f7c948;
+    --pl-dark: #06162b;
+    --pl-card: #0c2444;
+    --pl-card-hover: #14355f;
+}
+.worldcup-theme #mainNav {
+    background: linear-gradient(135deg, #081f3d 0%, #123f78 100%);
+    border-bottom-color: #f7c948;
+}
+.worldcup-theme .brand-text {
+    background: linear-gradient(90deg, #f7c948, #2adf7f);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.worldcup-theme #mainNav .nav-link.active,
+.worldcup-theme .gw-pill.active,
+.worldcup-theme .btn-gw-nav:hover,
+.worldcup-theme .guess-subtab.active {
+    background: #f7c948 !important;
+    border-color: #f7c948 !important;
+    color: #06162b !important;
+}
+.worldcup-theme .loading-overlay { background: #06162b; }
+.worldcup-theme .pred-bar-home { background: #2adf7f; color: #06162b; }
+.worldcup-theme .pred-bar-away { background: #f7c948; color: #06162b; }
+.worldcup-theme .winner-btn.selected-home {
+    background: #2adf7f; color: #06162b; border-color: #2adf7f;
+}
+.worldcup-theme .winner-btn.selected-away {
+    background: #f7c948; color: #06162b; border-color: #f7c948;
+}
+.worldcup-theme .table-standings .pts-cell,
+.worldcup-theme .history-card .history-points {
+    color: #f7c948;
+    text-shadow: 0 0 8px rgba(247,201,72,.3);
+}
+.worldcup-theme .pos-champions,
+.worldcup-theme .pos-cl { color: #f7c948; }
+.worldcup-theme .stat-bar.team1 { background: #2adf7f; }
+.worldcup-theme .stat-bar.team2 { background: #f7c948; }
+.worldcup-theme .badge-pick.selected-1 {
+    border-color: #2adf7f; background: rgba(42,223,127,.08);
+}
+.worldcup-theme .badge-pick.selected-1 .badge-label { color: #2adf7f; }
+.worldcup-theme .badge-pick.selected-2 {
+    border-color: #f7c948; background: rgba(247,201,72,.08);
+}
+.worldcup-theme .badge-pick.selected-2 .badge-label { color: #f7c948; }
+.worldcup-theme .btn-save-guesses { background: #f7c948; color: #06162b; }
+.worldcup-theme .score-inputs input:focus { border-color: #f7c948; }
+.worldcup-theme .guess-card.has-guess {
+    border-color: rgba(247,201,72,.3);
+    box-shadow: 0 0 12px rgba(247,201,72,.08);
+}
+.worldcup-theme .history-total-bar { border-color: #f7c948; }
+.worldcup-theme .history-total-bar .total-label,
+.worldcup-theme .history-total-bar .total-points { color: #f7c948; }
+.worldcup-theme .cmp-score-card.winner {
+    border-color: #f7c948;
+    box-shadow: 0 0 15px rgba(247,201,72,.15);
+}
+.worldcup-theme .form-dot.W { background: #2adf7f; color: #06162b; }
+.worldcup-theme .match-card .score-box .score-num.winner { color: #f7c948; }
+.worldcup-theme .guess-card.result-correct { border-color: #f7c948; }
+.worldcup-theme .guess-result-badge.correct { background: #f7c948; color: #06162b; }
 
 /* ── Navbar ── */
 #mainNav {

@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
+ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+WC_DATE_RANGE = "20260611-20260719"
 
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
@@ -305,6 +307,142 @@ if os.path.exists(ll_guesses_file):
 
 ll_guesses_json = json.dumps(ll_guesses, ensure_ascii=False, separators=(",", ":"))
 
+# ── World Cup data from ESPN ──
+print("\nFetching World Cup data...")
+try:
+    wc_events = requests.get(ESPN_WC_SCOREBOARD, params={"dates": WC_DATE_RANGE, "limit": "200"},
+                             headers=hdr, timeout=30).json().get("events", [])
+
+    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    try:
+        today_events = requests.get(ESPN_WC_SCOREBOARD, params={"dates": today_str, "limit": "50"},
+                                    headers=hdr, timeout=15).json().get("events", [])
+        today_by_id = {ev["id"]: ev for ev in today_events}
+        if today_by_id:
+            wc_events = [today_by_id.get(ev["id"], ev) for ev in wc_events]
+            print(f"World Cup: merged {len(today_by_id)} today's events with live status")
+    except Exception as e:
+        print(f"World Cup today-fetch: {e}")
+
+    wc_events.sort(key=lambda e: e.get("date", ""))
+    wc_teams = {}
+    wc_fixtures = []
+    wc_days = {}
+    import re as _wc_re
+
+    for ev in wc_events:
+        comps = ev.get("competitions", [])
+        if not comps:
+            continue
+        comp = comps[0]
+        competitors = comp.get("competitors", [])
+        if len(competitors) != 2:
+            continue
+        home = away = None
+        for c in competitors:
+            if c.get("homeAway") == "home":
+                home = c
+            else:
+                away = c
+        if not home or not away:
+            continue
+        for c in (home, away):
+            ct = c.get("team", {})
+            tid = int(ct.get("id", 0))
+            wc_name = ct.get("displayName", ct.get("name", ""))
+            wc_ph = wc_name.startswith("Group ") or wc_name.startswith("Round ") or \
+                wc_name.startswith("Quarterfinal ") or wc_name.startswith("Semifinal ") or \
+                wc_name.startswith("Third Place ")
+            if tid and tid not in wc_teams:
+                wc_teams[tid] = {
+                    "id": tid,
+                    "n": wc_name,
+                    "s": ct.get("abbreviation", "???"),
+                    "c": tid,
+                    "b": ct.get("logo", ""),
+                    "ph": wc_ph,
+                    "sah": 1120, "sdh": 1080, "saa": 1080, "sda": 1040,
+                }
+
+        status = comp.get("status", {}).get("type", {})
+        state = status.get("state", "pre")
+        started = state in ("in", "post")
+        finished = status.get("completed", False)
+        hs = as_score = None
+        mn = 0
+        if started:
+            try: hs = int(home.get("score", "0"))
+            except (ValueError, TypeError): hs = 0
+            try: as_score = int(away.get("score", "0"))
+            except (ValueError, TypeError): as_score = 0
+            detail = status.get("shortDetail", "") or comp.get("status", {}).get("displayClock", "")
+            if detail:
+                mn_match = _wc_re.search(r"(\d+)'", detail)
+                if mn_match:
+                    mn = int(mn_match.group(1))
+                elif "HT" in detail.upper():
+                    mn = 45
+                elif "FT" in detail.upper():
+                    mn = 90
+        if finished:
+            mn = 90
+
+        day = (ev.get("date", "")[:10] or f"match-{len(wc_fixtures)}")
+        if day not in wc_days:
+            wc_days[day] = len(wc_days) + 1
+        wc_fixtures.append({
+            "id": int(ev.get("id", 0)),
+            "e": wc_days[day],
+            "h": int(home["team"]["id"]),
+            "a": int(away["team"]["id"]),
+            "hs": hs, "as": as_score,
+            "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
+            "sx": status.get("name", ""),
+        })
+
+    max_wc_day = max((f["e"] for f in wc_fixtures), default=1)
+    wc_gws = []
+    for md in range(1, max_wc_day + 1):
+        md_fix = [f for f in wc_fixtures if f["e"] == md]
+        all_fin = all(f["fin"] for f in md_fix) if md_fix else False
+        is_cur = any(f["st"] and not f["fin"] for f in md_fix)
+        wc_gws.append({"id": md, "fin": all_fin, "cur": is_cur})
+    if not any(g["cur"] for g in wc_gws):
+        for g in wc_gws:
+            if not g["fin"]:
+                g["cur"] = True
+                break
+    if not any(g["cur"] for g in wc_gws):
+        for g in reversed(wc_gws):
+            if g["fin"]:
+                g["cur"] = True
+                break
+
+    wc_archive = bool(wc_fixtures) and all(f["fin"] for f in wc_fixtures) and datetime.now(timezone.utc).strftime("%Y%m%d") > "20260719"
+    wc_data = json.dumps({"teams": wc_teams, "gws": wc_gws, "fix": wc_fixtures, "archive": wc_archive},
+                         ensure_ascii=False, separators=(",", ":"))
+    n_fin = sum(1 for f in wc_fixtures if f["fin"])
+    print(f"World Cup — Teams: {len(wc_teams)}, Days: {len(wc_gws)}, Fixtures: {len(wc_fixtures)}, Finished: {n_fin}, Archive: {wc_archive}")
+except Exception as e:
+    print(f"World Cup fetch failed: {e}")
+    wc_data = ""
+
+# World Cup guesses
+wc_guesses_file = os.path.join(ROOT, "user_guesses_wc.json")
+wc_guesses = {}
+if os.path.exists(wc_guesses_file):
+    with open(wc_guesses_file, "r", encoding="utf-8") as gf:
+        raw = json.load(gf)
+    for gw_key, gw_data in raw.items():
+        wc_guesses[gw_key] = {}
+        for g in gw_data.get("guesses", []):
+            mid = g.get("match_id")
+            if mid:
+                wc_guesses[gw_key][mid] = {"w": g.get("winner"), "hs": g.get("home_score"), "as": g.get("away_score")}
+    print(f"World Cup guesses: {sum(len(v) for v in wc_guesses.values())}")
+
+wc_guesses_json = json.dumps(wc_guesses, ensure_ascii=False, separators=(",", ":"))
+
 import socket
 def get_local_ip():
     try:
@@ -329,8 +467,10 @@ else:
 html = open(TPL, "r", encoding="utf-8").read()
 html = html.replace("/*__DATA__*/", "var EMBEDDED=" + data + ";")
 html = html.replace("/*__DATA_LL__*/", "var EMBEDDED_LL=" + ll_data + ";" if ll_data else "")
+html = html.replace("/*__DATA_WC__*/", "var EMBEDDED_WC=" + wc_data + ";" if wc_data else "")
 html = html.replace("/*__GUESSES__*/", "var EMBEDDED_GUESSES=" + guesses_json + ";")
 html = html.replace("/*__GUESSES_LL__*/", "var EMBEDDED_GUESSES_LL=" + ll_guesses_json + ";")
+html = html.replace("/*__GUESSES_WC__*/", "var EMBEDDED_GUESSES_WC=" + wc_guesses_json + ";")
 html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if server_url else "")
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
 
@@ -376,6 +516,29 @@ with open(OUT, "w", encoding="utf-8") as f:
 
 print(f"Updated: {OUT}")
 
+live_data = {
+    "fix": fixtures,
+    "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+if ll_data:
+    try:
+        ll_parsed = json.loads(ll_data)
+        live_data["fix_ll"] = ll_parsed.get("fix", [])
+    except Exception:
+        pass
+if wc_data:
+    try:
+        wc_parsed = json.loads(wc_data)
+        live_data["fix_wc"] = wc_parsed.get("fix", [])
+        live_data["wc_archive"] = wc_parsed.get("archive", False)
+    except Exception:
+        pass
+
+live_json = json.dumps(live_data, ensure_ascii=False, separators=(",", ":"))
+with open(os.path.join(ROOT, "live.json"), "w", encoding="utf-8") as f:
+    f.write(live_json)
+print("Updated: live.json")
+
 # ── Auto-upload to GitHub Pages ──
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = "moadi1987-eng/PL"
@@ -384,17 +547,6 @@ if GITHUB_TOKEN:
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
     # Upload live.json (small, fast — browser fetches this for live updates)
-    live_data = {
-        "fix": fixtures,
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    if ll_data:
-        try:
-            ll_parsed = json.loads(ll_data)
-            live_data["fix_ll"] = ll_parsed.get("fix", [])
-        except Exception:
-            pass
-    live_json = json.dumps(live_data, ensure_ascii=False, separators=(",", ":"))
     live_b64 = base64.b64encode(live_json.encode("utf-8")).decode()
 
     print("Uploading live.json...")

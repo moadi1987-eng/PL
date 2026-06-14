@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests python-dotenv
 
-      - name: Check if update needed (PL + La Liga)
+      - name: Check if update needed (PL + La Liga + World Cup)
         id: check
         run: |
           python3 << 'PYEOF'
@@ -42,6 +42,7 @@ jobs:
           is_manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
           FPL = "https://fantasy.premierleague.com/api"
           ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
+          ESPN_WC_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
           HDR = {"User-Agent": "PL-Dashboard/1.0"}
           output_file = os.environ.get("GITHUB_OUTPUT", "/dev/null")
 
@@ -51,6 +52,7 @@ jobs:
 
           pl_live = 0
           ll_live = 0
+          wc_live = 0
           now = datetime.datetime.now(datetime.timezone.utc)
 
           try:
@@ -76,12 +78,25 @@ jobs:
           except Exception as e:
               print(f"La Liga check failed ({e}) - ignoring")
 
+          try:
+              today = now.strftime("%Y%m%d")
+              wc = requests.get(ESPN_WC_SB, params={"dates": today, "limit": "50"}, headers=HDR, timeout=15).json()
+              for ev in wc.get("events", []):
+                  for comp in ev.get("competitions", []):
+                      state = comp.get("status", {}).get("type", {}).get("state", "pre")
+                      if state == "in":
+                          wc_live += 1
+              if wc_live:
+                  print(f"World Cup LIVE: {wc_live} matches in progress")
+          except Exception as e:
+              print(f"World Cup check failed ({e}) - ignoring")
+
           if is_manual:
               print("Manual trigger - always updating")
               write_output("true")
               raise SystemExit(0)
 
-          total_live = pl_live + ll_live
+          total_live = pl_live + ll_live + wc_live
           if total_live:
               print(f"TOTAL LIVE: {total_live} - updating")
               write_output("true")

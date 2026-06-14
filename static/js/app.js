@@ -22,6 +22,8 @@ const LEAGUE_THEMES = {
           cssClass: "", logo: "/static/pl-logo.png" },
     laliga: { name: "La Liga", brand: "La Liga Dashboard", gwLabel: "MD",
               cssClass: "laliga-theme", logo: "/static/pl-logo.png" },
+    wc: { name: "World Cup", brand: "World Cup Dashboard", gwLabel: "Day",
+          cssClass: "worldcup-theme", logo: "/static/pl-logo.png" },
 };
 
 // ── Helpers ──
@@ -674,7 +676,7 @@ function applyLeagueTheme(league) {
     STATE.gwLabel = theme.gwLabel;
     const brand = $("#brandText");
     if (brand) brand.textContent = theme.brand;
-    document.body.classList.remove("laliga-theme");
+    document.body.classList.remove("laliga-theme", "worldcup-theme");
     if (theme.cssClass) document.body.classList.add(theme.cssClass);
     $$("#leagueToggle .league-btn").forEach(b => {
         b.classList.toggle("active", b.dataset.league === league);
