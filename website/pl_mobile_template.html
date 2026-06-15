@@ -303,6 +303,7 @@ var FPLURL='https://fantasy.premierleague.com/api';
 var ESPNSB='https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard';
 var ESPNST='https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings';
 var ESPNWC='https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
+var FIFAWC='https://api.fifa.com/api/v3/calendar/matches?language=en&count=120&idCompetition=17&idSeason=285023';
 var _rTmr=null,_cdTmr=null,_hasLive=false,_wasLive=false,_justEnded=0,_fid=0,_nxtIn=0;
 
 function _mkPx(url){var e=encodeURIComponent(url);return[
@@ -315,6 +316,7 @@ function _mkPx(url){var e=encodeURIComponent(url);return[
 
 function _validPxData(url,d){
   if(!d)return false;
+  if(url.indexOf('api.fifa.com/api/v3/calendar/matches')>=0)return !!(d.Results&&d.Results.length!=null);
   if(url.indexOf('/scoreboard')>=0)return !!(d.events&&d.events.length!=null);
   if(url.indexOf('/standings')>=0)return !!(d.children||d.standings);
   if(url.indexOf('/fixtures/')>=0)return Array.isArray(d);
@@ -656,13 +658,88 @@ function _fLL(){
 
 function wcSeedStrength(s){var r={ARG:1410,FRA:1400,ESP:1390,ENG:1385,BRA:1380,POR:1365,NED:1355,BEL:1340,GER:1335,CRO:1320,URU:1315,COL:1305,MAR:1295,USA:1280,SUI:1275,JPN:1270,MEX:1265,SEN:1260,ECU:1255,AUT:1250,NOR:1240,TUR:1235,SWE:1230,KOR:1225,CZE:1220,CIV:1215,PAR:1210,IRN:1205,CAN:1195,AUS:1190,SCO:1185,TUN:1180,ALG:1175,EGY:1170,GHA:1165,QAT:1150,KSA:1145,BIH:1140,UZB:1135,COD:1130,PAN:1120,RSA:1110,NZL:1105,IRQ:1095,CPV:1090,JOR:1080,HAI:1065,CUW:1045};return r[(s||"").toUpperCase()]||1120}
 
+function wcNormName(n){
+  var s=(n||'').toString().toLowerCase();
+  try{s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,'')}catch(e){}
+  s=s.replace(/[^a-z0-9]+/g,' ').trim();
+  var a={'cabo verde':'cape verde','cape verde':'cape verde','ir iran':'iran','iran':'iran','korea republic':'south korea','republic of korea':'south korea','south korea':'south korea','turkiye':'turkey','turkey':'turkey','cote d ivoire':'ivory coast','cote divoire':'ivory coast','ivory coast':'ivory coast','curacao':'curacao','czechia':'czechia','czech republic':'czechia'};
+  return a[s]||s;
+}
+function wcLocDesc(v){
+  if(v&&v.length!=null&&typeof v!=='string'){
+    for(var i=0;i<v.length;i++){if(((v[i].Locale||'')+'').toLowerCase().indexOf('en')===0)return v[i].Description||''}
+    return v[0]?(v[0].Description||''):'';
+  }
+  return v||'';
+}
+function wcIsoMinute(v){
+  if(!v)return'';
+  var d=new Date(v);
+  if(isFinite(d.getTime()))return d.toISOString().slice(0,16)+'Z';
+  var m=(v+'').match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+  if(m)return m[3]+'-'+m[1]+'-'+m[2]+'T'+m[4]+':'+m[5]+'Z';
+  return(v+'').slice(0,16);
+}
+function wcSig(h,a,ko){return wcIsoMinute(ko)+'|'+wcNormName(h)+'|'+wcNormName(a)}
+function wcFifaIso(v){
+  var m=(v||'').match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  return m?m[3]+'-'+m[1]+'-'+m[2]+'T'+m[4]+':'+m[5]+':'+m[6]+'Z':(v||'');
+}
+function wcFifaScore(v){var n=parseInt(v,10);return isFinite(n)?n:null}
+function wcFifaMap(d){
+  var out={},res=(d&&d.Results)||[];
+  for(var i=0;i<res.length;i++){
+    var m=res[i]||{},h=m.Home||{},a=m.Away||{},hn=wcLocDesc(h.TeamName),an=wcLocDesc(a.TeamName),ko=wcFifaIso(m.Date||'');
+    var st=parseInt(m.MatchStatus,10),hs=wcFifaScore(h.Score),as2=wcFifaScore(a.Score),fin=st===0,started=fin||st===3||hs!=null||as2!=null;
+    var sx=st===0?'STATUS_FULL_TIME':st===1?'STATUS_SCHEDULED':st===3?'STATUS_IN_PROGRESS':'FIFA_'+st;
+    out[wcSig(hn,an,ko)]={id:m.IdMatch||'',hs:hs,as:as2,st:started,fin:fin,sx:sx};
+  }
+  return out;
+}
+function wcMergeFifaFix(fix,d){
+  var mp=wcFifaMap(d),changed=0,now=Date.now(),out=[];
+  for(var i=0;i<fix.length;i++){
+    var f=fix[i],ht=D.tm[f.h]||{},at=D.tm[f.a]||{},fm=mp[wcSig(ht.n||'',at.n||'',f.ko||'')],nf={};
+    for(var k in f)nf[k]=f[k];
+    if(fm&&(fm.st||fm.fin)){
+      changed++;
+      nf.st=!!(nf.st||fm.st);
+      nf.fin=!!(nf.fin||fm.fin);
+      if(fm.hs!=null)nf.hs=fm.hs;
+      if(fm.as!=null)nf.as=fm.as;
+      if(nf.st&&!nf.fin&&!nf.mn&&nf.ko){
+        var kt=new Date(nf.ko).getTime();
+        if(isFinite(kt))nf.mn=Math.max(0,Math.min(130,Math.floor((now-kt)/60000)));
+      }
+      if(nf.fin)nf.mn=90;
+      nf.sx=fm.sx||nf.sx||'';
+      nf.fid=fm.id;
+      nf.src=(nf.src?nf.src+'+':'')+'fifa';
+    }
+    out.push(nf);
+  }
+  out._fifaChanged=changed;
+  return out;
+}
+function _fWCFifaFallback(fid){
+  pxF(FIFAWC,function(fd){
+    if(fid!==_fid)return;
+    if(!fd||!D.fx||!D.fx.length){_updDone(false);return}
+    var fix=wcMergeFifaFix(D.fx,fd);
+    if(!fix._fifaChanged){_updDone(false);return}
+    var gws=_rebuildGW(fix);
+    _applyData('wc',D.tm||{},gws,fix);
+    _updDone(true);
+  });
+}
+
 function _fWC(){
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
   pxF(ESPNWC+'?dates=20260611-20260719&limit=200',function(d){
     if(fid!==_fid)return;
     var evts=d?(d.events||null):null;
-    if(!evts){_updDone(false);return}
+    if(!evts){_fWCFifaFallback(fid);return}
     var tm=D.tm&&Object.keys(D.tm).length?D.tm:{};
     evts.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
     evts.forEach(function(ev){
@@ -705,9 +782,13 @@ function _fWC(){
         hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||'',grp:grp});
     });
     if(!Object.keys(tm).length){_updDone(false);return}
-    var gws=_rebuildGW(fix);
-    _applyData('wc',tm,gws,fix);
-    _updDone(true);
+    pxF(FIFAWC,function(fd){
+      if(fid!==_fid)return;
+      if(fd)fix=wcMergeFifaFix(fix,fd);
+      var gws=_rebuildGW(fix);
+      _applyData('wc',tm,gws,fix);
+      _updDone(true);
+    });
   });
 }
 

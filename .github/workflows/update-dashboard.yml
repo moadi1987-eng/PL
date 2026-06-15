@@ -2,6 +2,8 @@ name: Update PL Dashboard
 
 on:
   schedule:
+    - cron: '*/5 * 11-30 6 *'
+    - cron: '*/5 * 1-19 7 *'
     - cron: '*/5 10-23 * * 0,6'
     - cron: '*/5 17-23 * * 1-5'
     - cron: '*/10 13-16 * * 5'
@@ -43,6 +45,7 @@ jobs:
           FPL = "https://fantasy.premierleague.com/api"
           ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
           ESPN_WC_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+          FIFA_WC_MATCHES = "https://api.fifa.com/api/v3/calendar/matches"
           HDR = {"User-Agent": "PL-Dashboard/1.0"}
           output_file = os.environ.get("GITHUB_OUTPUT", "/dev/null")
 
@@ -53,6 +56,7 @@ jobs:
           pl_live = 0
           ll_live = 0
           wc_live = 0
+          wc_live_fifa = 0
           now = datetime.datetime.now(datetime.timezone.utc)
 
           try:
@@ -91,12 +95,28 @@ jobs:
           except Exception as e:
               print(f"World Cup check failed ({e}) - ignoring")
 
+          try:
+              fifa_wc = requests.get(FIFA_WC_MATCHES, params={
+                  "language": "en",
+                  "count": "120",
+                  "idCompetition": "17",
+                  "idSeason": "285023",
+              }, headers=HDR, timeout=15).json()
+              wc_live_fifa = len([
+                  m for m in fifa_wc.get("Results", [])
+                  if str(m.get("MatchStatus", "")) == "3"
+              ])
+              if wc_live_fifa:
+                  print(f"World Cup FIFA LIVE: {wc_live_fifa} matches in progress")
+          except Exception as e:
+              print(f"World Cup FIFA check failed ({e}) - ignoring")
+
           if is_manual:
               print("Manual trigger - always updating")
               write_output("true")
               raise SystemExit(0)
 
-          total_live = pl_live + ll_live + wc_live
+          total_live = pl_live + ll_live + max(wc_live, wc_live_fifa)
           if total_live:
               print(f"TOTAL LIVE: {total_live} - updating")
               write_output("true")

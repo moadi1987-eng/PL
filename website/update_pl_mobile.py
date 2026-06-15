@@ -4,7 +4,7 @@ Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
 
 Usage:  python update_pl_mobile.py
 """
-import json, requests, os, base64
+import json, requests, os, base64, re, unicodedata
 
 try:
     from dotenv import load_dotenv
@@ -26,6 +26,9 @@ from datetime import datetime, timezone
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
 ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+FIFA_WC_MATCHES = "https://api.fifa.com/api/v3/calendar/matches"
+FIFA_WC_COMPETITION = "17"
+FIFA_WC_SEASON = "285023"
 WC_DATE_RANGE = "20260611-20260719"
 WC_TEAM_STRENGTH = {
     "ARG": 1410, "FRA": 1400, "ESP": 1390, "ENG": 1385, "BRA": 1380,
@@ -43,6 +46,108 @@ WC_TEAM_STRENGTH = {
 
 def wc_seed_strength(abbr):
     return WC_TEAM_STRENGTH.get(str(abbr or "").upper(), 1120)
+
+
+def _plain_name(value):
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(ch for ch in value if not unicodedata.combining(ch))
+
+
+def wc_team_key(name):
+    key = re.sub(r"[^a-z0-9]+", " ", _plain_name(name).lower()).strip()
+    aliases = {
+        "cabo verde": "cape verde",
+        "cape verde": "cape verde",
+        "ir iran": "iran",
+        "iran": "iran",
+        "korea republic": "south korea",
+        "republic of korea": "south korea",
+        "south korea": "south korea",
+        "turkiye": "turkey",
+        "turkey": "turkey",
+        "cote d ivoire": "ivory coast",
+        "cote divoire": "ivory coast",
+        "ivory coast": "ivory coast",
+        "curacao": "curacao",
+        "czechia": "czechia",
+        "czech republic": "czechia",
+    }
+    return aliases.get(key, key)
+
+
+def _localized_description(value):
+    if isinstance(value, list):
+        if not value:
+            return ""
+        for item in value:
+            if str(item.get("Locale", "")).lower().startswith("en"):
+                return item.get("Description", "")
+        return value[0].get("Description", "")
+    return value or ""
+
+
+def _score_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _date_key(value):
+    if not value:
+        return ""
+    try:
+        if "T" in value:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        return datetime.strptime(value, "%m/%d/%Y %H:%M:%S").replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    except Exception:
+        return str(value)[:16]
+
+
+def wc_match_key(home_name, away_name, kickoff):
+    return f"{_date_key(kickoff)}|{wc_team_key(home_name)}|{wc_team_key(away_name)}"
+
+
+def _fifa_iso(value):
+    try:
+        return datetime.strptime(value, "%m/%d/%Y %H:%M:%S").replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return value or ""
+
+
+def fetch_fifa_wc_matches():
+    params = {
+        "language": "en",
+        "count": "120",
+        "idCompetition": FIFA_WC_COMPETITION,
+        "idSeason": FIFA_WC_SEASON,
+    }
+    resp = requests.get(FIFA_WC_MATCHES, params=params, headers=hdr, timeout=20)
+    resp.raise_for_status()
+    matches = []
+    for item in resp.json().get("Results", []):
+        home = item.get("Home", {}) or {}
+        away = item.get("Away", {}) or {}
+        home_name = _localized_description(home.get("TeamName"))
+        away_name = _localized_description(away.get("TeamName"))
+        kickoff = _fifa_iso(item.get("Date", ""))
+        status = _score_int(item.get("MatchStatus"))
+        home_score = _score_int(home.get("Score"))
+        away_score = _score_int(away.get("Score"))
+        finished = status == 0
+        started = finished or status == 3 or home_score is not None or away_score is not None
+        matches.append({
+            "id": str(item.get("IdMatch", "")),
+            "key": wc_match_key(home_name, away_name, kickoff),
+            "hs": home_score,
+            "as": away_score,
+            "st": started,
+            "fin": finished,
+            "sx": {0: "STATUS_FULL_TIME", 1: "STATUS_SCHEDULED", 3: "STATUS_IN_PROGRESS"}.get(status, f"FIFA_{status}"),
+        })
+    return matches
 
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
@@ -340,10 +445,19 @@ try:
     except Exception as e:
         print(f"World Cup today-fetch: {e}")
 
+    fifa_wc_by_key = {}
+    try:
+        fifa_matches = fetch_fifa_wc_matches()
+        fifa_wc_by_key = {m["key"]: m for m in fifa_matches if m.get("key")}
+        print(f"World Cup: FIFA official feed available ({len(fifa_wc_by_key)} matches)")
+    except Exception as e:
+        print(f"World Cup FIFA feed: {e}")
+
     wc_events.sort(key=lambda e: e.get("date", ""))
     wc_teams = {}
     wc_fixtures = []
     wc_days = {}
+    fifa_overlays = 0
     import re as _wc_re
 
     for ev in wc_events:
@@ -409,6 +523,26 @@ try:
         if finished:
             mn = 90
 
+        home_name = home.get("team", {}).get("displayName", home.get("team", {}).get("name", ""))
+        away_name = away.get("team", {}).get("displayName", away.get("team", {}).get("name", ""))
+        fifa_match = fifa_wc_by_key.get(wc_match_key(home_name, away_name, ev.get("date", "")))
+        if fifa_match and (fifa_match.get("st") or fifa_match.get("fin")):
+            fifa_overlays += 1
+            started = started or bool(fifa_match.get("st"))
+            finished = finished or bool(fifa_match.get("fin"))
+            if fifa_match.get("hs") is not None:
+                hs = fifa_match["hs"]
+            if fifa_match.get("as") is not None:
+                as_score = fifa_match["as"]
+            if started and not finished and not mn and ev.get("date"):
+                try:
+                    ko_dt = datetime.fromisoformat(ev["date"].replace("Z", "+00:00"))
+                    mn = max(0, min(130, int((datetime.now(timezone.utc) - ko_dt).total_seconds() // 60)))
+                except Exception:
+                    mn = 0
+            if finished:
+                mn = 90
+
         day = (ev.get("date", "")[:10] or f"match-{len(wc_fixtures)}")
         if day not in wc_days:
             wc_days[day] = len(wc_days) + 1
@@ -419,9 +553,12 @@ try:
             "a": int(away["team"]["id"]),
             "hs": hs, "as": as_score,
             "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
-            "sx": status.get("name", ""),
+            "sx": fifa_match.get("sx") if fifa_match and (fifa_match.get("st") or fifa_match.get("fin")) else status.get("name", ""),
             "grp": wc_group,
+            "src": "espn+fifa" if fifa_match and (fifa_match.get("st") or fifa_match.get("fin")) else "espn",
         })
+    if fifa_overlays:
+        print(f"World Cup: overlaid {fifa_overlays} matches from FIFA official feed")
 
     max_wc_day = max((f["e"] for f in wc_fixtures), default=1)
     wc_gws = []
