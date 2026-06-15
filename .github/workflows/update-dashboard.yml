@@ -151,7 +151,7 @@ jobs:
           cp -f website/pl_mobile.html index.html
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html live.json 2>/dev/null || git add index.html
+          git add index.html live.json learning_history.json ai_weights.json ai_predictions_wc.json ai_weights_wc.json 2>/dev/null || git add index.html live.json
           if git diff --staged --quiet; then
             echo "No changes to deploy"
           else

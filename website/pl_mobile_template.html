@@ -226,6 +226,7 @@ body.wc .htot .hl,body.wc .htot .hp{color:#f7c948}
 /*__GUESSES_WC__*/
 /*__SERVER__*/
 /*__WEIGHTS__*/
+/*__WEIGHTS_WC__*/
 /*__BUILD_TIME__*/
 /*__LEARNING_HISTORY__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
@@ -892,6 +893,7 @@ function availabilityText(tid,list){
 
 function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++)f*=i;return Math.pow(lam,k)*Math.exp(-lam)/f}
 function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
+function activeWeights(){var d={form:.15,strength:.15,position:.12,home_adv:.08,streak:.12,h2h:.08,home_away_split:.08,goals_trend:.06,upset:.06,clean_sheet:.05,draw_tendency:.05};if(D.league==="wc"&&typeof EMBEDDED_WEIGHTS_WC!=="undefined")return EMBEDDED_WEIGHTS_WC;if(typeof EMBEDDED_WEIGHTS!=="undefined")return EMBEDDED_WEIGHTS;return d}
 function pickOutcome(hp,dp,ap,neutral){var v=neutral?{home:hp,draw:dp*1.35,away:ap}:{home:hp*1.25,draw:dp*1.8,away:ap*.85};return v.home>=v.away&&v.home>=v.draw?"home":v.away>=v.home&&v.away>=v.draw?"away":"draw"}
 function alignScore(h,a,w){h=Math.max(0,Math.round(h));a=Math.max(0,Math.round(a));if(w==="draw"){var s=Math.max(0,Math.round((h+a)/2));return[s,s]}if(w==="home"&&h<=a)h=a+1;if(w==="away"&&a<=h)a=h+1;return[h,a]}
 function scoreForWinner(lH,lA,w,ctx){
@@ -916,7 +918,7 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   var pm={};D.st.forEach(function(r,i){pm[r.t.id]=i+1});
   var hAll=allMatches(hid,gw,match),aAll=allMatches(aid,gw,match);
   var hWI=neutral?wcIntel(hid,gw,match):null,aWI=neutral?wcIntel(aid,gw,match):null,hMot=neutral?wcMotivation(hid,gw,match):null,aMot=neutral?wcMotivation(aid,gw,match):null;
-  var W=typeof EMBEDDED_WEIGHTS!=="undefined"?EMBEDDED_WEIGHTS:{form:.15,strength:.15,position:.12,home_adv:.08,streak:.12,h2h:.08,home_away_split:.08,goals_trend:.06,upset:.06,clean_sheet:.05,draw_tendency:.05};
+  var W=activeWeights();
   var tSize=Math.max(D.st.length,20),midPos=Math.ceil(tSize/2);
   var hP=(tSize+1-(pm[hid]||midPos))/tSize*100,aP=(tSize+1-(pm[aid]||midPos))/tSize*100;
   var hRat=(ht.sah||1e3)/Math.max(at.sda||1e3,1),aRat=(at.saa||1e3)/Math.max(ht.sdh||1e3,1);
@@ -1262,7 +1264,7 @@ function aiFill(){
   var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
-    if(m.fin||isLockedMatch(m))return;
+    if(m.fin||!aiReadyMatch(m))return;
     var p=pred(m.h,m.a,gw,m);
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
@@ -1305,7 +1307,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0,uPts=0,aPts=0;
   // Best Bets Score Table
-  var pds=[];ms.forEach(function(m){if(!isLockedMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw,m)})});
+  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw,m)})});
   if(!pds.length)return'<div class="emp">AI comparison unlocks 36 hours before kickoff, after real teams are known</div>';
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});

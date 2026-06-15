@@ -316,6 +316,416 @@ def apply_wc_availability(wc_teams):
             sq["out"] = len(team["inj"])
     return roster_ok, roster_issues, manual_issues
 
+
+# World Cup persistent AI learning.
+AI_WEIGHT_DEFAULTS = {
+    "form": 0.15, "strength": 0.15, "position": 0.12, "home_adv": 0.08,
+    "streak": 0.12, "h2h": 0.08, "home_away_split": 0.08,
+    "goals_trend": 0.06, "upset": 0.06, "clean_sheet": 0.05, "draw_tendency": 0.05,
+}
+LEARNING_HISTORY_FILE = os.path.join(ROOT, "learning_history.json")
+WC_PREDICTIONS_FILE = os.path.join(ROOT, "ai_predictions_wc.json")
+WC_WEIGHTS_FILE = os.path.join(ROOT, "ai_weights_wc.json")
+WC_PREDICTION_LOCK_HOURS = 36
+
+
+def _load_json_file(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+
+def _save_json_file(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+
+
+def _dt_utc(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _wc_team(data, tid):
+    return data.get(str(tid)) or data.get(tid) or {}
+
+
+def _wc_winner(hs, as_score):
+    if hs is None or as_score is None:
+        return None
+    if hs > as_score:
+        return "home"
+    if as_score > hs:
+        return "away"
+    return "draw"
+
+
+def _wc_before(fixture, match):
+    fdt = _dt_utc(fixture.get("ko"))
+    mdt = _dt_utc(match.get("ko"))
+    if fdt and mdt:
+        return fdt < mdt
+    return fixture.get("e", 999) < match.get("e", 999)
+
+
+def _wc_rating(team):
+    vals = [
+        team.get("sah"), team.get("sdh"),
+        team.get("saa"), team.get("sda"),
+    ]
+    vals = [float(v) for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else wc_seed_strength(team.get("s", ""))
+
+
+def _wc_missing_penalty(team, side):
+    penalty = 0.0
+    for player in team.get("inj", []) or []:
+        pos = str(player.get("pos", "")).upper()
+        impact = float(player.get("xgi") or player.get("impact") or 0)
+        if side == "attack":
+            mult = 1.15 if pos == "F" else 0.75 if pos == "M" else 0.45
+        else:
+            mult = 1.25 if pos == "G" else 1.0 if pos == "D" else 0.45
+        penalty += impact * mult
+    squad = team.get("sq") or {}
+    if squad.get("n") and squad.get("n") < 23:
+        penalty += (23 - squad["n"]) * 1.2
+    return min(penalty, 55.0)
+
+
+def _wc_prior_stats(fixtures, tid, match):
+    rows = []
+    for f in fixtures:
+        if not f.get("fin") or f.get("hs") is None or not _wc_before(f, match):
+            continue
+        if f.get("h") != tid and f.get("a") != tid:
+            continue
+        is_home = f.get("h") == tid
+        gf = f.get("hs") if is_home else f.get("as")
+        ga = f.get("as") if is_home else f.get("hs")
+        rows.append({"gf": gf, "ga": ga, "res": "W" if gf > ga else "D" if gf == ga else "L"})
+    played = len(rows)
+    wins = sum(1 for r in rows if r["res"] == "W")
+    draws = sum(1 for r in rows if r["res"] == "D")
+    pts = wins * 3 + draws
+    gf = sum(r["gf"] for r in rows)
+    ga = sum(r["ga"] for r in rows)
+    clean = sum(1 for r in rows if r["ga"] == 0)
+    form = pts / max(played * 3, 1)
+    streak_rows = rows[-3:]
+    streak_pts = sum(3 if r["res"] == "W" else 1 if r["res"] == "D" else 0 for r in streak_rows)
+    return {
+        "played": played, "wins": wins, "draws": draws, "pts": pts,
+        "gf": gf, "ga": ga, "gd": gf - ga,
+        "gf_avg": gf / max(played, 1), "ga_avg": ga / max(played, 1),
+        "clean_rate": clean / max(played, 1),
+        "draw_rate": draws / max(played, 1),
+        "form": form,
+        "streak": streak_pts / max(len(streak_rows) * 3, 1),
+    }
+
+
+def _wc_group_rows(teams_obj, fixtures, group, match):
+    rows = {}
+    if not group:
+        return rows
+    for raw_id, team in teams_obj.items():
+        if team.get("grp") == group and not team.get("ph"):
+            tid = int(team.get("id") or raw_id)
+            rows[tid] = {"pts": 0, "gf": 0, "ga": 0, "gd": 0, "played": 0}
+    for f in fixtures:
+        if f.get("grp") != group or not f.get("fin") or f.get("hs") is None or not _wc_before(f, match):
+            continue
+        h, a = f.get("h"), f.get("a")
+        if h not in rows or a not in rows:
+            continue
+        hs, away_score = f.get("hs"), f.get("as")
+        rows[h]["played"] += 1
+        rows[a]["played"] += 1
+        rows[h]["gf"] += hs
+        rows[h]["ga"] += away_score
+        rows[a]["gf"] += away_score
+        rows[a]["ga"] += hs
+        if hs > away_score:
+            rows[h]["pts"] += 3
+        elif hs < away_score:
+            rows[a]["pts"] += 3
+        else:
+            rows[h]["pts"] += 1
+            rows[a]["pts"] += 1
+    ordered = sorted(rows.items(), key=lambda x: (-x[1]["pts"], -(x[1]["gf"] - x[1]["ga"]), -x[1]["gf"]))
+    for pos, (tid, row) in enumerate(ordered, 1):
+        row["gd"] = row["gf"] - row["ga"]
+        row["pos"] = pos
+    return rows
+
+
+def _wc_signal(signals, name, h_val, a_val, gap, invert=False):
+    diff = h_val - a_val
+    if abs(diff) < gap:
+        return
+    if invert:
+        signals[name] = "home" if diff < 0 else "away"
+    else:
+        signals[name] = "home" if diff > 0 else "away"
+
+
+def _wc_phase_rule(match):
+    if match.get("grp"):
+        return {"key": "group", "result": 1, "exact": 3}
+    e = int(match.get("e") or 0)
+    if e >= 35:
+        return {"key": "final", "result": 8, "exact": 15}
+    if e == 34:
+        return {"key": "third", "result": 5, "exact": 10}
+    if e >= 32:
+        return {"key": "semi", "result": 5, "exact": 10}
+    if e >= 28:
+        return {"key": "quarter", "result": 4, "exact": 8}
+    if e >= 25:
+        return {"key": "r16", "result": 2, "exact": 5}
+    if e >= 18:
+        return {"key": "r32", "result": 2, "exact": 5}
+    return {"key": "group", "result": 1, "exact": 3}
+
+
+def _wc_score_for_winner(lam_h, lam_a, winner):
+    h = max(0, min(5, int(round(lam_h))))
+    a = max(0, min(5, int(round(lam_a))))
+    if winner == "draw":
+        score = max(0, min(4, int(round((lam_h + lam_a) / 2))))
+        if score == 0 and lam_h + lam_a > 1.9:
+            score = 1
+        return score, score
+    if winner == "home" and h <= a:
+        h = min(5, a + 1)
+    if winner == "away" and a <= h:
+        a = min(5, h + 1)
+    return h, a
+
+
+def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
+    home = _wc_team(teams_obj, match.get("h"))
+    away = _wc_team(teams_obj, match.get("a"))
+    if not home or not away or home.get("ph") or away.get("ph"):
+        return None
+    h_stats = _wc_prior_stats(fixtures, match.get("h"), match)
+    a_stats = _wc_prior_stats(fixtures, match.get("a"), match)
+    h_rating = _wc_rating(home) + h_stats["gd"] * 26 + (h_stats["form"] - 0.33) * 85
+    a_rating = _wc_rating(away) + a_stats["gd"] * 26 + (a_stats["form"] - 0.33) * 85
+    h_rating -= _wc_missing_penalty(home, "attack") * 1.1 + _wc_missing_penalty(home, "defense") * 0.45
+    a_rating -= _wc_missing_penalty(away, "attack") * 1.1 + _wc_missing_penalty(away, "defense") * 0.45
+
+    group_rows = _wc_group_rows(teams_obj, fixtures, match.get("grp"), match)
+    h_group = group_rows.get(match.get("h"), {})
+    a_group = group_rows.get(match.get("a"), {})
+    if h_group.get("played", 0) >= 2 and h_group.get("pts", 0) < 4:
+        h_rating += 20
+    if a_group.get("played", 0) >= 2 and a_group.get("pts", 0) < 4:
+        a_rating += 20
+
+    signals = {}
+    _wc_signal(signals, "form", h_stats["form"], a_stats["form"], 0.16)
+    _wc_signal(signals, "strength", h_rating, a_rating, 35)
+    if h_group and a_group and h_group.get("pos") and a_group.get("pos"):
+        _wc_signal(signals, "position", h_group["pos"], a_group["pos"], 1, invert=True)
+    _wc_signal(signals, "streak", h_stats["streak"], a_stats["streak"], 0.18)
+    _wc_signal(signals, "goals_trend", h_stats["gf_avg"], a_stats["gf_avg"], 0.25)
+    _wc_signal(signals, "clean_sheet", h_stats["clean_rate"], a_stats["clean_rate"], 0.28)
+    if h_stats["draw_rate"] >= 0.34 and a_stats["draw_rate"] >= 0.34:
+        signals["draw_tendency"] = "draw"
+    elif h_stats["draw_rate"] < a_stats["draw_rate"] - 0.22:
+        signals["draw_tendency"] = "home"
+    elif a_stats["draw_rate"] < h_stats["draw_rate"] - 0.22:
+        signals["draw_tendency"] = "away"
+    if h_stats["played"] and a_stats["played"]:
+        _wc_signal(signals, "upset", h_stats["form"] - (_wc_rating(home) / 1500), a_stats["form"] - (_wc_rating(away) / 1500), 0.08)
+
+    h_factor = 0.0
+    a_factor = 0.0
+    draw_factor = 0.0
+    for name, pick in signals.items():
+        w = float(weights.get(name, AI_WEIGHT_DEFAULTS.get(name, 0.05)))
+        if pick == "home":
+            h_factor += w
+        elif pick == "away":
+            a_factor += w
+        elif pick == "draw":
+            draw_factor += w
+
+    gap = max(-380, min(380, h_rating - a_rating))
+    rating_share = max(0.28, min(0.72, 0.5 + gap / 900))
+    factor_share = max(0.30, min(0.70, 0.5 + (h_factor - a_factor) * 0.75))
+    home_share = rating_share * 0.72 + factor_share * 0.28
+    close = 1 - min(abs(home_share - 0.5) * 2, 1)
+    draw_pct = 16 + close * 15 + draw_factor * 24
+    if h_group.get("played", 0) >= 2 or a_group.get("played", 0) >= 2:
+        if h_group.get("pts", 0) < 4 or a_group.get("pts", 0) < 4:
+            draw_pct *= 0.88
+    draw_pct = max(14, min(34, draw_pct))
+    home_pct = (100 - draw_pct) * home_share
+    away_pct = 100 - draw_pct - home_pct
+
+    total_goals = 2.42 + min(abs(gap) / 950, 0.36)
+    if h_stats["played"] or a_stats["played"]:
+        avg_for = (h_stats["gf_avg"] + a_stats["gf_avg"]) / 2
+        avg_against = (h_stats["ga_avg"] + a_stats["ga_avg"]) / 2
+        total_goals = total_goals * 0.65 + max(1.75, min(3.25, avg_for + avg_against)) * 0.35
+    lam_h = max(0.65, total_goals * home_share)
+    lam_a = max(0.55, total_goals * (1 - home_share))
+    if _wc_missing_penalty(home, "attack") > 18:
+        lam_h *= 0.92
+    if _wc_missing_penalty(away, "attack") > 18:
+        lam_a *= 0.92
+    if _wc_missing_penalty(home, "defense") > 18:
+        lam_a *= 1.08
+    if _wc_missing_penalty(away, "defense") > 18:
+        lam_h *= 1.08
+
+    if home_pct >= away_pct and home_pct >= draw_pct:
+        winner = "home"
+    elif away_pct >= home_pct and away_pct >= draw_pct:
+        winner = "away"
+    else:
+        winner = "draw"
+    if draw_pct * 1.18 > max(home_pct, away_pct) and close > 0.78:
+        winner = "draw"
+    rh, ra = _wc_score_for_winner(lam_h, lam_a, winner)
+    return {
+        "match_id": match.get("id"),
+        "day": match.get("e"),
+        "home_id": match.get("h"),
+        "away_id": match.get("a"),
+        "home": home.get("s") or home.get("n"),
+        "away": away.get("s") or away.get("n"),
+        "kickoff_time": match.get("ko", ""),
+        "winner": winner,
+        "home_score": rh,
+        "away_score": ra,
+        "home_win_pct": round(home_pct, 1),
+        "draw_pct": round(draw_pct, 1),
+        "away_win_pct": round(away_pct, 1),
+        "expected_home_goals": round(lam_h, 2),
+        "expected_away_goals": round(lam_a, 2),
+        "signals": signals,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "checked": False,
+    }
+
+
+def _wc_update_weights(weights, checked_predictions):
+    factor_scores = {k: [] for k in weights}
+    for pred in checked_predictions:
+        actual = pred.get("actual_winner")
+        for factor, pick in (pred.get("signals") or {}).items():
+            if factor in factor_scores and pick in ("home", "draw", "away"):
+                factor_scores[factor].append(1.0 if pick == actual else 0.0)
+    new_weights = dict(weights)
+    for factor, scores in factor_scores.items():
+        if len(scores) < 3:
+            continue
+        accuracy = sum(scores) / len(scores)
+        new_weights[factor] = round(max(0.03, min(0.25, new_weights[factor] + (accuracy - 0.5) * 0.05)), 4)
+    total = sum(new_weights.values()) or 1
+    return {k: round(v / total, 4) for k, v in new_weights.items()}
+
+
+def run_wc_learning(wc_payload, history):
+    if not wc_payload:
+        return history
+    wc = json.loads(wc_payload)
+    teams_obj = wc.get("teams", {})
+    fixtures = wc.get("fix", [])
+    pred_store = _load_json_file(WC_PREDICTIONS_FILE, {"version": 1, "matches": {}})
+    if isinstance(pred_store.get("matches"), list):
+        pred_store["matches"] = {str(p.get("match_id")): p for p in pred_store["matches"]}
+    pred_store.setdefault("version", 1)
+    pred_store.setdefault("matches", {})
+    weights = _load_json_file(WC_WEIGHTS_FILE, dict(AI_WEIGHT_DEFAULTS))
+    for k, v in AI_WEIGHT_DEFAULTS.items():
+        weights.setdefault(k, v)
+
+    now = datetime.now(timezone.utc)
+    new_locked = 0
+    for match in fixtures:
+        mid = str(match.get("id"))
+        if not mid or mid in pred_store["matches"]:
+            continue
+        if match.get("fin") or match.get("st"):
+            continue
+        home = _wc_team(teams_obj, match.get("h"))
+        away = _wc_team(teams_obj, match.get("a"))
+        if home.get("ph") or away.get("ph"):
+            continue
+        ko = _dt_utc(match.get("ko"))
+        if ko and (ko - now).total_seconds() > WC_PREDICTION_LOCK_HOURS * 3600:
+            continue
+        if ko and (now - ko).total_seconds() > 600:
+            continue
+        pred = _wc_predict_snapshot(teams_obj, fixtures, match, weights)
+        if pred:
+            pred_store["matches"][mid] = pred
+            new_locked += 1
+
+    fixtures_by_id = {str(f.get("id")): f for f in fixtures}
+    checked = []
+    for mid, pred in pred_store["matches"].items():
+        f = fixtures_by_id.get(mid)
+        if not f or not f.get("fin") or f.get("hs") is None:
+            continue
+        actual_winner = _wc_winner(f.get("hs"), f.get("as"))
+        pred["checked"] = True
+        pred["actual_home_score"] = f.get("hs")
+        pred["actual_away_score"] = f.get("as")
+        pred["actual_winner"] = actual_winner
+        pred["winner_correct"] = pred.get("winner") == actual_winner
+        pred["score_correct"] = pred.get("home_score") == f.get("hs") and pred.get("away_score") == f.get("as")
+        rule = _wc_phase_rule(f)
+        pred["points"] = rule["exact"] if pred["score_correct"] else rule["result"] if pred["winner_correct"] else 0
+        pred["phase"] = rule["key"]
+        checked.append(pred)
+
+    if checked:
+        weights = _wc_update_weights(weights, checked)
+
+    by_day = {}
+    for pred in checked:
+        day = str(pred.get("day") or 0)
+        row = by_day.setdefault(day, {"gw": int(pred.get("day") or 0), "total": 0, "correct_winner": 0, "correct_score": 0, "points": 0})
+        row["total"] += 1
+        row["correct_winner"] += 1 if pred.get("winner_correct") else 0
+        row["correct_score"] += 1 if pred.get("score_correct") else 0
+        row["points"] += int(pred.get("points") or 0)
+    rows = []
+    for row in by_day.values():
+        row["accuracy_pct"] = round(row["correct_winner"] / max(row["total"], 1) * 100, 1)
+        row["score_acc_pct"] = round(row["correct_score"] / max(row["total"], 1) * 100, 1)
+        rows.append(row)
+    rows.sort(key=lambda r: r["gw"])
+    total = sum(r["total"] for r in rows)
+    correct = sum(r["correct_winner"] for r in rows)
+    wc_hist = {
+        "gw_results": rows,
+        "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
+        "total_evaluated": total,
+        "current_weights": weights,
+        "snapshots_locked": len(pred_store["matches"]),
+    }
+    history["wc"] = wc_hist
+    pred_store["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _save_json_file(WC_PREDICTIONS_FILE, pred_store)
+    _save_json_file(WC_WEIGHTS_FILE, weights)
+    _save_json_file(LEARNING_HISTORY_FILE, history)
+    print(f"World Cup ML: {new_locked} new locked predictions, {total} checked, accuracy {wc_hist['overall_accuracy']}%")
+    return history
+
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
 try:
@@ -835,6 +1245,12 @@ except Exception as _ml_err:
     learning_history = {"pl": {"gw_results": []}, "laliga": {"gw_results": []}}
     print(f"ML learning skipped: {_ml_err}")
 
+try:
+    learning_history = run_wc_learning(wc_data, learning_history)
+except Exception as _wc_ml_err:
+    learning_history.setdefault("wc", {"gw_results": []})
+    print(f"World Cup ML skipped: {_wc_ml_err}")
+
 _lh_json = json.dumps(learning_history, separators=(",", ":"))
 html = html.replace("/*__LEARNING_HISTORY__*/", "var LEARNING_HISTORY=" + _lh_json + ";")
 
@@ -846,6 +1262,15 @@ if os.path.exists(weights_file):
     print(f"AI weights embedded")
 else:
     html = html.replace("/*__WEIGHTS__*/", "")
+
+weights_wc_file = os.path.join(ROOT, "ai_weights_wc.json")
+if os.path.exists(weights_wc_file):
+    with open(weights_wc_file, "r", encoding="utf-8") as wf:
+        weights_wc_json = wf.read().strip()
+    html = html.replace("/*__WEIGHTS_WC__*/", "var EMBEDDED_WEIGHTS_WC=" + weights_wc_json + ";")
+    print("World Cup AI weights embedded")
+else:
+    html = html.replace("/*__WEIGHTS_WC__*/", "")
 
 with open(OUT, "w", encoding="utf-8") as f:
     f.write(html)
@@ -896,8 +1321,8 @@ if GITHUB_TOKEN:
     if resp_live.status_code in (200, 201):
         print("live.json uploaded!")
 
-    # Upload learning_history.json + ai_weights.json (ML state)
-    for _ml_file in ("learning_history.json", "ai_weights.json"):
+    # Upload AI learning state.
+    for _ml_file in ("learning_history.json", "ai_weights.json", "ai_predictions_wc.json", "ai_weights_wc.json"):
         _ml_path = os.path.join(ROOT, _ml_file)
         if not os.path.exists(_ml_path): continue
         try:

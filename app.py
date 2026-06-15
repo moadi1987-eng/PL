@@ -1843,13 +1843,12 @@ def espn_get_all_fixtures(league="laliga"):
 
 def espn_get_all_fixtures_live(league="laliga"):
     key = f"espn_{league}_fixtures_live"
-    now = time.time()
     events_key = f"espn_{league}_events"
+    events = espn_get_all_events_live(league)
     events_ts = _cache.get(events_key, {}).get("ts", 0)
     cached = _cache.get(key)
     if cached and cached["ts"] >= events_ts:
         return cached["data"]
-    events = espn_get_all_events_live(league)
     fixtures = espn_assign_matchdays(espn_normalize_fixtures(events), league)
     _cache[key] = {"data": fixtures, "ts": time.time()}
     return fixtures
