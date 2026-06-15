@@ -799,11 +799,11 @@ function wcPhase(f){
   if(f.grp)return{key:"group",label:"Group "+f.grp,result:1,exact:3};
   var e=+(f.e||0);
   if(e>=35)return{key:"final",label:"Final",result:8,exact:15};
-  if(e===34)return{key:"third",label:"3rd Place",result:6,exact:12};
-  if(e>=32)return{key:"semi",label:"Semifinal",result:6,exact:12};
-  if(e>=28)return{key:"quarter",label:"Quarterfinal",result:5,exact:10};
-  if(e>=25)return{key:"r16",label:"Round of 16",result:5,exact:10,inferred:true};
-  if(e>=18)return{key:"r32",label:"Round of 32",result:5,exact:10,inferred:true};
+  if(e===34)return{key:"third",label:"3rd Place",result:5,exact:10};
+  if(e>=32)return{key:"semi",label:"Semifinal",result:5,exact:10};
+  if(e>=28)return{key:"quarter",label:"Quarterfinal",result:4,exact:8};
+  if(e>=25)return{key:"r16",label:"Round of 16",result:2,exact:5};
+  if(e>=18)return{key:"r32",label:"Round of 32",result:2,exact:5};
   return{key:"group",label:"Group Stage",result:1,exact:3};
 }
 function scoreGuess(f,g){
@@ -826,10 +826,13 @@ function scoreGuess(f,g){
 function rWCRules(){
   return'<div class="rules"><div class="rule-head">World Cup scoring <span>Bolao style</span></div><div class="rulegrid">'+
     '<div class="rulepill"><b>Group</b>1 result / 3 exact</div>'+
-    '<div class="rulepill"><b>Round 32/16/QF</b>5 result / 10 exact</div>'+
-    '<div class="rulepill"><b>Semi + 3rd</b>6 result / 12 exact</div>'+
+    '<div class="rulepill"><b>Round of 32</b>2 result / 5 exact</div>'+
+    '<div class="rulepill"><b>Round of 16</b>2 result / 5 exact</div>'+
+    '<div class="rulepill"><b>Quarterfinal</b>4 result / 8 exact</div>'+
+    '<div class="rulepill"><b>Semi + 3rd</b>5 result / 10 exact</div>'+
     '<div class="rulepill"><b>Final</b>8 result / 15 exact</div>'+
-    '</div><div class="rulenote">Tournament winner gives 10 pts and top scorer gives 15 pts. Exact score uses the exact tier; otherwise a correct result uses the result tier. Round of 32/16 are mapped to the 2026 knockout tier.</div></div>';
+    '<div class="rulepill"><b>Bonuses</b>Winner 12 / top scorer 12</div>'+
+    '</div><div class="rulenote">Exact score uses the exact tier; otherwise a correct result uses the result tier.</div></div>';
 }
 var _tickBase={},_tickTmr=null;
 
