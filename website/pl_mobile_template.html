@@ -306,11 +306,20 @@ var ESPNWC='https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scor
 var _rTmr=null,_cdTmr=null,_hasLive=false,_wasLive=false,_justEnded=0,_fid=0,_nxtIn=0;
 
 function _mkPx(url){var e=encodeURIComponent(url);return[
+  {u:url,w:false},
   {u:'https://api.codetabs.com/v1/proxy?quest='+e,w:false},
   {u:'https://api.allorigins.win/get?url='+e,w:true},
   {u:'https://corsproxy.io/?'+e,w:false},
   {u:'https://corsproxy.org/?'+e,w:false}
 ]}
+
+function _validPxData(url,d){
+  if(!d)return false;
+  if(url.indexOf('/scoreboard')>=0)return !!(d.events&&d.events.length!=null);
+  if(url.indexOf('/standings')>=0)return !!(d.children||d.standings);
+  if(url.indexOf('/fixtures/')>=0)return Array.isArray(d);
+  return typeof d==='object';
+}
 
 function pxF(url,cb){
   var ps=_mkPx(url),done=false,pending=0;
@@ -326,7 +335,7 @@ function pxF(url,cb){
         try{
           var raw=JSON.parse(x.responseText);
           var d=p.w&&raw&&raw.contents?JSON.parse(raw.contents):raw;
-          if(d&&typeof d==='object'){win(d);return}
+          if(_validPxData(url,d)){win(d);return}
         }catch(e){}
       }
       pending--;if(!pending&&!done)win(null);
