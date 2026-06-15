@@ -969,7 +969,7 @@ function _calcMatch(ko,mn,sx){
 }
 
 function liveMin(ko,mn,sx){var c=_calcMatch(ko,mn,sx);if(c.st)return c.st;return c.m>=90?("90+"+(c.m>90?c.m-90:"")):(c.m+"'")}
-function liveText(){return'<span class="ldot"></span><span>LIVE</span>'}
+function liveText(ko,mn,sx){var lm=ko||mn||sx?liveMin(ko,mn,sx):"";return'<span class="ldot"></span><span>LIVE'+(lm&&lm!=="LIVE"?" "+lm:"")+'</span>'}
 
 function setTick(mid,ko,mn,sx){
   var c=_calcMatch(ko,mn,sx);
@@ -1066,8 +1066,9 @@ function wcLiveInfo(upToGW){
   D.fx.forEach(function(f){
     if(!f.grp||!f.st||f.fin||f.hs==null||f.as==null)return;if(upToGW&&f.e>upToGW)return;
     var hCls=f.hs>f.as?"win":f.hs<f.as?"loss":"draw",aCls=f.as>f.hs?"win":f.as<f.hs?"loss":"draw";
-    out[f.h]={score:f.hs+"-"+f.as,cls:hCls,opp:f.a};
-    out[f.a]={score:f.as+"-"+f.hs,cls:aCls,opp:f.h};
+    var min=liveMin(f.ko,f.mn,f.sx||"");
+    out[f.h]={score:f.hs+"-"+f.as,cls:hCls,opp:f.a,min:min};
+    out[f.a]={score:f.as+"-"+f.hs,cls:aCls,opp:f.h,min:min};
   });
   return out;
 }
@@ -1084,7 +1085,7 @@ function rWCGroups(){
   keys.forEach(function(g){
     h+='<div class="sec" style="font-size:.72rem;margin:.45rem 0 .2rem;color:var(--cy)">Group '+g+'</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
     groups[g].forEach(function(r,i){var p=i+1,pc=p<=2?"pch":p===3?"pcl":"";var fm="";r.fm.forEach(function(f){fm+='<span class="fd '+f+'">'+f+'</span>'});
-      var li=liveMap[r.t.id],score=li?'<span class="tlive-score '+li.cls+'">'+li.score+'</span>':'',move=wcMoveTag(basePos[r.t.id],p);
+      var li=liveMap[r.t.id],score=li?'<span class="tlive-score '+li.cls+'">'+(li.min&&li.min!=="LIVE"?li.min+" ":"")+li.score+'</span>':'',move=wcMoveTag(basePos[r.t.id],p);
       h+='<tr class="'+(li?'live-row live-'+li.cls:'')+'"><td class="'+pc+'">'+p+move+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span>'+score+'</div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
     h+='</tbody></table></div>';
   });
@@ -1094,7 +1095,7 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
   if(!ms.length){c.innerHTML=h+'<div class="emp">No fixtures</div>';return}
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),hs=m.hs!=null?m.hs:"-",as=m.as!=null?m.as:"-";
     var isLive=m.st&&!m.fin;
-    var tag=isLive?'<span class="labs">'+liveText()+'</span>':m.fin?'<span class="fabs">FT</span>':"";
+    var tag=isLive?'<span class="labs">'+liveText(m.ko,m.mn,m.sx||'')+'</span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
     var ph=D.league==="wc"?wcPhase(m):null,phTag=ph?'<div class="phase">'+ph.label+' · '+ph.result+' result / '+ph.exact+' exact</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+phTag+'</div>'});
@@ -1119,7 +1120,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
   pds.forEach(function(x){var m=x.m,p=x.p,hm=T(m.h),am=T(m.a),rk=rm[m.id]||0,lb={home:hm.s,draw:"Draw",away:am.s};
     var li="";if(m.fin)li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--g);font-weight:700">FT</span> <b>'+(m.hs!=null?m.hs:"-")+' - '+(m.as!=null?m.as:"-")+'</b></div>';
-    else if(m.st){li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)">'+liveText()+'</span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    else if(m.st){li='<div style="text-align:center;margin:.15rem 0;font-size:.65rem"><span style="color:var(--pk)">'+liveText(m.ko,m.mn,m.sx||'')+'</span> <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     h+='<div class="pc'+(rk?" tb":"")+'">'+(rk?'<span class="tbg">#'+rk+' Best Bet</span>':"")+
       '<div class="mr" style="margin-bottom:.2rem"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+li+
@@ -1171,7 +1172,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
-    if(m.st&&!m.fin){act='<div class="act">'+liveText()+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    if(m.st&&!m.fin){act='<div class="act">'+liveText(m.ko,m.mn,m.sx||'')+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+' scoring: '+phase.result+' / '+phase.exact+' pts</div>':"";
     if(isLockedMatch(m)){
       h+='<div class="gc locked" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+lockedMatchNote(m)+act+'</div>';
@@ -1216,10 +1217,11 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
     var actW=aw?lb[aw]:"–",actS=ah!=null?ah+"-"+aa:"–";
     var uWS=uw?lb[uw]:"–",uSS=g.hs!=null?g.hs+"-"+g.as:"–";
     var aWS=lb[aiW],aSS=p.rh+"-"+p.ra;
-    var live=m.st&&!m.fin;var lm4=live?'LIVE':"";
+    var live=m.st&&!m.fin;var lm4=live?liveMin(m.ko,m.mn,m.sx||''):"";
+    if(live&&m.hs!=null&&m.as!=null){actW=m.hs>m.as?lb.home:m.hs===m.as?"Draw":lb.away;actS=m.hs+"-"+m.as}
     function wCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ok">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
     function sCell(v,ok,has){if(!aw||!has)return'<td class="cmp-c">'+v+'</td>';return ok?'<td class="cmp-c cmp-ex">'+v+' ✓</td>':'<td class="cmp-c cmp-x">'+v+' ✗</td>'}
-    var actWd=live?'<span style="color:var(--pk)">'+( lm4||"LIVE")+'</span> '+actW:actW;
+    var actWd=live?'<span style="color:var(--pk)">LIVE'+(lm4&&lm4!=="LIVE"?" "+lm4:"")+'</span> '+actW:actW;
     rows+='<tr'+(live?' style="background:rgba(233,0,82,.05)"':'')+'><td class="cmp-match"><img src="'+hm.b+'" onerror="this.style.display=\'none\'">'+hm.s+' v '+am.s+'<img src="'+am.b+'" onerror="this.style.display=\'none\'"></td><td class="cmp-c cmp-act">'+actWd+'</td>'+wCell(uWS,uwOk,uw)+wCell(aWS,awOk,true)+'<td class="cmp-c cmp-act">'+actS+'</td>'+sCell(uSS,usOk,g.hs!=null)+sCell(aSS,asOk,true)+'</tr>'});
   var h=bbH+'<div class="csb"><div class="csc'+(uPts>aPts?" win":"")+'"><div class="cw">You</div><div class="cp" style="color:'+(uPts>aPts?"var(--g)":"var(--tx)")+'">'+uPts+' pts</div><div class="cd">'+uW+' results / '+uS+' exact</div></div>'+
     '<div class="csc'+(aPts>uPts?" win":"")+'"><div class="cw">AI</div><div class="cp" style="color:'+(aPts>uPts?"var(--cy)":"var(--tx)")+'">'+aPts+' pts</div><div class="cd">'+aW+' results / '+aS+' exact</div></div></div>';
