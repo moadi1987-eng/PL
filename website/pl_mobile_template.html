@@ -57,6 +57,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .tbl .pch{color:var(--g);font-weight:700}.tbl .pcl{color:var(--cy);font-weight:700}.tbl .prl{color:var(--pk);font-weight:700}.tbl .pts{font-weight:800;color:var(--g);font-size:.8rem;text-shadow:0 0 6px rgba(0,255,135,.3)}
 .tc{display:flex;align-items:center;gap:3px}.tc img{width:15px;height:15px;object-fit:contain}
 .fd{display:inline-block;width:14px;height:14px;border-radius:3px;font-size:.45rem;font-weight:700;text-align:center;line-height:14px;color:#fff;margin-left:1px}.fd.W{background:var(--g);color:var(--p)}.fd.D{background:#6c757d}.fd.L{background:var(--pk)}
+.tbl tr.live-row{background:rgba(233,0,82,.045)}
+.tbl tr.live-row td:first-child{box-shadow:inset 2px 0 var(--cy)}
+.tbl tr.live-win td:first-child{box-shadow:inset 2px 0 var(--g)}
+.tbl tr.live-loss td:first-child{box-shadow:inset 2px 0 var(--pk)}
+.tlive-note{display:inline-flex;align-items:center;gap:3px;margin-left:.3rem;color:var(--pk);font-size:.5rem;font-weight:900;vertical-align:middle}
+.tmove{display:inline-flex;align-items:center;justify-content:center;min-width:16px;margin-left:3px;font-size:.55rem;font-weight:900}
+.tmove.up{color:var(--g)}.tmove.down{color:var(--pk)}
+.tlive-score{display:inline-flex;align-items:center;border-radius:999px;padding:1px 6px;margin-left:4px;font-size:.52rem;font-weight:900;font-variant-numeric:tabular-nums;line-height:1.25}
+.tlive-score.win{background:var(--g);color:var(--p)}.tlive-score.loss{background:var(--pk);color:#fff}.tlive-score.draw{background:#6c757d;color:#fff}
 /* Pred card */
 .pc{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem;margin-bottom:.35rem;position:relative}.pc.tb{border-color:rgba(245,166,35,.3)}
 .tbg{background:linear-gradient(90deg,#f5a623,#e85a2a,var(--pk));color:#fff;font-size:.46rem;font-weight:800;padding:1px 5px;border-radius:10px;position:absolute;top:4px;right:4px}
@@ -1031,7 +1040,7 @@ function sReas(title,reasons){$("rtitle").textContent=title;var h='<div class="r
 function cReas(){$("rmod").classList.remove("show")}
 
 /* ══ RESULTS ══ */
-function wcGroupTables(upToGW){
+function wcGroupTables(upToGW,includeLive){
   var groups={};
   Object.keys(D.tm).forEach(function(k){
     var t=D.tm[k];if(!t||t.ph||!t.grp)return;
@@ -1040,7 +1049,8 @@ function wcGroupTables(upToGW){
   });
   var byId={};Object.keys(groups).forEach(function(g){groups[g].forEach(function(r){byId[r.t.id]=r})});
   D.fx.forEach(function(f){
-    if(!f.grp||!f.fin||f.hs==null)return;if(upToGW&&f.e>upToGW)return;
+    var live=includeLive&&f.st&&!f.fin&&f.hs!=null&&f.as!=null;
+    if(!f.grp||(!f.fin&&!live)||f.hs==null)return;if(upToGW&&f.e>upToGW)return;
     var h=byId[f.h],a=byId[f.a];if(!h||!a)return;
     h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
     if(f.hs>f.as){h.w++;h.pts+=3;a.l++;h.fm.push("W");a.fm.push("L")}
@@ -1050,14 +1060,32 @@ function wcGroupTables(upToGW){
   Object.keys(groups).forEach(function(g){groups[g].forEach(function(r){r.gd=r.gf-r.ga;r.fm=r.fm.slice(-5)});groups[g].sort(function(a,b){return b.pts-a.pts||b.gd-a.gd||b.gf-a.gf||a.t.s.localeCompare(b.t.s)})});
   return groups;
 }
+function wcGroupPositions(groups){var pos={};Object.keys(groups).forEach(function(g){groups[g].forEach(function(r,i){pos[r.t.id]=i+1})});return pos}
+function wcLiveInfo(upToGW){
+  var out={};
+  D.fx.forEach(function(f){
+    if(!f.grp||!f.st||f.fin||f.hs==null||f.as==null)return;if(upToGW&&f.e>upToGW)return;
+    var hCls=f.hs>f.as?"win":f.hs<f.as?"loss":"draw",aCls=f.as>f.hs?"win":f.as<f.hs?"loss":"draw";
+    out[f.h]={score:f.hs+"-"+f.as,cls:hCls,opp:f.a};
+    out[f.a]={score:f.as+"-"+f.hs,cls:aCls,opp:f.h};
+  });
+  return out;
+}
+function wcMoveTag(oldPos,newPos){
+  if(!oldPos||oldPos===newPos)return"";
+  var diff=oldPos-newPos;
+  return diff>0?'<span class="tmove up">▲'+diff+'</span>':'<span class="tmove down">▼'+Math.abs(diff)+'</span>';
+}
 function rWCGroups(){
-  var groups=wcGroupTables(D.sel),keys=Object.keys(groups).sort();
+  var baseGroups=wcGroupTables(D.sel,false),basePos=wcGroupPositions(baseGroups);
+  var groups=wcGroupTables(D.sel,true),liveMap=wcLiveInfo(D.sel),hasLive=Object.keys(liveMap).length>0,keys=Object.keys(groups).sort();
   if(!keys.length)return'<div class="emp">No World Cup groups yet</div>';
-  var h='<div class="sec" style="margin-top:.6rem">Group Tables</div>';
+  var h='<div class="sec" style="margin-top:.6rem">Group Tables'+(hasLive?'<span class="tlive-note"><span class="ldot"></span>LIVE table</span>':'')+'</div>';
   keys.forEach(function(g){
     h+='<div class="sec" style="font-size:.72rem;margin:.45rem 0 .2rem;color:var(--cy)">Group '+g+'</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
     groups[g].forEach(function(r,i){var p=i+1,pc=p<=2?"pch":p===3?"pcl":"";var fm="";r.fm.forEach(function(f){fm+='<span class="fd '+f+'">'+f+'</span>'});
-      h+='<tr><td class="'+pc+'">'+p+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span></div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
+      var li=liveMap[r.t.id],score=li?'<span class="tlive-score '+li.cls+'">'+li.score+'</span>':'',move=wcMoveTag(basePos[r.t.id],p);
+      h+='<tr class="'+(li?'live-row live-'+li.cls:'')+'"><td class="'+pc+'">'+p+move+'</td><td><div class="tc"><img src="'+r.t.b+'" onerror="this.style.display=\'none\'"><span>'+r.t.s+'</span>'+score+'</div></td><td>'+r.p+'</td><td>'+r.w+'</td><td>'+r.d+'</td><td>'+r.l+'</td><td>'+r.gf+'</td><td>'+r.ga+'</td><td>'+r.gd+'</td><td class="pts">'+r.pts+'</td><td>'+fm+'</td></tr>'});
     h+='</tbody></table></div>';
   });
   return h;
