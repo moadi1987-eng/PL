@@ -229,23 +229,30 @@ def get_all_fixtures_live():
     return get_all_fixtures()
 
 
-def check_live_matches():
-    """Check if any matches are currently in progress."""
+def check_live_matches(league=None):
+    """Check if any matches are currently in progress across supported leagues."""
     from datetime import datetime, timezone
-    all_fix = get_all_fixtures()
     now = datetime.now(timezone.utc)
-    for f in all_fix:
-        if not (f.get("started") and not f.get("finished") and not f.get("finished_provisional")):
+    leagues = [league] if league else list(LEAGUES.keys())
+    for lg in leagues:
+        try:
+            all_fix = league_get_all_fixtures(lg, live=True)
+        except Exception as e:
+            logger.warning("Live check failed for %s: %s", lg, e)
             continue
-        ko = f.get("kickoff_time", "")
-        if ko:
-            try:
-                kick = datetime.fromisoformat(ko.replace("Z", "+00:00"))
-                if (now - kick).total_seconds() / 60 > 115:
-                    continue  # treat as finished
-            except Exception:
-                pass
-        return True
+        max_elapsed = 130 if lg == "wc" else 115
+        for f in all_fix:
+            if not (f.get("started") and not f.get("finished") and not f.get("finished_provisional")):
+                continue
+            ko = f.get("kickoff_time", "")
+            if ko:
+                try:
+                    kick = datetime.fromisoformat(ko.replace("Z", "+00:00"))
+                    if (now - kick).total_seconds() / 60 > max_elapsed:
+                        continue
+                except Exception:
+                    pass
+            return True
     return False
 
 
@@ -3475,6 +3482,18 @@ def start_ml_learning_watcher():
     print("[ML] Learning watcher started — checks every 90s for finished matches")
 
 
+def _clear_live_fixture_caches():
+    keys = ["fixtures"]
+    for lg in ESPN_SLUGS:
+        keys.extend([
+            f"espn_{lg}_events",
+            f"espn_{lg}_fixtures",
+            f"espn_{lg}_fixtures_live",
+        ])
+    for key in keys:
+        _cache.pop(key, None)
+
+
 def start_live_push_watcher():
     """Background thread: pushes to GitHub Pages every 2 min when live matches are detected."""
     import subprocess, sys, threading
@@ -3485,7 +3504,7 @@ def start_live_push_watcher():
         while True:
             time.sleep(LIVE_PUSH_INTERVAL)
             try:
-                _cache.pop("fixtures", None)
+                _clear_live_fixture_caches()
                 is_live = check_live_matches()
             except Exception:
                 is_live = False
