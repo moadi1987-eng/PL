@@ -87,6 +87,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .act{text-align:center;font-size:.55rem;color:var(--tm);margin-top:.15rem}.act b{color:var(--tx)}
 .psum{background:linear-gradient(135deg,rgba(0,255,135,.06),rgba(4,245,255,.04));border:1px solid rgba(0,255,135,.15);border-radius:var(--r);padding:.35rem;margin-bottom:.35rem;text-align:center;font-size:.65rem}.psum b{color:var(--g)}
 .af-bar{display:flex;gap:.3rem;margin-bottom:.4rem}.af-btn{flex:1;padding:.45rem;border:2px solid var(--bd);background:rgba(255,255,255,.03);color:var(--tx);font-size:.7rem;font-weight:700;border-radius:var(--r);cursor:pointer;text-align:center;transition:all .2s}.af-btn:active{transform:scale(.95)}.af-ai{border-color:var(--cy);color:var(--cy);background:rgba(4,245,255,.08)}.af-rnd{border-color:var(--pk);color:var(--pk);background:rgba(233,0,82,.08)}
+.locknote{background:rgba(247,201,72,.08);border:1px solid rgba(247,201,72,.18);border-radius:var(--rs);padding:.32rem .4rem;margin-top:.28rem;font-size:.55rem;color:var(--cy);line-height:1.45;text-align:center}
 .rules{background:var(--cd);border:1px solid rgba(247,201,72,.22);border-radius:var(--r);padding:.5rem;margin-bottom:.5rem}
 .rule-head{display:flex;align-items:center;justify-content:space-between;gap:.4rem;font-weight:800;font-size:.72rem;margin-bottom:.3rem}.rule-head span{font-size:.5rem;color:var(--tm);font-weight:700}
 .rulegrid{display:grid;grid-template-columns:repeat(2,1fr);gap:.25rem}.rulepill{background:rgba(255,255,255,.045);border:1px solid var(--bd);border-radius:var(--rs);padding:.32rem;font-size:.55rem;line-height:1.35}.rulepill b{display:block;color:var(--cy);font-size:.66rem;margin-bottom:.04rem}.rulenote{font-size:.52rem;color:var(--tm);line-height:1.45;margin-top:.35rem}
@@ -794,6 +795,20 @@ function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
+function isPlaceholderTeam(id){var t=D.tm[id]||{};return D.league==="wc"&&!!t.ph}
+function isLockedMatch(m){return D.league==="wc"&&(isPlaceholderTeam(m.h)||isPlaceholderTeam(m.a))}
+function aiReadyMatch(m){
+  if(isLockedMatch(m))return false;
+  if(D.league==="wc"&&m.ko&&!m.fin&&!m.st){
+    var kt=new Date(m.ko).getTime();
+    if(isFinite(kt)&&kt-Date.now()>36*60*60*1000)return false;
+  }
+  return true;
+}
+function lockedMatchNote(m){
+  if(isLockedMatch(m))return'<div class="locknote">AI prediction opens only after the real national teams are known. Placeholder knockout slots are not guessed.</div>';
+  return'<div class="locknote">AI prediction opens 36 hours before kickoff, after fresher results and live context are available.</div>';
+}
 function wcPhase(f){
   if(D.league!=="wc")return{key:"league",label:D.gwl||"GW",result:3,exact:5};
   if(f.grp)return{key:"group",label:"Group "+f.grp,result:1,exact:3};
@@ -978,7 +993,8 @@ function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
   c.innerHTML=h;}
 
 function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
-  var pds=[];ms.forEach(function(m){pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  if(!pds.length)return'<div class="emp">Predictions unlock 36 hours before kickoff, after real teams are known</div>';
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
   var h='<div class="dsc">Based on form, strength, table position & home advantage. Top 5 = Best Bets.</div>';
@@ -999,7 +1015,7 @@ function randomFill(){
   var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
-    if(m.fin)return;
+    if(m.fin||!aiReadyMatch(m))return;
     var h=_rndGoal(),a=_rndGoal();
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].hs=h;ag[gw][m.id].as=a;
@@ -1012,7 +1028,7 @@ function aiFill(){
   var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
-    if(m.fin)return;
+    if(m.fin||isLockedMatch(m))return;
     var p=pred(m.h,m.a,gw);
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
@@ -1023,22 +1039,31 @@ function aiFill(){
 function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},cw=0,ce=0,tot=0,pts=0;
   ms.forEach(function(f){if(!f.fin||f.hs==null)return;var g=gg[f.id];if(!g||(!g.w&&g.hs==null))return;tot++;var sc=scoreGuess(f,g);if(sc.correct)cw++;if(sc.exact)ce++;pts+=sc.points});
-  var pds=[];ms.forEach(function(m){pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),betRank={};so.forEach(function(x,i){if(i<5)betRank[x.m.id]=i+1});
   var open=ms.filter(function(m){return!m.fin});
+  var openPlayable=open.filter(function(m){return aiReadyMatch(m)});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(open.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
+  if(openPlayable.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> result(s), <b>'+ce+'</b> exact — <b>'+pts+' pts</b></div>';
   ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
     if(m.st&&!m.fin){setTick(m.id,m.ko,m.mn,m.sx||'');act='<div class="act"><span class="ldot"></span><span data-tick="'+m.id+'">'+liveMin(m.ko,m.mn,m.sx||'')+'</span>: <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
+    var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+' scoring: '+phase.result+' / '+phase.exact+' pts</div>':"";
+    if(isLockedMatch(m)){
+      h+='<div class="gc locked" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+lockedMatchNote(m)+act+'</div>';
+      return;
+    }
+    if(!aiReadyMatch(m)){
+      h+='<div class="gc '+(g.w?"has ":"")+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+lockedMatchNote(m)+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div>'+act+'</div>';
+      return;
+    }
     var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
-    var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+' scoring: '+phase.result+' / '+phase.exact+' pts</div>':"";
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
     h+='<div class="gc '+(g.w?"has ":"")+(rk?" tb ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+pctBar+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
   return h;}
@@ -1046,7 +1071,8 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0,uPts=0,aPts=0;
   // Best Bets Score Table
-  var pds=[];ms.forEach(function(m){pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(!isLockedMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  if(!pds.length)return'<div class="emp">AI comparison unlocks 36 hours before kickoff, after real teams are known</div>';
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
   var bb=[];
@@ -1059,7 +1085,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var bbH='<div class="bb"><h5>Best Bets Score</h5><table><thead><tr><th>#</th><th>Match</th><th>Actual</th><th>Pick</th><th>W</th><th>AI Advice</th><th>AI</th></tr></thead><tbody>';
   bb.forEach(function(b){bbH+='<tr><td>'+b.rk+'</td><td><b>'+b.hm.s+' v '+b.am.s+'</b></td><td>'+b.aw+' '+b.as2+'</td><td>'+b.uw+' '+b.us+'</td><td>'+(b.fin?(b.wok?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td><td>'+b.adv+'</td><td>'+(b.fin?(b.aiOk?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td></tr>'});
   bbH+='<tr class="sm"><td colspan="2"><b>Out of 5</b></td><td colspan="2"></td><td><b>'+wC+'/5</b></td><td></td><td><b>'+aiC+'/5</b></td></tr></tbody></table></div>';
-  var rows="";ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
+  var rows="";ms.forEach(function(m){if(!aiReadyMatch(m))return;var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var lb={home:hm.s,draw:"Draw",away:am.s};
     var uw=g.w||null,aiW=p.rec;
