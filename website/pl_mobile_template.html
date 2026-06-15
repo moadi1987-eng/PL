@@ -868,6 +868,27 @@ function wcMotivation(tid,gw,match){
   else if(r.p===1){urgent=r.pts===0?.35:r.pts===1?.18:0;safe=r.pts===3?.25:0}
   return{played:r.p,pts:r.pts,urgent:urgent,safe:safe};
 }
+function missImpact(p){var v=+(p.xgi||p.impact||0)||0;return p.src==="espn"||p.src==="manual"?Math.min(v/100,.15):Math.min(v/15,.15)}
+function squadDepthPenalty(t){
+  var s=(t&&t.sq)||null;if(!s||!s.n)return 0;
+  var p=0;if(s.n<23)p+=(23-s.n)*.01;
+  if((s.g||0)<2)p+=.025;if((s.d||0)<5)p+=.02;if((s.m||0)<5)p+=.015;if((s.f||0)<4)p+=.02;
+  return Math.min(p,.09);
+}
+function availabilityPenalty(list,side){
+  var p=0;(list||[]).forEach(function(x){var pos=(x.pos||"").toUpperCase(),v=missImpact(x);
+    if(side==="attack"){if(pos==="F")p+=v*1.15;else if(pos==="M")p+=v*.75;else if(!pos)p+=v*.65}
+    else{if(pos==="G")p+=v*1.25;else if(pos==="D")p+=v;else if(pos==="M")p+=v*.45;else if(!pos)p+=v*.55}
+  });
+  return Math.min(p,.32);
+}
+function availabilityText(tid,list){
+  var t=T(tid),s=(D.tm[tid]||{}).sq||{},parts=[];
+  if(s.n)parts.push(t.s+" squad "+s.n+" ("+(s.g||0)+"G/"+(s.d||0)+"D/"+(s.m||0)+"M/"+(s.f||0)+"F)");
+  if((list||[]).length)parts.push(t.s+" missing: "+list.map(function(p){return p.n+(p.status&&p.status!=="out"?" "+p.status:"")}).join(", "));
+  else if(s.n)parts.push(t.s+" no flagged absences");
+  return parts.join(" · ");
+}
 
 function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++)f*=i;return Math.pow(lam,k)*Math.exp(-lam)/f}
 function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
@@ -923,10 +944,12 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   var hXg=ht.xg||1.3,aXg=at.xg||1.1,hXgc=ht.xgc||1.2,aXgc=at.xgc||1.2;
   var lamH=(hs.gf/hm*.15+hXg*.25+(as.ga/am)*.20+hSp.gf*.15+hTrGf*.15+(aXgc||1.2)*.10)*1.08;
   var lamA=(as.gf/am*.15+aXg*.25+(hs.ga/hm)*.20+aSp.gf*.15+aTrGf*.15+(hXgc||1.2)*.10)*0.92;
-  // Injury penalty
+  // Availability penalty
   var hInj=ht.inj||[],aInj=at.inj||[];
-  var hPen=0,aPen=0;hInj.forEach(function(p){hPen+=Math.min(p.xgi/15,.15)});aInj.forEach(function(p){aPen+=Math.min(p.xgi/15,.15)});
-  lamH*=(1-Math.min(hPen,.35));lamA*=(1-Math.min(aPen,.35));
+  var hAtkPen=availabilityPenalty(hInj,"attack")+squadDepthPenalty(ht),aAtkPen=availabilityPenalty(aInj,"attack")+squadDepthPenalty(at);
+  var hDefPen=availabilityPenalty(hInj,"defense"),aDefPen=availabilityPenalty(aInj,"defense");
+  lamH*=(1-Math.min(hAtkPen,.35));lamA*=(1-Math.min(aAtkPen,.35));
+  lamH*=(1+Math.min(aDefPen,.18));lamA*=(1+Math.min(hDefPen,.18));
   if(aCs>40)lamH*=0.88;if(hCs>40)lamA*=0.88;
   var hCon=0,aCon=0;hAll.slice(-5).forEach(function(m){hCon+=m.ga});aCon=0;aAll.slice(-5).forEach(function(m){aCon+=m.ga});
   hCon/=Math.max(hAll.slice(-5).length,1);aCon/=Math.max(aAll.slice(-5).length,1);
@@ -969,7 +992,11 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   reasons.push("Form: "+T(hid).s+" "+hs.w+"W"+hs.d+"D"+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W"+as.d+"D"+as.l+"L ("+as.fs+"%)");
   if(neutral&&hWI&&aWI)reasons.push("WC live rating: "+T(hid).s+" "+hWI.gf+"-"+hWI.ga+" / "+hWI.pts+" pts | "+T(aid).s+" "+aWI.gf+"-"+aWI.ga+" / "+aWI.pts+" pts");
   reasons.push("xG/match: "+T(hid).s+" "+hXg+" | "+T(aid).s+" "+aXg);
-  if(hInj.length||aInj.length){var injTxt=[];if(hInj.length)injTxt.push(T(hid).s+": "+hInj.map(function(p){return p.n}).join(", ")+" out");if(aInj.length)injTxt.push(T(aid).s+": "+aInj.map(function(p){return p.n}).join(", ")+" out");reasons.push("Injuries: "+injTxt.join(" | "))}
+  if((ht.sq&&ht.sq.n)||(at.sq&&at.sq.n)||hInj.length||aInj.length){
+    var avTxt=[];var hTxt=availabilityText(hid,hInj),aTxt=availabilityText(aid,aInj);
+    if(hTxt)avTxt.push(hTxt);if(aTxt)avTxt.push(aTxt);
+    reasons.push("Squad availability: "+avTxt.join(" | "));
+  }
   reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
   if(neutral&&hMot&&aMot&&(hMot.urgent||aMot.urgent||hMot.safe||aMot.safe))reasons.push("Group context: "+T(hid).s+" "+hMot.pts+" pts after "+hMot.played+" | "+T(aid).s+" "+aMot.pts+" pts after "+aMot.played);
   reasons.push("Predicted: "+rh+"-"+ra+" (winner-aligned score model)");
@@ -1426,9 +1453,9 @@ function rAI(){
   var tSpan=delta===null?'<span class="aitrend">No trend yet</span>':'<span class="aitrend '+(delta>=0?'up':'down')+'">'+(delta>=0?'Up ':'Down ')+Math.abs(delta).toFixed(1)+'%</span>';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
   h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+(localRows?' tracking':' accuracy')+'</div><div class="ainum" style="color:'+lgCol+'">'+acc+'%</div><div class="aimeta">'+tot+' matches checked · '+rows.length+' '+gwLbl+'s '+(localRows?'tracked':'learned')+'</div></div>'+tSpan+'</div></div>';
-  h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, points in the group, goal difference, and qualification pressure.</span></div>'+
+  h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, ESPN roster availability, manual absence overrides, points in the group, goal difference, and qualification pressure.</span></div>'+
     '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson score model, blends it with factor probabilities, then chooses a realistic scoreline that matches the recommended result instead of defaulting too often to 0-0.</span></div>'+
-    '<div><b>Learning state</b><span>'+(localRows?'No embedded WC learning file yet, so this tab tracks completed tournament matches locally and the predictions adapt from those results, group context, and seed ratings.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
+    '<div><b>Learning state</b><span>'+(localRows?'No embedded WC learning file yet, so this tab tracks completed tournament matches locally and the predictions adapt from those results, roster availability, group context, and seed ratings.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
   if(rows.length){
     var last=rows[rows.length-1],best=rows.slice().sort(function(a,b){return b.accuracy_pct-a.accuracy_pct})[0],weak=rows.slice().sort(function(a,b){return a.accuracy_pct-b.accuracy_pct})[0];
     h+='<div class="aimetrics">';

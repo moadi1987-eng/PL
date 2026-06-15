@@ -1,0 +1,5 @@
+{
+  "notes": "Manual World Cup availability overrides. Team keys can be ESPN abbreviation, ESPN team id, or team name. impact is 1-15 and affects the AI score model.",
+  "teams": {
+  }
+}

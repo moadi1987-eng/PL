@@ -5,6 +5,7 @@ Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
 Usage:  python update_pl_mobile.py
 """
 import json, requests, os, base64, re, unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from dotenv import load_dotenv
@@ -26,10 +27,12 @@ from datetime import datetime, timezone
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
 ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+ESPN_WC_ROSTER = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/teams/{team_id}/roster"
 FIFA_WC_MATCHES = "https://api.fifa.com/api/v3/calendar/matches"
 FIFA_WC_COMPETITION = "17"
 FIFA_WC_SEASON = "285023"
 WC_DATE_RANGE = "20260611-20260719"
+WC_AVAILABILITY_FILE = os.path.join(HERE, "wc_availability.json")
 WC_TEAM_STRENGTH = {
     "ARG": 1410, "FRA": 1400, "ESP": 1390, "ENG": 1385, "BRA": 1380,
     "POR": 1365, "NED": 1355, "BEL": 1340, "GER": 1335, "CRO": 1320,
@@ -148,6 +151,170 @@ def fetch_fifa_wc_matches():
             "sx": {0: "STATUS_FULL_TIME", 1: "STATUS_SCHEDULED", 3: "STATUS_IN_PROGRESS"}.get(status, f"FIFA_{status}"),
         })
     return matches
+
+
+def _athlete_stat(athlete, names):
+    names = set(names)
+    splits = (athlete.get("statistics", {}) or {}).get("splits", {}) or {}
+    for cat in splits.get("categories", []) or []:
+        for stat in cat.get("stats", []) or []:
+            if stat.get("name") in names:
+                try:
+                    return float(stat.get("value") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+    return 0.0
+
+
+def _availability_status(athlete):
+    injuries = athlete.get("injuries") or []
+    status = athlete.get("status") or {}
+    status_type = str(status.get("type") or status.get("name") or "").lower()
+    if injuries:
+        first = injuries[0] or {}
+        label = (
+            first.get("status")
+            or first.get("type")
+            or first.get("details")
+            or first.get("description")
+            or "injury"
+        )
+        return str(label), True
+    if status_type and status_type not in ("active", "available"):
+        return status.get("name") or status.get("type") or "unavailable", True
+    return "active", False
+
+
+def _player_availability_impact(athlete):
+    pos = ((athlete.get("position") or {}).get("abbreviation") or "").upper()
+    base = {"G": 7.0, "D": 5.0, "M": 6.0, "F": 7.0}.get(pos, 5.0)
+    goals = _athlete_stat(athlete, ("totalGoals", "goals"))
+    assists = _athlete_stat(athlete, ("goalAssists", "assists"))
+    apps = _athlete_stat(athlete, ("appearances",))
+    shots = _athlete_stat(athlete, ("shotsOnTarget", "totalShots"))
+    saves = _athlete_stat(athlete, ("saves",))
+    impact = base + goals * 2.5 + assists * 2 + min(apps * 1.2, 4) + min(shots * 0.25, 3)
+    if pos == "G":
+        impact += min(saves * 0.12, 3)
+    return round(max(3.0, min(15.0, impact)), 1)
+
+
+def _fetch_espn_wc_roster(team_id):
+    url = ESPN_WC_ROSTER.format(team_id=team_id)
+    resp = requests.get(url, headers=hdr, timeout=15)
+    resp.raise_for_status()
+    athletes = resp.json().get("athletes", []) or []
+    counts = {"G": 0, "D": 0, "M": 0, "F": 0}
+    unavailable = []
+    for athlete in athletes:
+        pos = ((athlete.get("position") or {}).get("abbreviation") or "").upper()
+        if pos in counts:
+            counts[pos] += 1
+        status_label, is_unavailable = _availability_status(athlete)
+        if is_unavailable:
+            unavailable.append({
+                "n": athlete.get("shortName") or athlete.get("displayName") or athlete.get("fullName") or "?",
+                "pos": pos,
+                "status": status_label,
+                "xgi": _player_availability_impact(athlete),
+                "src": "espn",
+            })
+    unavailable.sort(key=lambda p: p.get("xgi", 0), reverse=True)
+    return {
+        "sq": {
+            "src": "ESPN roster",
+            "n": len(athletes),
+            "g": counts["G"],
+            "d": counts["D"],
+            "m": counts["M"],
+            "f": counts["F"],
+            "out": len(unavailable),
+        },
+        "inj": unavailable[:5],
+    }
+
+
+def _team_lookup(teams):
+    out = {}
+    for team in teams.values():
+        out[str(team.get("id", ""))] = team
+        if team.get("s"):
+            out[str(team["s"]).upper()] = team
+        if team.get("n"):
+            out[wc_team_key(team["n"])] = team
+    return out
+
+
+def _load_wc_availability_overrides():
+    if not os.path.exists(WC_AVAILABILITY_FILE):
+        return {}
+    try:
+        with open(WC_AVAILABILITY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"World Cup availability overrides skipped: {e}")
+        return {}
+
+
+def apply_wc_availability(wc_teams):
+    actual = {tid: t for tid, t in wc_teams.items() if not t.get("ph")}
+    roster_ok = 0
+    roster_issues = 0
+    if actual:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(_fetch_espn_wc_roster, tid): tid for tid in actual}
+            for fut in as_completed(futs):
+                tid = futs[fut]
+                try:
+                    info = fut.result()
+                except Exception:
+                    continue
+                team = wc_teams.get(tid)
+                if not team:
+                    continue
+                team["sq"] = info["sq"]
+                if info["inj"]:
+                    team["inj"] = info["inj"]
+                    roster_issues += len(info["inj"])
+                roster_ok += 1
+
+    overrides = _load_wc_availability_overrides()
+    manual_issues = 0
+    lookup = _team_lookup(wc_teams)
+    for key, cfg in (overrides.get("teams") or {}).items():
+        team = lookup.get(str(key).upper()) or lookup.get(wc_team_key(key))
+        if not team:
+            continue
+        sq = team.setdefault("sq", {"src": "manual", "n": 0, "g": 0, "d": 0, "m": 0, "f": 0, "out": 0})
+        if sq.get("src") and "manual" not in sq["src"].lower():
+            sq["src"] = sq["src"] + "+manual"
+        for item in cfg.get("inj", []) or []:
+            name = item.get("n") or item.get("name")
+            if not name:
+                continue
+            impact = item.get("impact", item.get("xgi", 6))
+            try:
+                impact = float(impact)
+            except (TypeError, ValueError):
+                impact = 6.0
+            entry = {
+                "n": name,
+                "pos": str(item.get("pos", "")).upper(),
+                "status": item.get("status", "out"),
+                "xgi": round(max(1.0, min(15.0, impact)), 1),
+                "src": "manual",
+            }
+            if item.get("note"):
+                entry["note"] = item["note"]
+            existing = [str(p.get("n", "")).lower() for p in team.get("inj", [])]
+            if entry["n"].lower() not in existing:
+                team.setdefault("inj", []).append(entry)
+                manual_issues += 1
+        if team.get("inj"):
+            team["inj"].sort(key=lambda p: p.get("xgi", 0), reverse=True)
+            team["inj"] = team["inj"][:5]
+            sq["out"] = len(team["inj"])
+    return roster_ok, roster_issues, manual_issues
 
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
@@ -559,6 +726,15 @@ try:
         })
     if fifa_overlays:
         print(f"World Cup: overlaid {fifa_overlays} matches from FIFA official feed")
+
+    roster_ok, roster_issues, manual_issues = apply_wc_availability(wc_teams)
+    if roster_ok:
+        msg = f"World Cup: ESPN rosters loaded for {roster_ok} teams"
+        if roster_issues:
+            msg += f", {roster_issues} flagged availability issues"
+        if manual_issues:
+            msg += f", {manual_issues} manual overrides"
+        print(msg)
 
     max_wc_day = max((f["e"] for f in wc_fixtures), default=1)
     wc_gws = []
