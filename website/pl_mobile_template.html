@@ -807,24 +807,94 @@ function bSt(upToGW){var t={};Object.keys(D.tm).forEach(function(k){var x=D.tm[k
     if(f.hs>f.as){h.w++;h.pts+=3;a.l++;h.fm.push("W");a.fm.push("L")}else if(f.hs===f.as){h.d++;h.pts++;a.d++;a.pts++;h.fm.push("D");a.fm.push("D")}else{a.w++;a.pts+=3;h.l++;h.fm.push("L");a.fm.push("W")}});
   var arr=[];for(var k in t){t[k].gd=t[k].gf-t[k].ga;t[k].fm=t[k].fm.slice(-5);arr.push(t[k])}
   arr.sort(function(a,b){return b.pts-a.pts||b.gd-a.gd||b.gf-a.gf});D.st=arr;}
-function tS(id,n,bGW){var m=D.fx.filter(function(f){return f.fin&&f.hs!=null&&(f.h===id||f.a===id)&&(!bGW||f.e<bGW)}).sort(function(a,b){return b.e-a.e}).slice(0,n);
+function beforeCut(f,bGW,match){
+  if(match&&match.ko&&f.ko){
+    var fk=new Date(f.ko).getTime(),mk=new Date(match.ko).getTime();
+    if(isFinite(fk)&&isFinite(mk))return fk<mk;
+  }
+  return !bGW||f.e<bGW;
+}
+function tS(id,n,bGW,match){var m=D.fx.filter(function(f){return f.fin&&f.hs!=null&&(f.h===id||f.a===id)&&beforeCut(f,bGW,match)}).sort(function(a,b){return(a.ko||a.e).toString().localeCompare((b.ko||b.e).toString())}).slice(-n);
   var w=0,d=0,l=0,gf=0,ga=0;m.forEach(function(x){var ih=x.h===id,mf=ih?x.hs:x.as,mg=ih?x.as:x.hs;gf+=mf;ga+=mg;if(mf>mg)w++;else if(mf===mg)d++;else l++});
   return{gf:gf,ga:ga,w:w,d:d,l:l,fs:m.length?Math.round((w*3+d)/(m.length*3)*1000)/10:0,c:m.length,ms:m};}
-function allMatches(tid,bGW){return D.fx.filter(function(f){return f.fin&&f.hs!=null&&(f.h===tid||f.a===tid)&&(!bGW||f.e<bGW)}).sort(function(a,b){return a.e-b.e}).map(function(f){var ih=f.h===tid;return{gw:f.e,ih:ih,gf:ih?f.hs:f.as,ga:ih?f.as:f.hs,opp:ih?f.a:f.h,r:ih?(f.hs>f.as?"W":f.hs===f.as?"D":"L"):(f.as>f.hs?"W":f.as===f.hs?"D":"L")}})}
+function allMatches(tid,bGW,match){return D.fx.filter(function(f){return f.fin&&f.hs!=null&&(f.h===tid||f.a===tid)&&beforeCut(f,bGW,match)}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")||a.e-b.e}).map(function(f){var ih=f.h===tid;return{gw:f.e,ih:ih,gf:ih?f.hs:f.as,ga:ih?f.as:f.hs,opp:ih?f.a:f.h,r:ih?(f.hs>f.as?"W":f.hs===f.as?"D":"L"):(f.as>f.hs?"W":f.as===f.hs?"D":"L")}})}
 function streak(ms,n){var r=ms.slice(-n),t=0,ws=0;for(var i=0;i<r.length;i++){var w=i+1;t+=(r[i].r==="W"?3:r[i].r==="D"?1:0)*w;ws+=3*w}return ws?Math.round(t/ws*1000)/10:50}
 function haSplit(ms,isH){var f=ms.filter(function(m){return m.ih===isH});if(!f.length)return{gf:1,ga:1,wr:33};var gf=0,ga=0,w=0;f.forEach(function(m){gf+=m.gf;ga+=m.ga;if(m.r==="W")w++});var n=f.length;return{gf:Math.round(gf/n*100)/100,ga:Math.round(ga/n*100)/100,wr:Math.round(w/n*1000)/10}}
-function h2h(hid,aid){var r={hw:0,d:0,aw:0,hg:0,ag:0,n:0};D.fx.forEach(function(f){if(!f.fin||f.hs==null)return;if((f.h===hid&&f.a===aid)||(f.h===aid&&f.a===hid)){r.n++;if(f.h===hid){r.hg+=f.hs;r.ag+=f.as;if(f.hs>f.as)r.hw++;else if(f.hs===f.as)r.d++;else r.aw++}else{r.hg+=f.as;r.ag+=f.hs;if(f.as>f.hs)r.hw++;else if(f.as===f.hs)r.d++;else r.aw++}}});return r}
+function h2h(hid,aid,bGW,match){var r={hw:0,d:0,aw:0,hg:0,ag:0,n:0};D.fx.forEach(function(f){if(!f.fin||f.hs==null||!beforeCut(f,bGW,match))return;if((f.h===hid&&f.a===aid)||(f.h===aid&&f.a===hid)){r.n++;if(f.h===hid){r.hg+=f.hs;r.ag+=f.as;if(f.hs>f.as)r.hw++;else if(f.hs===f.as)r.d++;else r.aw++}else{r.hg+=f.as;r.ag+=f.hs;if(f.as>f.hs)r.hw++;else if(f.as===f.hs)r.d++;else r.aw++}}});return r}
+
+function wcPriorMatches(gw,match){
+  return D.fx.filter(function(f){return D.league==="wc"&&f.fin&&f.hs!=null&&beforeCut(f,gw,match)});
+}
+function wcAvgTeamGoals(gw,match){
+  var ms=wcPriorMatches(gw,match),g=0;
+  ms.forEach(function(f){g+=f.hs+f.as});
+  return ms.length?Math.max(.75,Math.min(1.75,g/(ms.length*2))):1.22;
+}
+function wcIntel(tid,gw,match){
+  var ms=wcPriorMatches(gw,match).filter(function(f){return f.h===tid||f.a===tid});
+  var r={m:0,pts:0,gf:0,ga:0,gd:0,clean:0,rtAdj:0,atk:1,def:1};
+  ms.forEach(function(f){
+    var ih=f.h===tid,gf=ih?f.hs:f.as,ga=ih?f.as:f.hs;
+    r.m++;r.gf+=gf;r.ga+=ga;if(ga===0)r.clean++;
+    r.pts+=gf>ga?3:gf===ga?1:0;
+  });
+  r.gd=r.gf-r.ga;
+  var avg=wcAvgTeamGoals(gw,match);
+  if(r.m){
+    r.atk=Math.max(.55,Math.min(1.75,(r.gf/r.m)/avg));
+    r.def=Math.max(.55,Math.min(1.75,(r.ga/r.m)/avg));
+    r.rtAdj=Math.max(-120,Math.min(120,r.gd*26+((r.pts/r.m)-1)*34+(r.clean/r.m)*18));
+  }
+  return r;
+}
+function wcGroupBefore(tid,gw,match){
+  var t=D.tm[tid]||{},grp=t.grp,rows={};
+  if(!grp)return null;
+  Object.keys(D.tm).forEach(function(k){var x=D.tm[k];if(x&&x.grp===grp&&!x.ph)rows[x.id]={p:0,pts:0,gf:0,ga:0,gd:0}});
+  D.fx.forEach(function(f){
+    if(!f.grp||f.grp!==grp||!f.fin||f.hs==null||!beforeCut(f,gw,match))return;
+    var h=rows[f.h],a=rows[f.a];if(!h||!a)return;
+    h.p++;a.p++;h.gf+=f.hs;h.ga+=f.as;a.gf+=f.as;a.ga+=f.hs;
+    h.pts+=f.hs>f.as?3:f.hs===f.as?1:0;
+    a.pts+=f.as>f.hs?3:f.hs===f.as?1:0;
+  });
+  Object.keys(rows).forEach(function(k){rows[k].gd=rows[k].gf-rows[k].ga});
+  return rows[tid]||null;
+}
+function wcMotivation(tid,gw,match){
+  var r=wcGroupBefore(tid,gw,match)||{p:0,pts:0,gd:0};
+  var urgent=0,safe=0;
+  if(r.p>=2){urgent=r.pts<4?1:(r.pts<6?.45:0);safe=r.pts>=4?.65:0}
+  else if(r.p===1){urgent=r.pts===0?.35:r.pts===1?.18:0;safe=r.pts===3?.25:0}
+  return{played:r.p,pts:r.pts,urgent:urgent,safe:safe};
+}
 
 function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++)f*=i;return Math.pow(lam,k)*Math.exp(-lam)/f}
 function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
 function pickOutcome(hp,dp,ap,neutral){var v=neutral?{home:hp,draw:dp*1.35,away:ap}:{home:hp*1.25,draw:dp*1.8,away:ap*.85};return v.home>=v.away&&v.home>=v.draw?"home":v.away>=v.home&&v.away>=v.draw?"away":"draw"}
 function alignScore(h,a,w){h=Math.max(0,Math.round(h));a=Math.max(0,Math.round(a));if(w==="draw"){var s=Math.max(0,Math.round((h+a)/2));return[s,s]}if(w==="home"&&h<=a)h=a+1;if(w==="away"&&a<=h)a=h+1;return[h,a]}
-function scoreForWinner(lH,lA,w){var best=[0,0],bp=-1,nd=[1,1],ndp=-1;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var ok=w==="draw"?h===a:w==="home"?h>a:a>h;if(!ok)continue;var p=_poisson(lH,h)*_poisson(lA,a);if(p>bp){bp=p;best=[h,a]}if(w==="draw"&&h===a&&h>0&&p>ndp){ndp=p;nd=[h,a]}}if(w==="draw"&&best[0]===0&&best[1]===0&&ndp>bp*.72)return nd;if(w==="home"&&best[0]===1&&best[1]===0){if(lH>=1.65&&lA<=1)return[2,0];if(lH>=1.45&&lA>=1.05)return[2,1]}if(w==="away"&&best[0]===0&&best[1]===1){if(lA>=1.65&&lH<=1)return[0,2];if(lA>=1.45&&lH>=1.05)return[1,2]}return best}
+function scoreForWinner(lH,lA,w,ctx){
+  var best=[0,0],bp=-1,nd=[1,1],ndp=-1,target=ctx&&ctx.total?ctx.total:lH+lA,open=ctx&&ctx.open;
+  for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){
+    var ok=w==="draw"?h===a:w==="home"?h>a:a>h;if(!ok)continue;
+    var p=_poisson(lH,h)*_poisson(lA,a),tot=h+a,shape=1-Math.min(Math.abs(tot-target)/4,.28);
+    if(open&&tot>=2)p*=1.06;
+    if(target>2.15&&h===0&&a===0)p*=.45;
+    p*=shape;
+    if(p>bp){bp=p;best=[h,a]}
+    if(w==="draw"&&h===a&&h>0&&p>ndp){ndp=p;nd=[h,a]}
+  }
+  if(w==="draw"&&best[0]===0&&best[1]===0&&ndp>bp*.55)return nd;
+  if(w==="home"&&best[0]===1&&best[1]===0){if(lH>=1.75&&lA<=1.05)return[2,0];if(lH>=1.45&&lA>=1.05)return[2,1]}
+  if(w==="away"&&best[0]===0&&best[1]===1){if(lA>=1.75&&lH<=1.05)return[0,2];if(lA>=1.45&&lH>=1.05)return[1,2]}
+  return best;
+}
 
-function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},at=D.tm[aid]||{};
+function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),ht=D.tm[hid]||{},at=D.tm[aid]||{};
   var neutral=D.league==="wc";
   var pm={};D.st.forEach(function(r,i){pm[r.t.id]=i+1});
-  var hAll=allMatches(hid,gw),aAll=allMatches(aid,gw);
+  var hAll=allMatches(hid,gw,match),aAll=allMatches(aid,gw,match);
+  var hWI=neutral?wcIntel(hid,gw,match):null,aWI=neutral?wcIntel(aid,gw,match):null,hMot=neutral?wcMotivation(hid,gw,match):null,aMot=neutral?wcMotivation(aid,gw,match):null;
   var W=typeof EMBEDDED_WEIGHTS!=="undefined"?EMBEDDED_WEIGHTS:{form:.15,strength:.15,position:.12,home_adv:.08,streak:.12,h2h:.08,home_away_split:.08,goals_trend:.06,upset:.06,clean_sheet:.05,draw_tendency:.05};
   var tSize=Math.max(D.st.length,20),midPos=Math.ceil(tSize/2);
   var hP=(tSize+1-(pm[hid]||midPos))/tSize*100,aP=(tSize+1-(pm[aid]||midPos))/tSize*100;
@@ -832,7 +902,7 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   if(neutral){hRat=Math.pow(hRat,1.45);aRat=Math.pow(aRat,1.45)}
   var hStr=hRat*50,aStr=aRat*50;
   var hStrk=streak(hAll,5),aStrk=streak(aAll,5);
-  var h2=h2h(hid,aid),h2hH=h2.n?Math.round((h2.hw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:(neutral?50:55),h2hA=h2.n?Math.round((h2.aw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:(neutral?50:45);
+  var h2=h2h(hid,aid,gw,match),h2hH=h2.n?Math.round((h2.hw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:(neutral?50:55),h2hA=h2.n?Math.round((h2.aw*3+h2.d)/Math.max(h2.n*3,1)*1000)/10:(neutral?50:45);
   var hSp=haSplit(hAll,true),aSp=haSplit(aAll,false);
   var hTrGf=0,aTrGf=0;if(hAll.length){var hl=hAll.slice(-3);hl.forEach(function(m){hTrGf+=m.gf});hTrGf/=hl.length}else hTrGf=neutral?1.1:1.2;
   if(aAll.length){var al=aAll.slice(-3);al.forEach(function(m){aTrGf+=m.gf});aTrGf/=al.length}else aTrGf=neutral?1.1:1;
@@ -862,13 +932,23 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   hCon/=Math.max(hAll.slice(-5).length,1);aCon/=Math.max(aAll.slice(-5).length,1);
   if(aCon>2)lamH*=1.08;if(hCon>2)lamA*=1.08;
   if(neutral){
-    var hRt=((ht.sah||1120)+(ht.sdh||1120))/2,aRt=((at.saa||1120)+(at.sda||1120))/2;
+    var hRt=((ht.sah||1120)+(ht.sdh||1120))/2+(hWI?hWI.rtAdj:0),aRt=((at.saa||1120)+(at.sda||1120))/2+(aWI?aWI.rtAdj:0);
     var gap=Math.max(-320,Math.min(320,hRt-aRt));
     var rSh=Math.max(.28,Math.min(.72,.5+gap/900)),fSh=hSc/Math.max(hSc+aSc,1);
     var sh=rSh*.75+fSh*.25,totalG=2.45+Math.min(Math.abs(gap)/900,.35);
     var baseH=totalG*sh,baseA=totalG*(1-sh);
     var hw=Math.min(Math.max(hs.c,hAll.length)/3,1),aw=Math.min(Math.max(as.c,aAll.length)/3,1);
     lamH=lamH*hw+baseH*(1-hw);lamA=lamA*aw+baseA*(1-aw);
+    var avgTG=wcAvgTeamGoals(gw,match),rel=Math.min(.65,Math.max((hWI?hWI.m:0),(aWI?aWI.m:0))/3*.65);
+    if(rel>0){
+      var learnedH=avgTG*Math.pow(hWI.atk,.72)*Math.pow(aWI.def,.55),learnedA=avgTG*Math.pow(aWI.atk,.72)*Math.pow(hWI.def,.55);
+      lamH=lamH*(1-rel)+learnedH*rel;lamA=lamA*(1-rel)+learnedA*rel;
+    }
+    if(hMot&&aMot){
+      if(hMot.urgent>aMot.urgent){lamH*=1+Math.min(.12,hMot.urgent*.08);lamA*=1.02}
+      if(aMot.urgent>hMot.urgent){lamA*=1+Math.min(.12,aMot.urgent*.08);lamH*=1.02}
+      if(hMot.safe&&aMot.safe){lamH*=.96;lamA*=.96}
+    }
     lamH=Math.max(lamH,.75);lamA=Math.max(lamA,.65);
   }else{lamH=Math.max(lamH,.3);lamA=Math.max(lamA,.3)}
   var poi=_poissonMatch(lamH,lamA);
@@ -876,15 +956,22 @@ function pred(hid,aid,gw){var hs=tS(hid,5,gw),as=tS(aid,5,gw),ht=D.tm[hid]||{},a
   var hp=Math.round((fhp*.4+poi.hw*.6)*10)/10;
   var dp=Math.round((fdp*.4+poi.dr*.6)*10)/10;
   var ap=Math.round((100-hp-dp)*10)/10;
+  if(neutral&&hMot&&aMot){
+    if(hMot.urgent||aMot.urgent){dp*=.9;if(hMot.urgent>aMot.urgent)hp*=1.04;if(aMot.urgent>hMot.urgent)ap*=1.04}
+    if(hMot.safe&&aMot.safe)dp*=1.08;
+    var ps=hp+dp+ap;hp=Math.round(hp/ps*1000)/10;dp=Math.round(dp/ps*1000)/10;ap=Math.round((100-hp-dp)*10)/10;
+  }
   var phg=Math.round(lamH*10)/10,pag=Math.round(lamA*10)/10;
-  var rec=pickOutcome(hp,dp,ap,neutral),sc=scoreForWinner(lamH,lamA,rec);
+  var rec=pickOutcome(hp,dp,ap,neutral),sc=scoreForWinner(lamH,lamA,rec,{total:lamH+lamA,open:neutral&&(hMot&&aMot)&&(hMot.urgent||aMot.urgent)});
   var rh=sc[0],ra=sc[1];
   // Reasoning
   var reasons=[];
   reasons.push("Form: "+T(hid).s+" "+hs.w+"W"+hs.d+"D"+hs.l+"L ("+hs.fs+"%) | "+T(aid).s+" "+as.w+"W"+as.d+"D"+as.l+"L ("+as.fs+"%)");
+  if(neutral&&hWI&&aWI)reasons.push("WC live rating: "+T(hid).s+" "+hWI.gf+"-"+hWI.ga+" / "+hWI.pts+" pts | "+T(aid).s+" "+aWI.gf+"-"+aWI.ga+" / "+aWI.pts+" pts");
   reasons.push("xG/match: "+T(hid).s+" "+hXg+" | "+T(aid).s+" "+aXg);
   if(hInj.length||aInj.length){var injTxt=[];if(hInj.length)injTxt.push(T(hid).s+": "+hInj.map(function(p){return p.n}).join(", ")+" out");if(aInj.length)injTxt.push(T(aid).s+": "+aInj.map(function(p){return p.n}).join(", ")+" out");reasons.push("Injuries: "+injTxt.join(" | "))}
   reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
+  if(neutral&&hMot&&aMot&&(hMot.urgent||aMot.urgent||hMot.safe||aMot.safe))reasons.push("Group context: "+T(hid).s+" "+hMot.pts+" pts after "+hMot.played+" | "+T(aid).s+" "+aMot.pts+" pts after "+aMot.played);
   reasons.push("Predicted: "+rh+"-"+ra+" (winner-aligned score model)");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});var tb=$("gwToday");if(tb){if(D.cur&&D.sel!==D.cur){tb.textContent='\u25CF '+lbl+D.cur;tb.style.display="flex"}else{tb.style.display="none"}}}
@@ -1113,7 +1200,7 @@ function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
   c.innerHTML=h;}
 
 function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
-  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw,m)})});
   if(!pds.length)return'<div class="emp">Predictions unlock 36 hours before kickoff, after real teams are known</div>';
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
@@ -1149,7 +1236,7 @@ function aiFill(){
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
     if(m.fin||isLockedMatch(m))return;
-    var p=pred(m.h,m.a,gw);
+    var p=pred(m.h,m.a,gw,m);
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
   });
@@ -1159,7 +1246,7 @@ function aiFill(){
 function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},cw=0,ce=0,tot=0,pts=0;
   ms.forEach(function(f){if(!f.fin||f.hs==null)return;var g=gg[f.id];if(!g||(!g.w&&g.hs==null))return;tot++;var sc=scoreGuess(f,g);if(sc.correct)cw++;if(sc.exact)ce++;pts+=sc.points});
-  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(aiReadyMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw,m)})});
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),betRank={};so.forEach(function(x,i){if(i<5)betRank[x.m.id]=i+1});
   var open=ms.filter(function(m){return!m.fin});
@@ -1182,7 +1269,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
       h+='<div class="gc '+(g.w?"has ":"")+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+lockedMatchNote(m)+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div>'+act+'</div>';
       return;
     }
-    var p=pred(m.h,m.a,gw),lb={home:hm.s,draw:"Draw",away:am.s};
+    var p=pred(m.h,m.a,gw,m),lb={home:hm.s,draw:"Draw",away:am.s};
     var ri=JSON.stringify(p.reasons).replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     var pctBar='<div class="pb" style="margin:.2rem 0"><div class="pbh" style="width:'+p.hp+'%">'+p.hp+'%</div><div class="pbd" style="width:'+p.dp+'%">'+p.dp+'%</div><div class="pba" style="width:'+p.ap+'%">'+p.ap+'%</div></div><div class="psc" style="margin-bottom:.2rem">Predicted: <b>'+p.phg+'</b> – <b>'+p.pag+'</b></div>';
     h+='<div class="gc '+(g.w?"has ":"")+(rk?" tb ":"")+cls+'" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+pctBar+'<div class="wb"><button class="wn '+sh+'" data-w="home" onclick="setW('+gw+','+m.id+',\'home\')" '+dis+'>'+hm.s+'</button><button class="wn '+sd+'" data-w="draw" onclick="setW('+gw+','+m.id+',\'draw\')" '+dis+'>Draw</button><button class="wn '+sa+'" data-w="away" onclick="setW('+gw+','+m.id+',\'away\')" '+dis+'>'+am.s+'</button></div><div class="si"><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="h'+m.id+'" value="'+(g.hs!=null?g.hs:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'><span style="color:var(--tm)">–</span><input type="number" min="0" max="20" inputmode="numeric" pattern="[0-9]*" id="a'+m.id+'" value="'+(g.as!=null?g.as:"")+'" placeholder="-" onchange="setS('+gw+','+m.id+')" '+dis+'></div><div class="adv" onclick="sReas(\''+hm.s+' vs '+am.s+'\','+ri+')">'+BLB+'Advice: '+lb[p.rec]+' ('+p.rh+'-'+p.ra+')<span class="why">?</span></div>'+act+'</div>'});
@@ -1191,7 +1278,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
 function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No fixtures</div>';
   var ag=gG(),gg=ag[gw]||{},uW=0,uS=0,aW=0,aS=0,uPts=0,aPts=0;
   // Best Bets Score Table
-  var pds=[];ms.forEach(function(m){if(!isLockedMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw)})});
+  var pds=[];ms.forEach(function(m){if(!isLockedMatch(m))pds.push({m:m,p:pred(m.h,m.a,gw,m)})});
   if(!pds.length)return'<div class="emp">AI comparison unlocks 36 hours before kickoff, after real teams are known</div>';
   pds.forEach(function(x){x.cf=Math.max(x.p.hp,x.p.dp,x.p.ap)*.6+Math.abs(x.p.hp-x.p.ap)*.4});
   var so=pds.slice().sort(function(a,b){return b.cf-a.cf}),rm={};so.forEach(function(x,i){if(i<5)rm[x.m.id]=i+1});
@@ -1205,7 +1292,7 @@ function rVsAI(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
   var bbH='<div class="bb"><h5>Best Bets Score</h5><table><thead><tr><th>#</th><th>Match</th><th>Actual</th><th>Pick</th><th>W</th><th>AI Advice</th><th>AI</th></tr></thead><tbody>';
   bb.forEach(function(b){bbH+='<tr><td>'+b.rk+'</td><td><b>'+b.hm.s+' v '+b.am.s+'</b></td><td>'+b.aw+' '+b.as2+'</td><td>'+b.uw+' '+b.us+'</td><td>'+(b.fin?(b.wok?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td><td>'+b.adv+'</td><td>'+(b.fin?(b.aiOk?'<span class="ok">✓</span>':'<span class="nk">✗</span>'):"–")+'</td></tr>'});
   bbH+='<tr class="sm"><td colspan="2"><b>Out of 5</b></td><td colspan="2"></td><td><b>'+wC+'/5</b></td><td></td><td><b>'+aiC+'/5</b></td></tr></tbody></table></div>';
-  var rows="";ms.forEach(function(m){if(!aiReadyMatch(m))return;var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw);
+  var rows="";ms.forEach(function(m){if(!aiReadyMatch(m))return;var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},p=pred(m.h,m.a,gw,m);
     var aw=null,ah=null,aa=null;if(m.fin&&m.hs!=null){ah=m.hs;aa=m.as;aw=ah>aa?"home":ah===aa?"draw":"away"}
     var lb={home:hm.s,draw:"Draw",away:am.s};
     var uw=g.w||null,aiW=p.rec;
@@ -1303,7 +1390,7 @@ function localLearningRows(){
   var by={};
   D.fx.forEach(function(f){
     if(!f.fin||f.hs==null)return;
-    var p=pred(f.h,f.a,f.e),aw=f.hs>f.as?"home":f.hs===f.as?"draw":"away";
+    var p=pred(f.h,f.a,f.e,f),aw=f.hs>f.as?"home":f.hs===f.as?"draw":"away";
     if(!by[f.e])by[f.e]={gw:f.e,total:0,correct_winner:0,exact_score:0};
     by[f.e].total++;
     if(p.rec===aw)by[f.e].correct_winner++;
@@ -1339,9 +1426,9 @@ function rAI(){
   var tSpan=delta===null?'<span class="aitrend">No trend yet</span>':'<span class="aitrend '+(delta>=0?'up':'down')+'">'+(delta>=0?'Up ':'Down ')+Math.abs(delta).toFixed(1)+'%</span>';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
   h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+(localRows?' tracking':' accuracy')+'</div><div class="ainum" style="color:'+lgCol+'">'+acc+'%</div><div class="aimeta">'+tot+' matches checked · '+rows.length+' '+gwLbl+'s '+(localRows?'tracked':'learned')+'</div></div>'+tSpan+'</div></div>';
-  h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings.</span></div>'+
-    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson score model, blends it with factor probabilities, then chooses a scoreline that matches the recommended result.</span></div>'+
-    '<div><b>Learning state</b><span>'+(localRows?'No embedded WC learning file yet, so this tab tracks completed tournament matches locally and the predictions adapt from those results plus seed ratings.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
+  h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, points in the group, goal difference, and qualification pressure.</span></div>'+
+    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson score model, blends it with factor probabilities, then chooses a realistic scoreline that matches the recommended result instead of defaulting too often to 0-0.</span></div>'+
+    '<div><b>Learning state</b><span>'+(localRows?'No embedded WC learning file yet, so this tab tracks completed tournament matches locally and the predictions adapt from those results, group context, and seed ratings.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
   if(rows.length){
     var last=rows[rows.length-1],best=rows.slice().sort(function(a,b){return b.accuracy_pct-a.accuracy_pct})[0],weak=rows.slice().sort(function(a,b){return a.accuracy_pct-b.accuracy_pct})[0];
     h+='<div class="aimetrics">';
