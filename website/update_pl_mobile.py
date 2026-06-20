@@ -22,7 +22,11 @@ FOOTBALL_API = "https://v3.football.api-sports.io"
 OUT = os.path.join(HERE, "pl_mobile.html")
 TPL = os.path.join(HERE, "pl_mobile_template.html")
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
@@ -35,6 +39,10 @@ FIFA_WC_COMPETITION = "17"
 FIFA_WC_SEASON = "285023"
 WC_DATE_RANGE = "20260611-20260719"
 WC_AVAILABILITY_FILE = os.path.join(HERE, "wc_availability.json")
+try:
+    ISRAEL_TZ = ZoneInfo("Asia/Jerusalem") if ZoneInfo else timezone(timedelta(hours=3))
+except Exception:
+    ISRAEL_TZ = timezone(timedelta(hours=3))
 WC_TEAM_STRENGTH = {
     "ARG": 1410, "FRA": 1400, "ESP": 1390, "ENG": 1385, "BRA": 1380,
     "POR": 1365, "NED": 1355, "BEL": 1340, "GER": 1335, "CRO": 1320,
@@ -353,6 +361,18 @@ def _dt_utc(value):
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _israel_date_key(value):
+    dt = _dt_utc(value)
+    if not dt:
+        return ""
+    return dt.astimezone(ISRAEL_TZ).strftime("%Y-%m-%d")
+
+
+def _fixture_sort_key(fixture):
+    dt = _dt_utc((fixture or {}).get("ko"))
+    return dt or datetime.max.replace(tzinfo=timezone.utc)
 
 
 def _wc_team(data, tid):
@@ -1273,7 +1293,7 @@ try:
             if finished:
                 mn = 90
 
-        day = (ev.get("date", "")[:10] or f"match-{len(wc_fixtures)}")
+        day = (_israel_date_key(ev.get("date", "")) or f"match-{len(wc_fixtures)}")
         if day not in wc_days:
             wc_days[day] = len(wc_days) + 1
         wc_fixtures.append({
@@ -1287,6 +1307,13 @@ try:
             "grp": wc_group,
             "src": "espn+fifa" if fifa_match and (fifa_match.get("st") or fifa_match.get("fin")) else "espn",
         })
+    wc_fixtures.sort(key=_fixture_sort_key)
+    wc_days = {}
+    for idx, fix in enumerate(wc_fixtures):
+        day = (_israel_date_key(fix.get("ko", "")) or f"match-{idx}")
+        if day not in wc_days:
+            wc_days[day] = len(wc_days) + 1
+        fix["e"] = wc_days[day]
     if fifa_overlays:
         print(f"World Cup: overlaid {fifa_overlays} matches from FIFA official feed")
 

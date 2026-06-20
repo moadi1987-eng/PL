@@ -792,7 +792,7 @@ function _fWCFifaFallback(fid){
   pxF(FIFAWC,function(fd){
     if(fid!==_fid)return;
     if(!fd||!D.fx||!D.fx.length){_updDone(false);return}
-    var fix=wcMergeFifaFix(D.fx,fd);
+    var fix=wcSortAndDays(wcMergeFifaFix(D.fx,fd));
     if(!fix._fifaChanged){_updDone(false);return}
     var gws=_rebuildGW(fix);
     _applyData('wc',D.tm||{},gws,fix);
@@ -843,7 +843,7 @@ function _fWC(){
         if(!mn)mn=((comp.status||{}).period||0)>=2?45:0;
       }
       if(finished)mn=90;
-      var day=(ev.date||'').slice(0,10)||('m'+fix.length);
+      var day=wcIsraelDateKey(ev.date||'')||('m'+fix.length);
       if(!days[day])days[day]=Object.keys(days).length+1;
       fix.push({id:+(ev.id||0),e:days[day],h:+(hm.team.id),a:+(aw.team.id),
         hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||'',grp:grp});
@@ -852,6 +852,7 @@ function _fWC(){
     pxF(FIFAWC,function(fd){
       if(fid!==_fid)return;
       if(fd)fix=wcMergeFifaFix(fix,fd);
+      fix=wcSortAndDays(fix);
       var gws=_rebuildGW(fix);
       _applyData('wc',tm,gws,fix);
       _updDone(true);
@@ -1067,6 +1068,27 @@ function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.
 function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
+function wcIsraelDateKey(ko){
+  if(!ko)return"";
+  try{
+    var d=new Date(ko);if(!isFinite(d.getTime()))return"";
+    var ps=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+    var m={};ps.forEach(function(p){m[p.type]=p.value});
+    return m.year+"-"+m.month+"-"+m.day;
+  }catch(e){return(ko||"").slice(0,10)}
+}
+function wcSortAndDays(fix){
+  var changed=fix&&fix._fifaChanged;
+  fix=(fix||[]).slice().sort(function(a,b){
+    var ak=new Date(a.ko||"").getTime(),bk=new Date(b.ko||"").getTime();
+    if(!isFinite(ak))ak=9999999999999;if(!isFinite(bk))bk=9999999999999;
+    return ak-bk;
+  });
+  var days={};
+  fix.forEach(function(f,i){var day=wcIsraelDateKey(f.ko||"")||("m"+i);if(!days[day])days[day]=Object.keys(days).length+1;f.e=days[day]});
+  fix._fifaChanged=changed;
+  return fix;
+}
 function isPlaceholderTeam(id){var t=D.tm[id]||{};return D.league==="wc"&&!!t.ph}
 function isLockedMatch(m){return D.league==="wc"&&(isPlaceholderTeam(m.h)||isPlaceholderTeam(m.a))}
 function aiReadyMatch(m){
@@ -1109,17 +1131,6 @@ function scoreGuess(f,g){
     out.points=(out.correct?3:0)+(out.exact?5:0);
   }
   return out;
-}
-function rWCRules(){
-  return'<div class="rules"><div class="rule-head">World Cup scoring <span>Bolao style</span></div><div class="rulegrid">'+
-    '<div class="rulepill"><b>Group</b>1 result / 3 exact</div>'+
-    '<div class="rulepill"><b>Round of 32</b>2 result / 5 exact</div>'+
-    '<div class="rulepill"><b>Round of 16</b>2 result / 5 exact</div>'+
-    '<div class="rulepill"><b>Quarterfinal</b>4 result / 8 exact</div>'+
-    '<div class="rulepill"><b>Semi + 3rd</b>5 result / 10 exact</div>'+
-    '<div class="rulepill"><b>Final</b>8 result / 15 exact</div>'+
-    '<div class="rulepill"><b>Bonuses</b>Winner 12 / top scorer 12</div>'+
-    '</div><div class="rulenote">Exact score uses the exact tier; otherwise a correct result uses the result tier.</div></div>';
 }
 var _tickBase={},_tickTmr=null;
 
@@ -1272,7 +1283,7 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
     var isLive=m.st&&!m.fin;
     var tag=isLive?'<span class="labs">'+liveText(m.ko,m.mn,m.sx||'')+'</span>':m.fin?'<span class="fabs">FT</span>':"";
     var info=!m.st&&!m.fin&&m.ko?'<div class="mko">'+fKO(m.ko)+'</div>':"";
-    var ph=D.league==="wc"?wcPhase(m):null,phTag=ph?'<div class="phase">'+ph.label+' · '+ph.result+' result / '+ph.exact+' exact</div>':"";
+    var ph=D.league==="wc"?wcPhase(m):null,phTag=ph?'<div class="phase">'+ph.label+'</div>':"";
     h+='<div class="mc'+(m.st&&!m.fin?" live":"")+'">'+tag+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><div class="msc">'+hs+' - '+as+'</div><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+info+phTag+'</div>'});
   if(D.league==="wc"){h+=rWCGroups();c.innerHTML=h;return}
   h+='<div class="sec" style="margin-top:.6rem">League Table</div><div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>';
@@ -1282,7 +1293,6 @@ function rRes(){var c=$("t0"),ms=gFix(),h='<div class="sec">Results — '+(D.gwl
 
 /* ══ GUESS (2 sub-tabs + history) ══ */
 function rGuess(){var c=$("t1"),h='<div class="sec">Guess the Results</div>';
-  if(D.league==="wc")h+=rWCRules();
   h+='<div class="stabs"><button class="stab'+(D.sub===0?" a":"")+'" onclick="D.sub=0;sessionStorage.setItem(\'plSub\',0);rGuess()">Fill Guesses</button><button class="stab'+(D.sub===1?" a":"")+'" onclick="D.sub=1;sessionStorage.setItem(\'plSub\',1);rGuess()">You vs AI</button></div>';
   if(D.sub===0){h+=rGF();h+=rGH()}else h+=rVsAI();
   c.innerHTML=h;}
@@ -1348,7 +1358,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
     if(m.st&&!m.fin){act='<div class="act">'+liveText(m.ko,m.mn,m.sx||'')+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
-    var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+' scoring: '+phase.result+' / '+phase.exact+' pts</div>':"";
+    var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+'</div>':"";
     if(isLockedMatch(m)){
       h+='<div class="gc locked" data-mid="'+m.id+'">'+bdg+'<div class="mr"><div class="mt"><img src="'+hm.b+'" onerror="this.style.display=\'none\'"><span>'+hm.s+'</span></div><span style="color:var(--g);font-weight:800;font-size:.5rem">VS</span><div class="mt aw"><img src="'+am.b+'" onerror="this.style.display=\'none\'"><span>'+am.s+'</span></div></div>'+phaseTag+lockedMatchNote(m)+act+'</div>';
       return;
