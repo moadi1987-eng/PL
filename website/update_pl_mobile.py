@@ -4,7 +4,7 @@ Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
 
 Usage:  python update_pl_mobile.py
 """
-import json, requests, os, base64, re, unicodedata
+import json, requests, os, base64, re, unicodedata, math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -333,10 +333,63 @@ AI_WEIGHT_DEFAULTS = {
     "streak": 0.12, "h2h": 0.08, "home_away_split": 0.08,
     "goals_trend": 0.06, "upset": 0.06, "clean_sheet": 0.05, "draw_tendency": 0.05,
 }
+WC_MODEL_VERSION = 2
+WC_CALIBRATION_DEFAULTS = {
+    "goal_mult": 1.0,
+    "home_goal_bias": 0.0,
+    "away_goal_bias": 0.0,
+    "draw_bias": 1.0,
+    "zero_zero_penalty": 0.62,
+}
 LEARNING_HISTORY_FILE = os.path.join(ROOT, "learning_history.json")
 WC_PREDICTIONS_FILE = os.path.join(ROOT, "ai_predictions_wc.json")
 WC_WEIGHTS_FILE = os.path.join(ROOT, "ai_weights_wc.json")
 WC_PREDICTION_LOCK_HOURS = 36
+
+
+def _clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+def _num(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_factors(factors):
+    clean = {}
+    for key, default in AI_WEIGHT_DEFAULTS.items():
+        clean[key] = max(0.01, _num((factors or {}).get(key), default))
+    total = sum(clean.values()) or 1.0
+    return {key: round(val / total, 4) for key, val in clean.items()}
+
+
+def _normalize_wc_model(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    if "factors" in raw or "calibration" in raw:
+        factors = raw.get("factors") or {}
+        calibration = raw.get("calibration") or {}
+        meta = raw.get("meta") or {}
+    else:
+        factors = {k: v for k, v in raw.items() if k in AI_WEIGHT_DEFAULTS}
+        calibration = {}
+        meta = {}
+    cal = dict(WC_CALIBRATION_DEFAULTS)
+    for key, default in WC_CALIBRATION_DEFAULTS.items():
+        cal[key] = _num(calibration.get(key), default)
+    cal["goal_mult"] = round(_clamp(cal["goal_mult"], 0.82, 1.22), 4)
+    cal["home_goal_bias"] = round(_clamp(cal["home_goal_bias"], -0.25, 0.25), 4)
+    cal["away_goal_bias"] = round(_clamp(cal["away_goal_bias"], -0.25, 0.25), 4)
+    cal["draw_bias"] = round(_clamp(cal["draw_bias"], 0.72, 1.18), 4)
+    cal["zero_zero_penalty"] = round(_clamp(cal["zero_zero_penalty"], 0.25, 0.9), 4)
+    return {
+        "version": WC_MODEL_VERSION,
+        "factors": _normalize_factors(factors),
+        "calibration": cal,
+        "meta": meta,
+    }
 
 
 def _load_json_file(path, default):
@@ -518,22 +571,47 @@ def _wc_phase_rule(match):
     return {"key": "group", "result": 1, "exact": 3}
 
 
-def _wc_score_for_winner(lam_h, lam_a, winner):
-    h = max(0, min(5, int(round(lam_h))))
-    a = max(0, min(5, int(round(lam_a))))
-    if winner == "draw":
-        score = max(0, min(4, int(round((lam_h + lam_a) / 2))))
-        if score == 0 and lam_h + lam_a > 1.9:
-            score = 1
-        return score, score
-    if winner == "home" and h <= a:
-        h = min(5, a + 1)
-    if winner == "away" and a <= h:
-        a = min(5, h + 1)
-    return h, a
+def _wc_poisson(lam, goals):
+    if lam <= 0:
+        return 1.0 if goals == 0 else 0.0
+    return (lam ** goals) * math.exp(-lam) / math.factorial(goals)
 
 
-def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
+def _wc_score_for_winner(lam_h, lam_a, winner, calibration=None):
+    calibration = calibration or {}
+    zero_zero_penalty = _clamp(_num(calibration.get("zero_zero_penalty"), 0.62), 0.25, 0.9)
+    target_goals = lam_h + lam_a
+    best = (0, 0, -1.0)
+    next_draw = (1, 1, -1.0)
+    for h in range(0, 6):
+        for a in range(0, 6):
+            if winner == "draw":
+                ok = h == a
+            elif winner == "home":
+                ok = h > a
+            else:
+                ok = a > h
+            if not ok:
+                continue
+            prob = _wc_poisson(lam_h, h) * _wc_poisson(lam_a, a)
+            prob *= 1 - min(abs((h + a) - target_goals) / 4, 0.28)
+            if h == 0 and a == 0 and target_goals > 1.55:
+                prob *= zero_zero_penalty
+            if target_goals > 2.45 and h + a <= 1:
+                prob *= 0.82
+            if winner == "draw" and h == a and h > 0 and prob > next_draw[2]:
+                next_draw = (h, a, prob)
+            if prob > best[2]:
+                best = (h, a, prob)
+    if winner == "draw" and best[0] == 0 and best[1] == 0 and next_draw[2] > best[2] * 0.55:
+        return next_draw[0], next_draw[1]
+    return best[0], best[1]
+
+
+def _wc_predict_snapshot(teams_obj, fixtures, match, model):
+    model = _normalize_wc_model(model)
+    weights = model["factors"]
+    calibration = model["calibration"]
     home = _wc_team(teams_obj, match.get("h"))
     away = _wc_team(teams_obj, match.get("a"))
     if not home or not away or home.get("ph") or away.get("ph"):
@@ -587,7 +665,7 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
     factor_share = max(0.30, min(0.70, 0.5 + (h_factor - a_factor) * 0.75))
     home_share = rating_share * 0.72 + factor_share * 0.28
     close = 1 - min(abs(home_share - 0.5) * 2, 1)
-    draw_pct = 16 + close * 15 + draw_factor * 24
+    draw_pct = (16 + close * 15 + draw_factor * 24) * calibration.get("draw_bias", 1.0)
     if h_group.get("played", 0) >= 2 or a_group.get("played", 0) >= 2:
         if h_group.get("pts", 0) < 4 or a_group.get("pts", 0) < 4:
             draw_pct *= 0.88
@@ -600,6 +678,7 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
         avg_for = (h_stats["gf_avg"] + a_stats["gf_avg"]) / 2
         avg_against = (h_stats["ga_avg"] + a_stats["ga_avg"]) / 2
         total_goals = total_goals * 0.65 + max(1.75, min(3.25, avg_for + avg_against)) * 0.35
+    total_goals *= calibration.get("goal_mult", 1.0)
     lam_h = max(0.65, total_goals * home_share)
     lam_a = max(0.55, total_goals * (1 - home_share))
     if _wc_missing_penalty(home, "attack") > 18:
@@ -610,6 +689,8 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
         lam_a *= 1.08
     if _wc_missing_penalty(away, "defense") > 18:
         lam_h *= 1.08
+    lam_h = max(0.45, min(4.4, lam_h + calibration.get("home_goal_bias", 0.0)))
+    lam_a = max(0.45, min(4.4, lam_a + calibration.get("away_goal_bias", 0.0)))
 
     if home_pct >= away_pct and home_pct >= draw_pct:
         winner = "home"
@@ -619,8 +700,9 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
         winner = "draw"
     if draw_pct * 1.18 > max(home_pct, away_pct) and close > 0.78:
         winner = "draw"
-    rh, ra = _wc_score_for_winner(lam_h, lam_a, winner)
+    rh, ra = _wc_score_for_winner(lam_h, lam_a, winner, calibration)
     return {
+        "model_version": model.get("version", WC_MODEL_VERSION),
         "match_id": match.get("id"),
         "day": match.get("e"),
         "home_id": match.get("h"),
@@ -637,26 +719,105 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, weights):
         "expected_home_goals": round(lam_h, 2),
         "expected_away_goals": round(lam_a, 2),
         "signals": signals,
+        "input_snapshot": {
+            "home_rating": round(h_rating, 1),
+            "away_rating": round(a_rating, 1),
+            "home_prior": h_stats,
+            "away_prior": a_stats,
+            "home_group": h_group,
+            "away_group": a_group,
+            "calibration": {k: round(_num(v), 4) for k, v in calibration.items()},
+            "factor_weights": {k: round(_num(v), 4) for k, v in weights.items()},
+            "missing": {
+                "home_attack": round(_wc_missing_penalty(home, "attack"), 1),
+                "home_defense": round(_wc_missing_penalty(home, "defense"), 1),
+                "away_attack": round(_wc_missing_penalty(away, "attack"), 1),
+                "away_defense": round(_wc_missing_penalty(away, "defense"), 1),
+            },
+        },
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "checked": False,
     }
 
 
-def _wc_update_weights(weights, checked_predictions):
-    factor_scores = {k: [] for k in weights}
+def _avg(values, default=0.0):
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else default
+
+
+def _wc_update_model(model, checked_predictions):
+    model = _normalize_wc_model(model)
+    factors = model["factors"]
+    calibration = dict(model["calibration"])
+    factor_scores = {k: [] for k in factors}
     for pred in checked_predictions:
         actual = pred.get("actual_winner")
         for factor, pick in (pred.get("signals") or {}).items():
             if factor in factor_scores and pick in ("home", "draw", "away"):
                 factor_scores[factor].append(1.0 if pick == actual else 0.0)
-    new_weights = dict(weights)
+    new_weights = dict(factors)
     for factor, scores in factor_scores.items():
         if len(scores) < 3:
             continue
         accuracy = sum(scores) / len(scores)
         new_weights[factor] = round(max(0.03, min(0.25, new_weights[factor] + (accuracy - 0.5) * 0.05)), 4)
-    total = sum(new_weights.values()) or 1
-    return {k: round(v / total, 4) for k, v in new_weights.items()}
+    new_weights = _normalize_factors(new_weights)
+
+    pred_goal_avg = _avg([
+        _num(p.get("expected_home_goals")) + _num(p.get("expected_away_goals"))
+        for p in checked_predictions
+    ])
+    actual_goal_avg = _avg([
+        _num(p.get("actual_home_score")) + _num(p.get("actual_away_score"))
+        for p in checked_predictions
+    ])
+    home_goal_error = _avg([
+        _num(p.get("actual_home_score")) - _num(p.get("expected_home_goals"))
+        for p in checked_predictions
+    ])
+    away_goal_error = _avg([
+        _num(p.get("actual_away_score")) - _num(p.get("expected_away_goals"))
+        for p in checked_predictions
+    ])
+    pred_draw_rate = _avg([_num(p.get("draw_pct")) / 100 for p in checked_predictions])
+    actual_draw_rate = _avg([1.0 if p.get("actual_winner") == "draw" else 0.0 for p in checked_predictions])
+    pred_zero_zero_rate = _avg([1.0 if p.get("home_score") == 0 and p.get("away_score") == 0 else 0.0 for p in checked_predictions])
+    actual_zero_zero_rate = _avg([1.0 if p.get("actual_home_score") == 0 and p.get("actual_away_score") == 0 else 0.0 for p in checked_predictions])
+
+    calibration["goal_mult"] = round(_clamp(
+        calibration.get("goal_mult", 1.0) + _clamp((actual_goal_avg - pred_goal_avg) * 0.035, -0.06, 0.06),
+        0.82, 1.22,
+    ), 4)
+    calibration["home_goal_bias"] = round(_clamp(
+        calibration.get("home_goal_bias", 0.0) + _clamp(home_goal_error * 0.025, -0.035, 0.035),
+        -0.25, 0.25,
+    ), 4)
+    calibration["away_goal_bias"] = round(_clamp(
+        calibration.get("away_goal_bias", 0.0) + _clamp(away_goal_error * 0.025, -0.035, 0.035),
+        -0.25, 0.25,
+    ), 4)
+    calibration["draw_bias"] = round(_clamp(
+        calibration.get("draw_bias", 1.0) + _clamp((actual_draw_rate - pred_draw_rate) * 0.16, -0.05, 0.05),
+        0.72, 1.18,
+    ), 4)
+    calibration["zero_zero_penalty"] = round(_clamp(
+        calibration.get("zero_zero_penalty", 0.62) - _clamp((pred_zero_zero_rate - actual_zero_zero_rate) * 0.18, -0.04, 0.07),
+        0.25, 0.9,
+    ), 4)
+
+    meta = dict(model.get("meta") or {})
+    meta.update({
+        "trained_matches": int(meta.get("trained_matches", 0)) + len(checked_predictions),
+        "last_trained_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "last_batch_size": len(checked_predictions),
+        "avg_pred_goals": round(pred_goal_avg, 3),
+        "avg_actual_goals": round(actual_goal_avg, 3),
+        "pred_draw_rate": round(pred_draw_rate, 3),
+        "actual_draw_rate": round(actual_draw_rate, 3),
+        "pred_zero_zero_rate": round(pred_zero_zero_rate, 3),
+        "actual_zero_zero_rate": round(actual_zero_zero_rate, 3),
+    })
+    return {"version": WC_MODEL_VERSION, "factors": new_weights, "calibration": calibration, "meta": meta}
 
 
 def run_wc_learning(wc_payload, history):
@@ -670,9 +831,7 @@ def run_wc_learning(wc_payload, history):
         pred_store["matches"] = {str(p.get("match_id")): p for p in pred_store["matches"]}
     pred_store.setdefault("version", 1)
     pred_store.setdefault("matches", {})
-    weights = _load_json_file(WC_WEIGHTS_FILE, dict(AI_WEIGHT_DEFAULTS))
-    for k, v in AI_WEIGHT_DEFAULTS.items():
-        weights.setdefault(k, v)
+    model = _normalize_wc_model(_load_json_file(WC_WEIGHTS_FILE, dict(AI_WEIGHT_DEFAULTS)))
 
     now = datetime.now(timezone.utc)
     new_locked = 0
@@ -691,17 +850,19 @@ def run_wc_learning(wc_payload, history):
             continue
         if ko and (now - ko).total_seconds() > 600:
             continue
-        pred = _wc_predict_snapshot(teams_obj, fixtures, match, weights)
+        pred = _wc_predict_snapshot(teams_obj, fixtures, match, model)
         if pred:
             pred_store["matches"][mid] = pred
             new_locked += 1
 
     fixtures_by_id = {str(f.get("id")): f for f in fixtures}
     checked = []
+    train_batch = []
     for mid, pred in pred_store["matches"].items():
         f = fixtures_by_id.get(mid)
         if not f or not f.get("fin") or f.get("hs") is None:
             continue
+        was_trained = bool(pred.get("model_trained"))
         actual_winner = _wc_winner(f.get("hs"), f.get("as"))
         pred["checked"] = True
         pred["actual_home_score"] = f.get("hs")
@@ -709,13 +870,31 @@ def run_wc_learning(wc_payload, history):
         pred["actual_winner"] = actual_winner
         pred["winner_correct"] = pred.get("winner") == actual_winner
         pred["score_correct"] = pred.get("home_score") == f.get("hs") and pred.get("away_score") == f.get("as")
+        probs = {
+            "home": _num(pred.get("home_win_pct")) / 100,
+            "draw": _num(pred.get("draw_pct")) / 100,
+            "away": _num(pred.get("away_win_pct")) / 100,
+        }
+        pred["brier_score"] = round(sum((probs[k] - (1.0 if k == actual_winner else 0.0)) ** 2 for k in probs), 4)
+        pred["goal_error"] = round(
+            (_num(pred.get("expected_home_goals")) + _num(pred.get("expected_away_goals"))) -
+            (_num(f.get("hs")) + _num(f.get("as"))),
+            3,
+        )
         rule = _wc_phase_rule(f)
         pred["points"] = rule["exact"] if pred["score_correct"] else rule["result"] if pred["winner_correct"] else 0
         pred["phase"] = rule["key"]
         checked.append(pred)
+        if not was_trained:
+            train_batch.append(pred)
 
-    if checked:
-        weights = _wc_update_weights(weights, checked)
+    if train_batch:
+        model = _wc_update_model(model, train_batch)
+        trained_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for pred in train_batch:
+            pred["model_trained"] = True
+            pred["trained_version"] = WC_MODEL_VERSION
+            pred["trained_at"] = trained_at
 
     by_day = {}
     for pred in checked:
@@ -737,15 +916,18 @@ def run_wc_learning(wc_payload, history):
         "gw_results": rows,
         "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
         "total_evaluated": total,
-        "current_weights": weights,
+        "current_weights": model["factors"],
+        "calibration": model["calibration"],
+        "model_meta": model.get("meta", {}),
+        "trained_this_build": len(train_batch),
         "snapshots_locked": len(pred_store["matches"]),
     }
     history["wc"] = wc_hist
     pred_store["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _save_json_file(WC_PREDICTIONS_FILE, pred_store)
-    _save_json_file(WC_WEIGHTS_FILE, weights)
+    _save_json_file(WC_WEIGHTS_FILE, model)
     _save_json_file(LEARNING_HISTORY_FILE, history)
-    print(f"World Cup ML: {new_locked} new locked predictions, {total} checked, accuracy {wc_hist['overall_accuracy']}%")
+    print(f"World Cup ML: {new_locked} new locked predictions, {total} checked, {len(train_batch)} trained, accuracy {wc_hist['overall_accuracy']}%")
     return history
 
 
