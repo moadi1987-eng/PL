@@ -478,7 +478,8 @@ function _fLiveJson(){
           var plPackForLive=d.pl_seasons&&D.plSeason?d.pl_seasons[D.plSeason]:null;
           var plLiveSet=plPackForLive&&plPackForLive.fix?plPackForLive.fix:((!D.plSeason||D.plSeason==="2025-26")?(d.fix||[]):[]);
           var liveSet=D.league==='wc'?(d.fix_wc||[]):D.league==='laliga'?(d.fix_ll||[]):plLiveSet;
-          if(_liveJsonNeedsFresh(liveSet,ageMs,now)||_liveJsonNeedsFresh(D.fx||[],ageMs,now)){_fetchLeague();return;}
+          var needsFresh=_liveJsonNeedsFresh(liveSet,ageMs,now)||_liveJsonNeedsFresh(D.fx||[],ageMs,now);
+          function tryFresh(){if(needsFresh)setTimeout(_fetchLeague,80)}
 
           if(D.league==='pl'){
             var plPack=d.pl_seasons&&D.plSeason?d.pl_seasons[D.plSeason]:null;
@@ -502,7 +503,7 @@ function _fLiveJson(){
             });
             if(needFresh){_fPL();return;}
             var plGW=fix.length?_rebuildGW(fix):(plPack&&plPack.gws?plPack.gws:[]);
-            _applyData('pl',D.tm||{},plGW,fix);_updDone(true);return;
+            _applyData('pl',D.tm||{},plGW,fix);_updDone(true);tryFresh();return;
           }
 
           if(D.league==='laliga'&&d.fix_ll){
@@ -522,7 +523,7 @@ function _fLiveJson(){
             });
             if(needFreshLL){_fLL();return;}
             var llGW=_rebuildGW(llFix);
-            _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);return;
+            _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);tryFresh();return;
           }
 
           if(D.league==='wc'&&d.fix_wc){
@@ -542,7 +543,7 @@ function _fLiveJson(){
             });
             if(needFreshWC){_fWC();return;}
             var wcGW=_rebuildGW(wcFix);
-            _applyData('wc',D.tm||{},wcGW,wcFix);_updDone(true);return;
+            _applyData('wc',D.tm||{},wcGW,wcFix);_updDone(true);tryFresh();return;
           }
         }
       }catch(e){}
