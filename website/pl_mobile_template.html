@@ -772,11 +772,18 @@ function wcFifaMap(d){
   var out={},res=(d&&d.Results)||[];
   for(var i=0;i<res.length;i++){
     var m=res[i]||{},h=m.Home||{},a=m.Away||{},hn=wcLocDesc(h.TeamName),an=wcLocDesc(a.TeamName),ko=wcFifaIso(m.Date||'');
-    var st=parseInt(m.MatchStatus,10),hs=wcFifaScore(h.Score),as2=wcFifaScore(a.Score),fin=st===0,started=fin||st===3||hs!=null||as2!=null;
+    var st=parseInt(m.MatchStatus,10),fin=st===0,started=fin||st===3,hs=started?wcFifaScore(h.Score):null,as2=started?wcFifaScore(a.Score):null;
     var sx=st===0?'STATUS_FULL_TIME':st===1?'STATUS_SCHEDULED':st===3?'STATUS_IN_PROGRESS':'FIFA_'+st;
     out[wcSig(hn,an,ko)]={id:m.IdMatch||'',hs:hs,as:as2,st:started,fin:fin,sx:sx};
   }
   return out;
+}
+function wcStaleScore(cur,nxt){
+  if(!cur||!nxt||nxt.fin)return false;
+  var curHas=(cur.hs!=null&&cur.as!=null&&(cur.hs+cur.as)>0),nxtZero=(nxt.hs===0&&nxt.as===0);
+  if(!curHas||!nxtZero)return false;
+  var cm=cur.mn||0,nm=nxt.mn||0;
+  return !nm||nm<=cm+1;
 }
 function wcMergeFifaFix(fix,d){
   var mp=wcFifaMap(d),changed=0,now=Date.now(),out=[];
@@ -787,8 +794,10 @@ function wcMergeFifaFix(fix,d){
       changed++;
       nf.st=!!(nf.st||fm.st);
       nf.fin=!!(nf.fin||fm.fin);
-      if(fm.hs!=null)nf.hs=fm.hs;
-      if(fm.as!=null)nf.as=fm.as;
+      if(!wcStaleScore(f,fm)){
+        if(fm.hs!=null)nf.hs=fm.hs;
+        if(fm.as!=null)nf.as=fm.as;
+      }
       if(nf.st&&!nf.fin&&!nf.mn&&nf.ko){
         var kt=new Date(nf.ko).getTime();
         if(isFinite(kt))nf.mn=Math.max(0,Math.min(130,Math.floor((now-kt)/60000)));
@@ -845,30 +854,35 @@ function _fWCQuick(){
   $('upd').textContent='\u21BB ...';
   var base=(D.fx||[]).slice(),tm=D.tm&&Object.keys(D.tm).length?D.tm:{};
   if(!base.length){_fWC();return}
-  pxF(ESPNWC+'?dates='+_todayKeyUTC()+'&limit=50',function(d){
-    if(fid!==_fid)return;
+  function finishFromESPN(fix){
+    pxF(ESPNWC+'?dates='+_todayKeyUTC()+'&limit=50',function(d){
+      if(fid!==_fid)return;
     var evts=d?(d.events||[]):[],patches={};
     evts.forEach(function(ev){var p=_wcPatchFromEvent(ev,tm);if(p&&p.id)patches[String(p.id)]=p});
-    if(!Object.keys(patches).length){_fWCFifaFallback(fid);return}
-    var seen={},fix=base.map(function(f){
+      if(!Object.keys(patches).length){fix=wcSortAndDays(fix);_applyData('wc',tm,_rebuildGW(fix),fix);_updDone(true);return}
+      var seen={};
+      fix=fix.map(function(f){
       var p=patches[String(f.id)],nf={};for(var k in f)nf[k]=f[k];
       if(p){
         seen[String(p.id)]=true;
         nf.h=p.h||nf.h;nf.a=p.a||nf.a;nf.ko=p.ko||nf.ko;nf.grp=p.grp||nf.grp;
         nf.st=!!(p.st||nf.st);nf.fin=!!(p.fin||nf.fin);
-        if(p.hs!=null)nf.hs=p.hs;if(p.as!=null)nf.as=p.as;
+          if(!wcStaleScore(f,p)){if(p.hs!=null)nf.hs=p.hs;if(p.as!=null)nf.as=p.as}
         if(p.mn)nf.mn=p.mn;if(p.sx)nf.sx=p.sx;
       }
       return nf;
     });
     Object.keys(patches).forEach(function(id){if(!seen[id])fix.push(patches[id])});
-    pxF(FIFAWC,function(fd){
-      if(fid!==_fid)return;
-      if(fd)fix=wcMergeFifaFix(fix,fd);
       fix=wcSortAndDays(fix);
       _applyData('wc',tm,_rebuildGW(fix),fix);
       _updDone(true);
     });
+  }
+  pxF(FIFAWC,function(fd){
+    if(fid!==_fid)return;
+    var fix=fd?wcMergeFifaFix(base,fd):base;
+    if(fix._fifaChanged){fix=wcSortAndDays(fix);_applyData('wc',tm,_rebuildGW(fix),fix);_updDone(true)}
+    finishFromESPN(fix);
   });
 }
 
