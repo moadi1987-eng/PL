@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 
 ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
+PL_OFFICIAL_COMPSEASON = "841"
+PL_OFFICIAL_FIXTURES = "https://footballapi.pulselive.com/football/fixtures"
 ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
 ESPN_WC_ROSTER = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/teams/{team_id}/roster"
 FIFA_WC_MATCHES = "https://api.fifa.com/api/v3/calendar/matches"
@@ -726,6 +728,129 @@ def run_wc_learning(wc_payload, history):
     print(f"World Cup ML: {new_locked} new locked predictions, {total} checked, accuracy {wc_hist['overall_accuracy']}%")
     return history
 
+
+def _pl_official_int(value, default=0):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _pl_official_team(raw_team, prev_teams, teams_out):
+    team = (raw_team or {}).get("team") or raw_team or {}
+    club = team.get("club") or {}
+    name = team.get("name") or club.get("name") or team.get("shortName") or "Unknown"
+    abbr = (club.get("abbr") or team.get("abbr") or team.get("shortName") or name[:3]).upper()
+    short = abbr[:3] if len(abbr) > 4 else abbr
+    team_id = _pl_official_int(team.get("id") or club.get("id"), len(teams_out) + 1)
+    alt_ids = team.get("altIds") or club.get("altIds") or {}
+    opta = str(alt_ids.get("opta") or "")
+    badge_code = re.sub(r"\D", "", opta) or str(team_id)
+
+    prev_by_abbr = {str(t.get("s", "")).upper(): t for t in prev_teams.values()}
+    prev_by_name = {_plain_name(t.get("n", "")).lower(): t for t in prev_teams.values()}
+    base = prev_by_abbr.get(short.upper()) or prev_by_abbr.get(abbr.upper()) or prev_by_name.get(_plain_name(name).lower()) or {}
+    teams_out[team_id] = {
+        "id": team_id,
+        "n": name,
+        "s": short,
+        "c": badge_code,
+        "b": BADGE.format(badge_code),
+        "sah": base.get("sah", 1100),
+        "sdh": base.get("sdh", 1080),
+        "saa": base.get("saa", 1060),
+        "sda": base.get("sda", 1060),
+        "xg": base.get("xg", 1.1),
+        "xgc": base.get("xgc", 1.2),
+        "inj": base.get("inj", []),
+    }
+    return team_id
+
+
+def fetch_pl_official_season(prev_teams, headers):
+    pulse_headers = {
+        **headers,
+        "Origin": "https://www.premierleague.com",
+        "Referer": "https://www.premierleague.com/fixtures",
+    }
+    resp = requests.get(
+        PL_OFFICIAL_FIXTURES,
+        params={
+            "comps": "1",
+            "compSeasons": PL_OFFICIAL_COMPSEASON,
+            "page": "0",
+            "pageSize": "1000",
+            "sort": "asc",
+            "altIds": "true",
+        },
+        headers=pulse_headers,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    official_fixtures = resp.json().get("content", [])
+    if not official_fixtures:
+        return None
+
+    teams_out = {}
+    fixtures_out = []
+    for item in official_fixtures:
+        sides = item.get("teams") or []
+        if len(sides) < 2:
+            continue
+        home_id = _pl_official_team(sides[0], prev_teams, teams_out)
+        away_id = _pl_official_team(sides[1], prev_teams, teams_out)
+        gameweek = item.get("gameweek") or {}
+        gw = _pl_official_int(gameweek.get("gameweek") or gameweek.get("id"), 0)
+        kickoff = item.get("kickoff") or {}
+        ko = ""
+        millis = kickoff.get("millis")
+        if millis:
+            ko = datetime.fromtimestamp(float(millis) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fid = _pl_official_int(
+            item.get("id") or re.sub(r"\D", "", str((item.get("altIds") or {}).get("opta", ""))),
+            len(fixtures_out) + 1,
+        )
+        status = str(item.get("status") or "").upper()
+        finished = status in ("C", "FT", "F")
+        started = status not in ("", "U", "S") and not finished
+        fixtures_out.append({
+            "id": fid,
+            "e": gw,
+            "h": home_id,
+            "a": away_id,
+            "hs": None,
+            "as": None,
+            "fin": finished,
+            "st": started,
+            "ko": ko,
+            "mn": 90 if finished else 0,
+            "sx": status,
+        })
+
+    fixtures_out = [f for f in fixtures_out if f.get("e")]
+    fixtures_out.sort(key=lambda f: (f.get("e", 0), f.get("ko", "")))
+    max_gw = max((f["e"] for f in fixtures_out), default=38)
+    gws_out = []
+    for gw in range(1, max_gw + 1):
+        gw_fix = [f for f in fixtures_out if f["e"] == gw]
+        all_fin = bool(gw_fix) and all(f["fin"] for f in gw_fix)
+        is_live = any(f["st"] and not f["fin"] for f in gw_fix)
+        gws_out.append({"id": gw, "fin": all_fin, "cur": is_live})
+    if not any(g["cur"] for g in gws_out):
+        for gw in gws_out:
+            if not gw["fin"]:
+                gw["cur"] = True
+                break
+
+    return {
+        "teams": teams_out,
+        "gws": gws_out,
+        "fix": fixtures_out,
+        "season": "2026-27",
+        "label": "2026/27",
+        "archive": False,
+    }
+
 print("Fetching Premier League data...")
 hdr = {"User-Agent": "PL-Dashboard/1.0"}
 try:
@@ -814,8 +939,36 @@ if FOOTBALL_API_KEY:
     except Exception as e:
         print(f"api-football: {e}")
 
-data = json.dumps({"teams": teams, "gws": gws, "fix": fixtures}, ensure_ascii=False, separators=(",", ":"))
+pl_2025_data = {
+    "teams": teams,
+    "gws": gws,
+    "fix": fixtures,
+    "season": "2025-26",
+    "label": "2025/26",
+    "archive": bool(fixtures) and all(f["fin"] for f in fixtures),
+}
+pl_seasons_data = {"2025-26": pl_2025_data}
+pl_season_items = [{"key": "2025-26", "label": "2025/26"}]
+pl_current_key = "2025-26"
+
+try:
+    pl_2026_data = fetch_pl_official_season(teams, hdr)
+    if pl_2026_data and pl_2026_data.get("fix"):
+        pl_seasons_data["2026-27"] = pl_2026_data
+        pl_season_items.insert(0, {"key": "2026-27", "label": "2026/27"})
+        pl_current_key = "2026-27"
+        print(f"Premier League 2026/27 official fixtures: {len(pl_2026_data['fix'])} loaded")
+except Exception as e:
+    print(f"Premier League 2026/27 official fetch failed: {e}")
+
+data = json.dumps(pl_seasons_data[pl_current_key], ensure_ascii=False, separators=(",", ":"))
+pl_seasons_json = json.dumps({
+    "current": pl_current_key,
+    "items": pl_season_items,
+    "data": pl_seasons_data,
+}, ensure_ascii=False, separators=(",", ":"))
 print(f"Teams: {len(teams)}, GWs: {len(gws)}, Fixtures: {len(fixtures)}")
+print(f"Premier League default season: {pl_current_key}")
 
 guesses_file = os.path.join(ROOT, "user_guesses.json")
 guesses = {}
@@ -1212,6 +1365,7 @@ else:
 
 html = open(TPL, "r", encoding="utf-8").read()
 html = html.replace("/*__DATA__*/", "var EMBEDDED=" + data + ";")
+html = html.replace("/*__DATA_PL_SEASONS__*/", "var EMBEDDED_PL_SEASONS=" + pl_seasons_json + ";")
 html = html.replace("/*__DATA_LL__*/", "var EMBEDDED_LL=" + ll_data + ";" if ll_data else "")
 html = html.replace("/*__DATA_WC__*/", "var EMBEDDED_WC=" + wc_data + ";" if wc_data else "")
 html = html.replace("/*__GUESSES__*/", "var EMBEDDED_GUESSES=" + guesses_json + ";")
@@ -1280,6 +1434,11 @@ print(f"Updated: {OUT}")
 live_data = {
     "fix": fixtures,
     "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "pl_current": pl_current_key,
+    "pl_seasons": {
+        key: {"fix": val.get("fix", []), "gws": val.get("gws", [])}
+        for key, val in pl_seasons_data.items()
+    },
 }
 if ll_data:
     try:
