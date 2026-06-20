@@ -134,6 +134,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .airow{display:flex;align-items:center;justify-content:space-between;gap:.6rem}.ailabel{font-size:.5rem;color:var(--tm);text-transform:uppercase;font-weight:800;margin-bottom:.1rem}.ainum{font-size:2rem;font-weight:900;line-height:1;color:var(--g)}.aimeta{font-size:.52rem;color:var(--tm);margin-top:.18rem}
 .aitrend{font-size:.62rem;font-weight:800;border-radius:999px;padding:.22rem .42rem;white-space:nowrap;background:rgba(255,255,255,.06);color:var(--tm)}.aitrend.up{color:var(--g);background:rgba(0,255,135,.09)}.aitrend.down{color:var(--pk);background:rgba(233,0,82,.09)}
 .aimetrics{display:grid;grid-template-columns:repeat(3,1fr);gap:.3rem;margin-bottom:.45rem}.aimetric{background:var(--cd);border:1px solid var(--bd);border-radius:var(--rs);padding:.45rem;min-width:0}.aimetric span{display:block;font-size:.48rem;color:var(--tm);font-weight:800;text-transform:uppercase}.aimetric b{display:block;font-size:.86rem;margin:.12rem 0;white-space:nowrap}.aimetric em{display:block;font-style:normal;font-size:.48rem;color:var(--tm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aichart{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem;margin-bottom:.5rem;overflow:hidden}.aichart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.2rem}.aichart-head b{display:block;font-size:.66rem}.aichart-head span{display:block;color:var(--tm);font-size:.52rem;margin-top:.08rem}.aichart-head em{font-style:normal;font-size:.56rem;font-weight:900;border-radius:999px;padding:.2rem .36rem;background:rgba(255,255,255,.06);white-space:nowrap}.aichart-head em.up{color:var(--g);background:rgba(0,255,135,.09)}.aichart-head em.down{color:var(--pk);background:rgba(233,0,82,.09)}.aichart-head em.flat{color:var(--cy);background:rgba(4,245,255,.08)}.aichart svg{width:100%;height:auto;aspect-ratio:320/116;display:block}.aichart .grid{stroke:rgba(255,255,255,.08);stroke-width:1}.aichart .line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.aichart .area{opacity:.15}.aichart .dot{stroke:var(--cd);stroke-width:2}.aichart .dot.up{fill:var(--g)}.aichart .dot.down{fill:var(--pk)}.aichart .dot.flat{fill:var(--cy)}.aichart .axis,.aichart .xl{fill:var(--tm);font-size:8px;font-weight:800}.aichart .xl{text-anchor:middle}.aichart-foot{display:flex;justify-content:space-between;color:var(--tm);font-size:.48rem;font-weight:800;margin-top:.1rem}
 .ailist{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.45rem;margin-bottom:.5rem}.aiitem{padding:.35rem 0;border-bottom:1px solid var(--bd)}.aiitem:last-child{border:none}.aiitem-top{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.62rem}.aiitem-top b{font-size:.66rem}.aiitem-top span{color:var(--tm);font-size:.54rem}.aipct{font-weight:900;font-size:.62rem}.aibar{height:7px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;margin-top:.25rem}.aifill{height:100%;border-radius:999px}
 .aifactor .aiitem-top{align-items:flex-start}.aifactor small{display:block;color:var(--tm);font-size:.5rem;margin-top:.08rem}.ainote{font-size:.52rem;color:var(--tm);line-height:1.45;margin:-.15rem 0 .35rem}
 .aisrc{display:grid;grid-template-columns:1fr;gap:.3rem;margin-bottom:.5rem}.aisrc div{background:var(--cd);border:1px solid var(--bd);border-radius:var(--rs);padding:.45rem}.aisrc b{display:block;font-size:.62rem;color:var(--cy);margin-bottom:.12rem}.aisrc span{display:block;font-size:.55rem;color:var(--tm);line-height:1.45}
@@ -1522,6 +1523,27 @@ function localLearningRows(){
   });
   return Object.keys(by).map(function(k){var r=by[k];r.accuracy_pct=r.total?Math.round(r.correct_winner/r.total*1000)/10:0;return r}).sort(function(a,b){return a.gw-b.gw});
 }
+function aiTrendChart(rows,gwLbl,lgCol){
+  var rs=(rows||[]).filter(function(r){return r&&r.total>0&&isFinite(+r.accuracy_pct)}).map(function(r){return{gw:r.gw,total:r.total,correct_winner:r.correct_winner||0,accuracy_pct:+r.accuracy_pct||0}});
+  if(!rs.length)return '';
+  var left=24,right=310,top=14,bottom=92,w=right-left,h=bottom-top;
+  function x(i){return rs.length===1?(left+right)/2:left+(i*w/(rs.length-1))}
+  function y(v){return bottom-Math.max(0,Math.min(100,v))*h/100}
+  var pts=rs.map(function(r,i){return{x:x(i),y:y(r.accuracy_pct),r:r,i:i}});
+  var d=pts.map(function(p,i){return(i?'L':'M')+p.x.toFixed(1)+' '+p.y.toFixed(1)}).join(' ');
+  var area=d+' L '+pts[pts.length-1].x.toFixed(1)+' '+bottom+' L '+pts[0].x.toFixed(1)+' '+bottom+' Z';
+  var grid=[0,50,100].map(function(v){var yy=y(v).toFixed(1);return'<line class="grid" x1="'+left+'" y1="'+yy+'" x2="'+right+'" y2="'+yy+'"></line><text class="axis" x="2" y="'+(+yy+3)+'">'+v+'%</text>'}).join('');
+  var tickEvery=Math.max(1,Math.ceil(rs.length/6));
+  var labels=pts.map(function(p,i){return(i%tickEvery===0||i===pts.length-1)?'<text class="xl" x="'+p.x.toFixed(1)+'" y="110">'+gwLbl+p.r.gw+'</text>':''}).join('');
+  var dots=pts.map(function(p,i){
+    var prev=i?rs[i-1].accuracy_pct:p.r.accuracy_pct,cls=Math.abs(p.r.accuracy_pct-prev)<.05?'flat':p.r.accuracy_pct>prev?'up':'down';
+    return'<circle class="dot '+cls+'" cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="4"><title>'+gwLbl+p.r.gw+': '+p.r.accuracy_pct+'% ('+p.r.correct_winner+'/'+p.r.total+')</title></circle>';
+  }).join('');
+  var last=rs[rs.length-1],prev=rs.length>1?rs[rs.length-2]:null,dayDelta=prev?last.accuracy_pct-prev.accuracy_pct:null;
+  var cls=dayDelta==null||Math.abs(dayDelta)<.05?'flat':dayDelta>0?'up':'down';
+  var trendText=dayDelta==null?'First point':(dayDelta>=0?'+':'')+dayDelta.toFixed(1)+'% vs prev';
+  return'<div class="sec" style="margin-bottom:.25rem">Accuracy Trend</div><div class="aichart"><div class="aichart-head"><div><b>'+(gwLbl==='Day'?'Daily hit rate':gwLbl+' hit rate')+'</b><span>'+rs.length+' points · latest '+last.correct_winner+'/'+last.total+' winners</span></div><em class="'+cls+'">'+trendText+'</em></div><svg viewBox="0 0 320 116" aria-label="AI accuracy trend">'+grid+'<path class="area" d="'+area+'" style="fill:'+lgCol+'"></path><path class="line" d="'+d+'" style="stroke:'+lgCol+'"></path>'+dots+labels+'</svg><div class="aichart-foot"><span>0%</span><span>50%</span><span>100%</span></div></div>';
+}
 function rAI(){
   var c=$("t3");
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
@@ -1568,6 +1590,7 @@ function rAI(){
     h+='<div class="aimetric"><span>Best</span><b style="color:var(--g)">'+best.accuracy_pct+'%</b><em>'+gwLbl+best.gw+'</em></div>';
     h+='<div class="aimetric"><span>Weakest</span><b style="color:var(--pk)">'+weak.accuracy_pct+'%</b><em>'+gwLbl+weak.gw+'</em></div>';
     h+='</div>';
+    h+=aiTrendChart(rows,gwLbl,lgCol);
     h+='<div class="sec" style="margin-bottom:.25rem">Recent Accuracy</div><div class="ailist">';
     rows.slice(-6).reverse().forEach(function(r){
       var col=r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)';
