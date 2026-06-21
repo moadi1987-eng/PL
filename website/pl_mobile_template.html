@@ -70,7 +70,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .tlive-score.win{background:var(--g);color:var(--p)}.tlive-score.loss{background:var(--pk);color:#fff}.tlive-score.draw{background:#6c757d;color:#fff}
 /* Pred card */
 .pc{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.5rem;margin-bottom:.35rem;position:relative}.pc.tb{border-color:rgba(245,166,35,.3)}
-.tbg{background:linear-gradient(90deg,#f5a623,#e85a2a,var(--pk));color:#fff;font-size:.46rem;font-weight:800;padding:1px 5px;border-radius:10px;position:absolute;top:4px;right:4px}
+.tbg{background:linear-gradient(90deg,#f5a623,#e85a2a,var(--pk));color:#fff;font-size:.46rem;font-weight:800;padding:1px 5px;border-radius:10px;position:absolute;top:4px;right:4px}.tbg.auto{top:23px;background:linear-gradient(90deg,var(--cy),var(--g));color:var(--p)}
 .pb{display:flex;border-radius:7px;overflow:hidden;height:19px;font-size:.5rem;font-weight:700;margin-bottom:.2rem}
 .pb div{display:flex;align-items:center;justify-content:center;min-width:24px;color:#fff}.pbh{background:var(--g);color:var(--p)}.pbd{background:#6c757d}.pba{background:var(--cy);color:var(--p)}
 .psc{text-align:center;font-size:.65rem;color:var(--tm)}.psc b{color:var(--tx)}
@@ -1177,7 +1177,7 @@ function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
 function goToCur(){if(D.cur)sGW(D.cur)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<4;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
-function render(){bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
+function render(){autoFillDueGuesses();bSt(D.sel);if(D.tab===0)rRes();else if(D.tab===1)rGuess();else if(D.tab===2)rCmp();else rAI()}
 function gFix(){return D.fx.filter(function(f){return f.e===D.sel}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")})}
 function fKO(ko){try{return new Date(ko).toLocaleString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 function wcIsraelDateKey(ko){
@@ -1311,6 +1311,7 @@ function startTicker(){if(_tickTmr)clearInterval(_tickTmr);_tickTmr=setInterval(
 startTicker();
 var _gMerged=false;
 function _gKey(){return D.league==="laliga"?"llg":D.league==="wc"?"wcg":"plg_"+(D.plSeason||"2025-26")}
+function _hasGuess(g){return !!(g&&(g.w||g.hs!=null||g.as!=null))}
 function gG(){
   var key=_gKey();
   var local={};try{local=JSON.parse(localStorage.getItem(key)||"{}")}catch(e){}
@@ -1333,6 +1334,24 @@ function gG(){
   return local;
 }
 function sG(d){localStorage.setItem(_gKey(),JSON.stringify(d))}
+function autoFillDueGuesses(){
+  if(!D.fx||!D.fx.length)return 0;
+  var now=Date.now(),ag=gG(),changed=0,used=false;
+  D.fx.forEach(function(m){
+    if(m.fin||m.st||!m.ko||!aiReadyMatch(m))return;
+    var kt=new Date(m.ko).getTime();if(!isFinite(kt))return;
+    var diff=kt-now;if(diff<0||diff>30*60*1000)return;
+    var gw=m.e;if(!ag[gw])ag[gw]={};
+    if(_hasGuess(ag[gw][m.id]))return;
+    bSt(gw);used=true;
+    var p=pred(m.h,m.a,gw,m);
+    ag[gw][m.id]={w:p.rec,hs:p.rh,as:p.ra,src:"auto30",auto:true,ts:new Date().toISOString()};
+    changed++;
+  });
+  if(changed){sG(ag);autoSync()}
+  if(used)bSt(D.sel);
+  return changed;
+}
 function sReas(title,reasons){$("rtitle").textContent=title;var h='<div class="rsub">Why this prediction?</div>';var icons=["&#128200;","&#127919;","&#127968;","&#128202;","&#127942;"];
   reasons.forEach(function(r,i){h+='<div class="rrow"><span class="ricon">'+(icons[i]||"&#10003;")+'</span><span>'+r+'</span></div>'});$("rbody").innerHTML=h;$("rmod").classList.add("show")}
 function cReas(){$("rmod").classList.remove("show")}
@@ -1437,6 +1456,7 @@ function randomFill(){
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].hs=h;ag[gw][m.id].as=a;
     ag[gw][m.id].w=h>a?"home":h===a?"draw":"away";
+    ag[gw][m.id].src="random";
   });
   sG(ag);rGuess();
 }
@@ -1449,6 +1469,7 @@ function aiFill(){
     var p=pred(m.h,m.a,gw,m);
     if(!ag[gw][m.id])ag[gw][m.id]={};
     ag[gw][m.id].w=p.rec;ag[gw][m.id].hs=p.rh;ag[gw][m.id].as=p.ra;
+    ag[gw][m.id].src="ai_manual";
   });
   sG(ag);rGuess();
 }
@@ -1469,6 +1490,7 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
+    if(g.src==="auto30"&&!m.fin)bdg+='<span class="tbg auto">AUTO AI</span>';
     if(m.st&&!m.fin){act='<div class="act">'+liveText(m.ko,m.mn,m.sx||'')+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+'</div>':"";
     if(isLockedMatch(m)){
@@ -1544,7 +1566,7 @@ function rGH(){var ag=gG(),h='<div class="sec" style="margin-top:.6rem">My Histo
   return h;}
 
 function setW(gw,mid,w){
-  var a=gG();if(!a[gw])a[gw]={};if(!a[gw][mid])a[gw][mid]={};a[gw][mid].w=w;sG(a);
+  var a=gG();if(!a[gw])a[gw]={};if(!a[gw][mid])a[gw][mid]={};a[gw][mid].w=w;a[gw][mid].src="manual";sG(a);
   var card=document.querySelector('[data-mid="'+mid+'"]');if(!card){rGuess();return}
   card.querySelectorAll('.wn').forEach(function(b){b.className='wn'});
   var cls={home:'sh',draw:'sd',away:'sa'};
@@ -1559,6 +1581,7 @@ function setS(gw,mid){
     $("h"+mid).value=h2;$("a"+mid).value=v2;
     a[gw][mid].hs=h2;a[gw][mid].as=v2;
     a[gw][mid].w=h2>v2?"home":h2===v2?"draw":"away";
+    a[gw][mid].src="manual";
     sG(a);
     var card=document.querySelector('[data-mid="'+mid+'"]');if(!card)return;
     card.querySelectorAll('.wn').forEach(function(b){b.className='wn'});
