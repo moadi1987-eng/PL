@@ -333,7 +333,7 @@ AI_WEIGHT_DEFAULTS = {
     "streak": 0.12, "h2h": 0.08, "home_away_split": 0.08,
     "goals_trend": 0.06, "upset": 0.06, "clean_sheet": 0.05, "draw_tendency": 0.05,
 }
-WC_MODEL_VERSION = 2
+WC_MODEL_VERSION = 3
 WC_CALIBRATION_DEFAULTS = {
     "goal_mult": 1.0,
     "home_goal_bias": 0.0,
@@ -608,6 +608,158 @@ def _wc_score_for_winner(lam_h, lam_a, winner, calibration=None):
     return best[0], best[1]
 
 
+def _wc_score_outcome(home_score, away_score):
+    if home_score > away_score:
+        return "home"
+    if away_score > home_score:
+        return "away"
+    return "draw"
+
+
+def _wc_score_cell_prob(lam_h, lam_a, home_score, away_score, calibration=None, open_match=False):
+    calibration = calibration or {}
+    target_goals = lam_h + lam_a
+    zero_zero_penalty = _clamp(_num(calibration.get("zero_zero_penalty"), 0.62), 0.25, 0.9)
+    prob = _wc_poisson(lam_h, home_score) * _wc_poisson(lam_a, away_score)
+    prob *= 1 - min(abs((home_score + away_score) - target_goals) / 4, 0.28)
+    if open_match and home_score + away_score >= 2:
+        prob *= 1.06
+    if home_score == 0 and away_score == 0 and target_goals > 1.55:
+        prob *= zero_zero_penalty
+    if target_goals > 2.45 and home_score + away_score <= 1:
+        prob *= 0.82
+    return prob
+
+
+def _wc_score_for_expected_points(lam_h, lam_a, probs, match, calibration=None, upset=None, open_match=False):
+    rule = _wc_phase_rule(match)
+    outcome_totals = {"home": 0.0, "draw": 0.0, "away": 0.0}
+    rows = []
+    for h in range(0, 6):
+        for a in range(0, 6):
+            outcome = _wc_score_outcome(h, a)
+            prob = _wc_score_cell_prob(lam_h, lam_a, h, a, calibration, open_match=open_match)
+            outcome_totals[outcome] += prob
+            rows.append((h, a, outcome, prob))
+
+    outcome_probs = {
+        "home": _num(probs.get("home")) / 100,
+        "draw": _num(probs.get("draw")) / 100,
+        "away": _num(probs.get("away")) / 100,
+    }
+    upset = upset or {}
+    best = {"home_score": 0, "away_score": 0, "winner": "draw", "expected_points": -1.0, "exact_prob": 0.0, "rule": rule}
+    for h, a, outcome, prob in rows:
+        exact_prob = 0.0
+        if outcome_totals[outcome] > 0:
+            exact_prob = prob / outcome_totals[outcome] * outcome_probs.get(outcome, 0.0)
+        expected_points = rule["result"] * outcome_probs.get(outcome, 0.0) + (rule["exact"] - rule["result"]) * exact_prob
+        if upset.get("side") == outcome and _num(upset.get("score")) >= 58:
+            expected_points *= 1 + min(0.18, (_num(upset.get("score")) - 55) / 260)
+        if outcome == "draw" and _num(upset.get("draw")) >= 58:
+            expected_points *= 1 + min(0.12, (_num(upset.get("draw")) - 55) / 320)
+        if open_match and h + a >= 2:
+            expected_points *= 1.015
+        if expected_points > best["expected_points"]:
+            best = {
+                "home_score": h,
+                "away_score": a,
+                "winner": outcome,
+                "expected_points": expected_points,
+                "exact_prob": exact_prob,
+                "rule": rule,
+            }
+    best["expected_points"] = round(best["expected_points"], 4)
+    best["exact_prob"] = round(best["exact_prob"], 4)
+    return best
+
+
+def _wc_group_pressure(row):
+    played = int(row.get("played", 0) or 0)
+    pts = int(row.get("pts", 0) or 0)
+    return {
+        "urgent": 1.0 if played >= 2 and pts < 4 else 0.45 if played >= 1 and pts < 3 else 0.0,
+        "safe": played >= 2 and pts >= 4,
+    }
+
+
+def _wc_upset_radar(h_stats, a_stats, h_group, a_group, home_pct, draw_pct, away_pct):
+    side = "home" if home_pct <= away_pct else "away"
+    fav = "away" if side == "home" else "home"
+    gap = abs(home_pct - away_pct)
+    u_stats = h_stats if side == "home" else a_stats
+    f_stats = a_stats if side == "home" else h_stats
+    u_pressure = _wc_group_pressure(h_group if side == "home" else a_group)
+    f_pressure = _wc_group_pressure(a_group if side == "home" else h_group)
+    score = 0.0
+    notes = []
+    if gap < 10:
+        score += 24
+        notes.append("close market")
+    elif gap < 18:
+        score += 15
+        notes.append("small gap")
+    elif gap < 26:
+        score += 8
+    if u_stats.get("form", 0) > f_stats.get("form", 0) + 0.08:
+        score += 18
+        notes.append("better recent form")
+    if u_stats.get("gf_avg", 0) > f_stats.get("gf_avg", 0) + 0.35:
+        score += 12
+        notes.append("attacking trend")
+    if f_stats.get("ga_avg", 0) > u_stats.get("ga_avg", 0) + 0.35:
+        score += 10
+        notes.append("favorite leaking goals")
+    if u_pressure["urgent"] > f_pressure["urgent"]:
+        score += 18
+        notes.append("must-win context")
+    if f_pressure["safe"] and not u_pressure["safe"]:
+        score += 12
+        notes.append("favorite may protect position")
+    if f_stats.get("clean_rate", 0) < 0.2 and u_stats.get("gf_avg", 0) >= 1.1:
+        score += 6
+
+    avg_draw_rate = (h_stats.get("draw_rate", 0) + a_stats.get("draw_rate", 0)) / 2
+    draw_score = 0.0
+    if gap < 16:
+        draw_score += 22 - gap
+    if avg_draw_rate > 0.26:
+        draw_score += (avg_draw_rate - 0.26) * 90
+    if draw_pct > 25:
+        draw_score += (draw_pct - 25) * 0.9
+    score = round(_clamp(score, 0, 100), 1)
+    return {
+        "side": side if score >= 45 else None,
+        "raw_side": side,
+        "favorite": fav,
+        "score": score,
+        "draw": round(_clamp(draw_score, 0, 100), 1),
+        "notes": notes[:3],
+    }
+
+
+def _wc_apply_upset_radar(home_pct, draw_pct, away_pct, radar):
+    hp, dp, ap = float(home_pct), float(draw_pct), float(away_pct)
+    if radar and radar.get("side") and _num(radar.get("score")) >= 58:
+        boost = min(0.11, (_num(radar.get("score")) - 55) / 420)
+        if radar.get("side") == "home":
+            hp *= 1 + boost
+            ap *= 1 - boost * 0.35
+        else:
+            ap *= 1 + boost
+            hp *= 1 - boost * 0.35
+    if radar and _num(radar.get("draw")) >= 62:
+        draw_boost = min(0.07, (_num(radar.get("draw")) - 58) / 520)
+        dp *= 1 + draw_boost
+        hp *= 1 - draw_boost * 0.2
+        ap *= 1 - draw_boost * 0.2
+    total = hp + dp + ap or 1.0
+    hp = round(hp / total * 100, 1)
+    dp = round(dp / total * 100, 1)
+    ap = round(100 - hp - dp, 1)
+    return hp, dp, ap
+
+
 def _wc_predict_snapshot(teams_obj, fixtures, match, model):
     model = _normalize_wc_model(model)
     weights = model["factors"]
@@ -672,6 +824,8 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
     draw_pct = max(14, min(34, draw_pct))
     home_pct = (100 - draw_pct) * home_share
     away_pct = 100 - draw_pct - home_pct
+    upset_radar = _wc_upset_radar(h_stats, a_stats, h_group, a_group, home_pct, draw_pct, away_pct)
+    home_pct, draw_pct, away_pct = _wc_apply_upset_radar(home_pct, draw_pct, away_pct, upset_radar)
 
     total_goals = 2.42 + min(abs(gap) / 950, 0.36)
     if h_stats["played"] or a_stats["played"]:
@@ -700,7 +854,21 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
         winner = "draw"
     if draw_pct * 1.18 > max(home_pct, away_pct) and close > 0.78:
         winner = "draw"
-    rh, ra = _wc_score_for_winner(lam_h, lam_a, winner, calibration)
+    open_match = bool(
+        (_wc_group_pressure(h_group).get("urgent") or _wc_group_pressure(a_group).get("urgent")) and
+        (h_group.get("played", 0) >= 1 or a_group.get("played", 0) >= 1)
+    )
+    score_pick = _wc_score_for_expected_points(
+        lam_h,
+        lam_a,
+        {"home": home_pct, "draw": draw_pct, "away": away_pct},
+        match,
+        calibration,
+        upset=upset_radar,
+        open_match=open_match,
+    )
+    winner = score_pick["winner"]
+    rh, ra = score_pick["home_score"], score_pick["away_score"]
     return {
         "model_version": model.get("version", WC_MODEL_VERSION),
         "match_id": match.get("id"),
@@ -718,6 +886,11 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
         "away_win_pct": round(away_pct, 1),
         "expected_home_goals": round(lam_h, 2),
         "expected_away_goals": round(lam_a, 2),
+        "expected_points": score_pick["expected_points"],
+        "exact_score_prob": score_pick["exact_prob"],
+        "prediction_strategy": "expected_points",
+        "phase_rule": score_pick["rule"],
+        "upset_radar": upset_radar,
         "signals": signals,
         "input_snapshot": {
             "home_rating": round(h_rating, 1),

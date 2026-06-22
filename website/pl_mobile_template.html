@@ -1073,6 +1073,78 @@ function scoreForWinner(lH,lA,w,ctx){
   if(w==="away"&&best[0]===0&&best[1]===1){if(lA>=1.75&&lH<=1.05)return[0,2];if(lA>=1.45&&lH>=1.05)return[1,2]}
   return best;
 }
+function scoreOutcome(h,a){return h>a?"home":a>h?"away":"draw"}
+function phaseRule(match){
+  var e=+(match&&match.e||0);
+  if(D.league==="wc"){
+    if(match&&match.grp)return{key:"group",result:1,exact:3};
+    if(e>=35)return{key:"final",result:8,exact:15};
+    if(e===34)return{key:"third",result:5,exact:10};
+    if(e>=32)return{key:"semi",result:5,exact:10};
+    if(e>=28)return{key:"quarter",result:4,exact:8};
+    if(e>=25)return{key:"r16",result:2,exact:5};
+    if(e>=18)return{key:"r32",result:2,exact:5};
+  }
+  return{key:"league",result:1,exact:3}
+}
+function scoreCellProb(lH,lA,h,a,ctx){
+  var p=_poisson(lH,h)*_poisson(lA,a),target=ctx&&ctx.total?ctx.total:lH+lA,zz=ctx&&ctx.zeroZeroPenalty!=null?ctx.zeroZeroPenalty:.62;
+  p*=1-Math.min(Math.abs((h+a)-target)/4,.28);
+  if(ctx&&ctx.open&&h+a>=2)p*=1.06;
+  if(target>1.55&&h===0&&a===0)p*=zz;
+  if(target>2.45&&h+a<=1)p*=.82;
+  return p
+}
+function scoreForExpectedPoints(lH,lA,prob,ctx){
+  ctx=ctx||{};var rule=ctx.rule||{key:"league",result:1,exact:3},rows=[],tot={home:0,draw:0,away:0};
+  for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var o=scoreOutcome(h,a),p=scoreCellProb(lH,lA,h,a,ctx);tot[o]+=p;rows.push({h:h,a:a,o:o,p:p})}
+  var op={home:(prob.home||0)/100,draw:(prob.draw||0)/100,away:(prob.away||0)/100},best=null,bv=-1,up=ctx.upset||{};
+  rows.forEach(function(r){
+    var exact=tot[r.o]?r.p/tot[r.o]*(op[r.o]||0):0;
+    var v=(rule.result||1)*(op[r.o]||0)+((rule.exact||3)-(rule.result||1))*exact;
+    if(up.side&&r.o===up.side&&up.score>=58)v*=1+Math.min(.18,(up.score-55)/260);
+    if(r.o==="draw"&&up.draw>=58)v*=1+Math.min(.12,(up.draw-55)/320);
+    if(ctx.open&&r.h+r.a>=2)v*=1.015;
+    if(v>bv){bv=v;best={h:r.h,a:r.a,rec:r.o,ep:v,exact:exact,rule:rule}}
+  });
+  return best||{h:0,a:0,rec:"draw",ep:0,exact:0,rule:rule}
+}
+function upsetRadar(hid,aid,ctx){
+  ctx=ctx||{};var hp=+ctx.hp||0,ap=+ctx.ap||0,dp=+ctx.dp||0,side=hp<=ap?"home":"away",fav=side==="home"?"away":"home",gap=Math.abs(hp-ap);
+  var u=side==="home"?{id:hid,s:ctx.hs,tr:ctx.hTrGf,con:ctx.hCon,cs:ctx.hCs,m:ctx.hMot}:{id:aid,s:ctx.as,tr:ctx.aTrGf,con:ctx.aCon,cs:ctx.aCs,m:ctx.aMot};
+  var f=fav==="home"?{id:hid,s:ctx.hs,tr:ctx.hTrGf,con:ctx.hCon,cs:ctx.hCs,m:ctx.hMot}:{id:aid,s:ctx.as,tr:ctx.aTrGf,con:ctx.aCon,cs:ctx.aCs,m:ctx.aMot};
+  var score=0,notes=[];
+  if(gap<10){score+=24;notes.push("close market")}
+  else if(gap<18){score+=15;notes.push("small gap")}
+  else if(gap<26)score+=8;
+  if((u.s&&f.s)&&(+u.s.fs||0)>(+f.s.fs||0)+8){score+=18;notes.push("better recent form")}
+  if((+u.tr||0)>(+f.tr||0)+.35){score+=12;notes.push("attacking trend")}
+  if((+f.con||0)>(+u.con||0)+.35){score+=10;notes.push("favorite leaking goals")}
+  if(u.m&&f.m){
+    if((+u.m.urgent||0)>(+f.m.urgent||0)){score+=18;notes.push("must-win context")}
+    if(f.m.safe&&!u.m.safe){score+=12;notes.push("favorite may protect position")}
+  }
+  if((+f.cs||0)<20&&(+u.tr||0)>=1.1)score+=6;
+  var avgDT=((+ctx.hDT||0)+(+ctx.aDT||0))/2,draw=0;
+  if(gap<16)draw+=22-gap;
+  if(avgDT>26)draw+=(avgDT-26)*.9;
+  if(dp>25)draw+=(dp-25)*.9;
+  score=Math.max(0,Math.min(100,Math.round(score)));
+  draw=Math.max(0,Math.min(100,Math.round(draw)));
+  return{side:score>=45?side:null,rawSide:side,score:score,draw:draw,notes:notes.slice(0,3)}
+}
+function applyUpsetRadar(prob,radar){
+  var hp=prob.home,dp=prob.draw,ap=prob.away;
+  if(radar&&radar.side&&radar.score>=58){
+    var b=Math.min(.11,(radar.score-55)/420);
+    if(radar.side==="home"){hp*=1+b;ap*=1-b*.35}else{ap*=1+b;hp*=1-b*.35}
+  }
+  if(radar&&radar.draw>=62){
+    var db=Math.min(.07,(radar.draw-58)/520);dp*=1+db;hp*=1-db*.2;ap*=1-db*.2;
+  }
+  var t=hp+dp+ap||1;
+  return{home:Math.round(hp/t*1000)/10,draw:Math.round(dp/t*1000)/10,away:Math.round((100-Math.round(hp/t*1000)/10-Math.round(dp/t*1000)/10)*10)/10}
+}
 
 function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),ht=D.tm[hid]||{},at=D.tm[aid]||{};
   var neutral=D.league==="wc";
@@ -1154,8 +1226,11 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
     dp*=C.draw_bias;
     var ps2=hp+dp+ap;hp=Math.round(hp/ps2*1000)/10;dp=Math.round(dp/ps2*1000)/10;ap=Math.round((100-hp-dp)*10)/10;
   }
+  var radar=upsetRadar(hid,aid,{hp:hp,dp:dp,ap:ap,neutral:neutral,hs:hs,as:as,hTrGf:hTrGf,aTrGf:aTrGf,hCon:hCon,aCon:aCon,hCs:hCs,aCs:aCs,hMot:hMot,aMot:aMot,hDT:hDT,aDT:aDT});
+  var adj=applyUpsetRadar({home:hp,draw:dp,away:ap},radar);hp=adj.home;dp=adj.draw;ap=adj.away;
   var phg=Math.round(lamH*10)/10,pag=Math.round(lamA*10)/10;
-  var rec=pickOutcome(hp,dp,ap,neutral),sc=scoreForWinner(lamH,lamA,rec,{total:lamH+lamA,open:neutral&&(hMot&&aMot)&&(hMot.urgent||aMot.urgent),zeroZeroPenalty:C.zero_zero_penalty});
+  var ep=scoreForExpectedPoints(lamH,lamA,{home:hp,draw:dp,away:ap},{rule:phaseRule(match),total:lamH+lamA,open:neutral&&(hMot&&aMot)&&(hMot.urgent||aMot.urgent),zeroZeroPenalty:C.zero_zero_penalty,upset:radar});
+  var rec=ep.rec,sc=[ep.h,ep.a];
   var rh=sc[0],ra=sc[1];
   // Reasoning
   var reasons=[];
@@ -1170,8 +1245,13 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   reasons.push("Poisson model: "+T(hid).s+" "+poi.hw+"% | Draw "+poi.dr+"% | "+T(aid).s+" "+poi.aw+"%");
   if(neutral)reasons.push("Learning calibration: goals x"+(C.goal_mult||1)+" | draw x"+(C.draw_bias||1)+" | 0-0 penalty "+(C.zero_zero_penalty||.62));
   if(neutral&&hMot&&aMot&&(hMot.urgent||aMot.urgent||hMot.safe||aMot.safe))reasons.push("Group context: "+T(hid).s+" "+hMot.pts+" pts after "+hMot.played+" | "+T(aid).s+" "+aMot.pts+" pts after "+aMot.played);
-  reasons.push("Predicted: "+rh+"-"+ra+" (winner-aligned score model)");
-  return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,reasons:reasons};}
+  if(radar&&(radar.side||radar.draw>=58)){
+    var uTeam=radar.side?T(radar.side==="home"?hid:aid).s:"Draw";
+    reasons.push("Upset radar: "+uTeam+" value "+radar.score+"/100 | draw "+radar.draw+"/100"+(radar.notes&&radar.notes.length?" ("+radar.notes.join(", ")+")":""));
+  }
+  reasons.push("Expected points: "+rh+"-"+ra+" ("+ep.rule.key+", "+Math.round(ep.ep*100)/100+" xPts)");
+  reasons.push("Predicted: "+rh+"-"+ra+" (expected-points score model)");
+  return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,xp:Math.round(ep.ep*100)/100,upset:radar,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});var tb=$("gwToday");if(tb){if(D.cur&&D.sel!==D.cur){tb.textContent='\u25CF '+lbl+D.cur;tb.style.display="flex"}else{tb.style.display="none"}}}
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
