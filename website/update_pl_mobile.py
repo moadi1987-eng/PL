@@ -423,9 +423,48 @@ def _israel_date_key(value):
     return dt.astimezone(ISRAEL_TZ).strftime("%Y-%m-%d")
 
 
+def _today_israel_key():
+    return datetime.now(ISRAEL_TZ).strftime("%Y-%m-%d")
+
+
 def _fixture_sort_key(fixture):
     dt = _dt_utc((fixture or {}).get("ko"))
     return dt or datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _fixture_day_for_israel_date(fixtures, day_key=None):
+    day_key = day_key or _today_israel_key()
+    todays = [
+        f for f in (fixtures or [])
+        if f.get("e") is not None and f.get("ko") and _israel_date_key(f.get("ko")) == day_key
+    ]
+    if not todays:
+        return None
+    todays.sort(key=_fixture_sort_key)
+    return todays[0].get("e")
+
+
+def _mark_current_gws(gws, fixtures):
+    target = _fixture_day_for_israel_date(fixtures)
+    if target is None:
+        for f in sorted(fixtures or [], key=_fixture_sort_key):
+            if f.get("st") and not f.get("fin"):
+                target = f.get("e")
+                break
+    if target is None:
+        for g in gws:
+            if not g.get("fin"):
+                target = g.get("id")
+                break
+    if target is None:
+        for g in reversed(gws):
+            if g.get("fin"):
+                target = g.get("id")
+                break
+    if target is not None:
+        for g in gws:
+            g["cur"] = g.get("id") == target
+    return gws
 
 
 def _wc_team(data, tid):
@@ -1211,11 +1250,7 @@ def fetch_pl_official_season(prev_teams, headers):
         all_fin = bool(gw_fix) and all(f["fin"] for f in gw_fix)
         is_live = any(f["st"] and not f["fin"] for f in gw_fix)
         gws_out.append({"id": gw, "fin": all_fin, "cur": is_live})
-    if not any(g["cur"] for g in gws_out):
-        for gw in gws_out:
-            if not gw["fin"]:
-                gw["cur"] = True
-                break
+    _mark_current_gws(gws_out, fixtures_out)
 
     return {
         "teams": teams_out,
@@ -1377,7 +1412,7 @@ try:
                                 headers=hdr, timeout=30).json().get("events", [])
 
     # ESPN doesn't return live status for historical date ranges — fetch today separately
-    today_str = now.strftime("%Y%m%d")
+    today_str = datetime.now(ISRAEL_TZ).strftime("%Y%m%d")
     try:
         today_events = requests.get(ESPN_SCOREBOARD, params={"dates": today_str},
                                     headers=hdr, timeout=15).json().get("events", [])
@@ -1498,17 +1533,7 @@ try:
         is_cur = any(f["st"] and not f["fin"] for f in md_fix)
         ll_gws.append({"id": md, "fin": all_fin, "cur": is_cur})
 
-    # Current = first unfinished matchday (the upcoming one); fallback to last finished
-    if not any(g["cur"] for g in ll_gws):
-        for g in ll_gws:
-            if not g["fin"]:
-                g["cur"] = True
-                break
-    if not any(g["cur"] for g in ll_gws):
-        for g in reversed(ll_gws):
-            if g["fin"]:
-                g["cur"] = True
-                break
+    _mark_current_gws(ll_gws, ll_fixtures)
 
     ll_data = json.dumps({"teams": ll_teams, "gws": ll_gws, "fix": ll_fixtures},
                           ensure_ascii=False, separators=(",", ":"))
@@ -1539,7 +1564,7 @@ try:
     wc_events = requests.get(ESPN_WC_SCOREBOARD, params={"dates": WC_DATE_RANGE, "limit": "200"},
                              headers=hdr, timeout=30).json().get("events", [])
 
-    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today_str = datetime.now(ISRAEL_TZ).strftime("%Y%m%d")
     try:
         today_events = requests.get(ESPN_WC_SCOREBOARD, params={"dates": today_str, "limit": "50"},
                                     headers=hdr, timeout=15).json().get("events", [])
@@ -1688,16 +1713,7 @@ try:
         all_fin = all(f["fin"] for f in md_fix) if md_fix else False
         is_cur = any(f["st"] and not f["fin"] for f in md_fix)
         wc_gws.append({"id": md, "fin": all_fin, "cur": is_cur})
-    if not any(g["cur"] for g in wc_gws):
-        for g in wc_gws:
-            if not g["fin"]:
-                g["cur"] = True
-                break
-    if not any(g["cur"] for g in wc_gws):
-        for g in reversed(wc_gws):
-            if g["fin"]:
-                g["cur"] = True
-                break
+    _mark_current_gws(wc_gws, wc_fixtures)
 
     wc_archive = bool(wc_fixtures) and all(f["fin"] for f in wc_fixtures) and datetime.now(timezone.utc).strftime("%Y%m%d") > "20260719"
     wc_data = json.dumps({"teams": wc_teams, "gws": wc_gws, "fix": wc_fixtures, "archive": wc_archive},

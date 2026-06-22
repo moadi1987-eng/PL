@@ -239,6 +239,34 @@ var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]},wc:{tm:{},gw:[],fx:
 var PL_SEASONS={current:"2025-26",items:[],data:{}};
 function $(i){return document.getElementById(i)}
 function T(id){return D.tm[id]||{s:"?",b:"",n:"?"}}
+function ilDateKey(v){
+  var d=v?new Date(v):new Date();
+  if(!isFinite(d.getTime()))return"";
+  try{
+    var p=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Jerusalem",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+    var m={};p.forEach(function(x){m[x.type]=x.value});
+    return m.year+"-"+m.month+"-"+m.day;
+  }catch(e){return d.toISOString().slice(0,10)}
+}
+function todayKeyIL(){return ilDateKey(new Date())}
+function dayForIsraelDate(fix,key){
+  key=key||todayKeyIL();
+  var ms=(fix||[]).filter(function(f){return f&&f.e!=null&&f.ko&&ilDateKey(f.ko)===key}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")});
+  return ms.length?ms[0].e:0;
+}
+function pickCurrentDay(gws,fix){
+  var td=dayForIsraelDate(fix,todayKeyIL());
+  if(td)return td;
+  var c=null;(gws||[]).some(function(g){if(g.cur){c=g;return true}return false});
+  if(c)return c.id;
+  var firstOpen=null;(gws||[]).some(function(g){if(!g.fin){firstOpen=g;return true}return false});
+  if(firstOpen)return firstOpen.id;
+  var fin=(gws||[]).filter(function(g){return g.fin});
+  return fin.length?fin[fin.length-1].id:1;
+}
+function setNextDay(curId,gws){
+  D.nxtId=0;(gws||[]).some(function(g){if(g.id===curId+1){D.nxtId=g.id;return true}return false});
+}
 function lMeta(lg){
   if(lg==="laliga")return{gwl:"MD",cls:"ll",brand:"La Liga Dashboard"};
   if(lg==="wc")return{gwl:"Day",cls:"wc",brand:"World Cup Dashboard"};
@@ -272,26 +300,20 @@ function renderSeasonSel(){
 function swSeason(key){
   if(D.league!=="pl"||key===D.plSeason)return;
   var ld=plSeasonData(key);if(!ld||!ld.tm||!Object.keys(ld.tm).length)return;
-  sessionStorage.setItem("plSeason",D.plSeason);sessionStorage.removeItem("plGW");
+  sessionStorage.setItem("plSeason",D.plSeason);sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
   D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;_gMerged=false;
   initAfterData();render();fetchLive();
 }
 function swL(lg){
   if(lg===D.league)return;
   D.league=lg;if(lg==="pl")D.plSeason=sessionStorage.getItem("plSeason")||D.plSeason||PL_SEASONS.current;setLeagueLook(lg);
-  sessionStorage.setItem("plLeague",lg);sessionStorage.removeItem("plGW");
+  sessionStorage.setItem("plLeague",lg);sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
   var ld=activeLD(lg);
   if(ld&&ld.tm&&Object.keys(ld.tm).length){D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;_gMerged=false;initAfterData();render();fetchLive()}
   else{var msg='<div class="emp">Fetching live '+lg+' data...</div>';for(var ti=0;ti<4;ti++)$("t"+ti).innerHTML=msg;fetchLive()}
 }
 function initAfterData(){
-  var c=null;for(var i=0;i<D.gw.length;i++){if(D.gw[i].cur){c=D.gw[i];break}}
-  if(!c){var fn=D.gw.filter(function(g){return g.fin});c=fn.length?fn[fn.length-1]:{id:1}}
-  var curId=c.id;
-  var nxt=null;D.nxtId=0;
-  for(var ni=0;ni<D.gw.length;ni++){if(D.gw[ni].id===curId+1){nxt=D.gw[ni];D.nxtId=nxt.id;break}}
-  var today=new Date().toISOString().slice(0,10);
-  if(nxt){for(var fi=0;fi<D.fx.length;fi++){if(D.fx[fi].e===nxt.id&&D.fx[fi].ko&&D.fx[fi].ko.slice(0,10)===today){curId=nxt.id;break}}}
+  var curId=pickCurrentDay(D.gw,D.fx);setNextDay(curId,D.gw);
   D.cur=curId;D.sel=D.cur;D.ct1=null;D.ct2=null;
   renderSeasonSel();
   bSt();rGW();
@@ -315,7 +337,8 @@ function init(){
   D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;
   initAfterData();
   var sGW=parseInt(sessionStorage.getItem("plGW"));
-  D.sel=(sGW&&sGW>=1&&sGW<=D.gw.length)?sGW:D.cur;
+  var sGWDate=sessionStorage.getItem("plGWDate");
+  D.sel=(sGW&&sGW>=1&&sGW<=D.gw.length&&sGWDate===todayKeyIL())?sGW:D.cur;
   var sTab=parseInt(sessionStorage.getItem("plTab"))||0;
   var sSub=sessionStorage.getItem("plSub")!=null?parseInt(sessionStorage.getItem("plSub")):1;
   D.tab=sTab;D.sub=sSub;
@@ -423,13 +446,17 @@ function _rebuildGW(fix){
     gws.push({id:md,fin:allFin,cur:isLive});
   }
   if(!gws.some(function(g){return g.cur})){
-    var lf=0;gws.forEach(function(g){if(g.fin&&g.id>lf)lf=g.id});
-    gws.forEach(function(g){g.cur=(g.id===lf+1)});
-    if(!gws.some(function(g){return g.cur}))gws.forEach(function(g){if(g.id===lf)g.cur=true});
+    var todayId=dayForIsraelDate(fix,todayKeyIL());
+    if(todayId)gws.forEach(function(g){g.cur=(g.id===todayId)});
+    else{
+      var lf=0;gws.forEach(function(g){if(g.fin&&g.id>lf)lf=g.id});
+      gws.forEach(function(g){g.cur=(g.id===lf+1)});
+      if(!gws.some(function(g){return g.cur}))gws.forEach(function(g){if(g.id===lf)g.cur=true});
+    }
   }
   return gws;
 }
-function _todayKeyUTC(){return new Date().toISOString().slice(0,10).replace(/-/g,'')}
+function _todayKeyUTC(){return todayKeyIL().replace(/-/g,'')}
 function _mergeTodayEvents(evts,todayData){
   evts=(evts||[]).slice();
   var today=(todayData&&todayData.events)||[];
@@ -611,12 +638,7 @@ function _applyData(lg,tm,gws,fix){
   if(D.league!==lg)return;
   D.tm=tm;D.gw=gws;D.fx=fix;D.arch=!!(LDATA[lg]&&LDATA[lg].archive);_gMerged=false;
   var oSel=D.sel,oCur=D.cur;
-  var c=null;for(var i=0;i<gws.length;i++){if(gws[i].cur){c=gws[i];break}}
-  if(!c){var fn2=gws.filter(function(g){return g.fin});c=fn2.length?fn2[fn2.length-1]:{id:1}}
-  var cId=c.id;D.nxtId=0;
-  for(var ni=0;ni<gws.length;ni++){if(gws[ni].id===cId+1){D.nxtId=gws[ni].id;break}}
-  var td=new Date().toISOString().slice(0,10);
-  if(D.nxtId){for(var fi=0;fi<fix.length;fi++){if(fix[fi].e===D.nxtId&&fix[fi].ko&&fix[fi].ko.slice(0,10)===td){cId=D.nxtId;break}}}
+  var cId=pickCurrentDay(gws,fix);setNextDay(cId,gws);
   D.cur=cId;D.sel=(oSel===oCur)?D.cur:oSel;
   bSt();rGW();render();
 }
@@ -1253,7 +1275,7 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   reasons.push("Predicted: "+rh+"-"+ra+" (expected-points score model)");
   return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,xp:Math.round(ep.ep*100)/100,upset:radar,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});var tb=$("gwToday");if(tb){if(D.cur&&D.sel!==D.cur){tb.textContent='\u25CF '+lbl+D.cur;tb.style.display="flex"}else{tb.style.display="none"}}}
-function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);rGW();render()}
+function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);sessionStorage.setItem("plGWDate",todayKeyIL());rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
 function goToCur(){if(D.cur)sGW(D.cur)}
 function sw(i){D.tab=i;D.sub=0;sessionStorage.setItem("plTab",i);sessionStorage.setItem("plSub",0);for(var j=0;j<4;j++){$("t"+j).className="tab"+(j===i?" a":"");$("n"+j).className="nb"+(j===i?" a":"")}render()}
