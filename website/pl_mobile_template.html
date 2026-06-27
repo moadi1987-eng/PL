@@ -138,7 +138,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .ailist{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.45rem;margin-bottom:.5rem}.aiitem{padding:.35rem 0;border-bottom:1px solid var(--bd)}.aiitem:last-child{border:none}.aiitem-top{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.62rem}.aiitem-top b{font-size:.66rem}.aiitem-top span{color:var(--tm);font-size:.54rem}.aipct{font-weight:900;font-size:.62rem}.aibar{height:7px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;margin-top:.25rem}.aifill{height:100%;border-radius:999px}
 .aifactor .aiitem-top{align-items:flex-start}.aifactor small{display:block;color:var(--tm);font-size:.5rem;margin-top:.08rem}.ainote{font-size:.52rem;color:var(--tm);line-height:1.45;margin:-.15rem 0 .35rem}
 .aisrc{display:grid;grid-template-columns:1fr;gap:.3rem;margin-bottom:.5rem}.aisrc div{background:var(--cd);border:1px solid var(--bd);border-radius:var(--rs);padding:.45rem}.aisrc b{display:block;font-size:.62rem;color:var(--cy);margin-bottom:.12rem}.aisrc span{display:block;font-size:.55rem;color:var(--tm);line-height:1.45}
-.aidays{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.4rem;margin-bottom:.5rem}.aiday{padding:.38rem 0;border-bottom:1px solid var(--bd)}.aiday:last-child{border:none}.aiday-top{display:grid;grid-template-columns:minmax(70px,1fr) auto;gap:.45rem;align-items:center}.aiday-title{min-width:0}.aiday-title b{display:block;font-size:.66rem}.aiday-title span{display:block;color:var(--tm);font-size:.5rem;margin-top:.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.aiday-hit{font-weight:900;font-size:.82rem;white-space:nowrap}.aiday-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:.25rem;margin-top:.32rem}.aiday-meta span{background:rgba(255,255,255,.04);border-radius:var(--rs);padding:.22rem .18rem;text-align:center;font-size:.48rem;color:var(--tm);font-weight:800}.aiday-meta b{display:block;color:var(--tx);font-size:.58rem;margin-bottom:.04rem}.aibadge{display:inline-block;margin-left:.25rem;border-radius:999px;padding:.08rem .25rem;font-size:.42rem;font-weight:900;background:rgba(255,255,255,.07);color:var(--tm);vertical-align:middle}.aibadge.cur{background:rgba(247,201,72,.16);color:var(--cy)}.aibadge.latest{background:rgba(0,255,135,.12);color:var(--g)}
+.aidays{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.4rem;margin-bottom:.5rem}.aiday{padding:.38rem 0;border-bottom:1px solid var(--bd)}.aiday.empty{opacity:.66}.aiday:last-child{border:none}.aiday-top{display:grid;grid-template-columns:minmax(70px,1fr) auto;gap:.45rem;align-items:center}.aiday-title{min-width:0}.aiday-title b{display:block;font-size:.66rem}.aiday-title span{display:block;color:var(--tm);font-size:.5rem;margin-top:.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.aiday-hit{font-weight:900;font-size:.82rem;white-space:nowrap}.aiday-hit.empty{color:var(--tm)!important}.aiday-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:.25rem;margin-top:.32rem}.aiday-meta span{background:rgba(255,255,255,.04);border-radius:var(--rs);padding:.22rem .18rem;text-align:center;font-size:.48rem;color:var(--tm);font-weight:800}.aiday-meta b{display:block;color:var(--tx);font-size:.58rem;margin-bottom:.04rem}.aibadge{display:inline-block;margin-left:.25rem;border-radius:999px;padding:.08rem .25rem;font-size:.42rem;font-weight:900;background:rgba(255,255,255,.07);color:var(--tm);vertical-align:middle}.aibadge.cur{background:rgba(247,201,72,.16);color:var(--cy)}.aibadge.latest{background:rgba(0,255,135,.12);color:var(--g)}
 /* History */
 .hc{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.35rem .5rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.25rem;cursor:pointer}
 .hc .hg{font-weight:700;font-size:.7rem;min-width:40px}
@@ -1752,17 +1752,28 @@ function aiDayDate(gw){
   if(!ms.length)return"";
   try{return new Date(ms[0].ko).toLocaleDateString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short"})}catch(e){return""}
 }
+function aiFullDayRows(rows){
+  var max=Math.max.apply(null,[1,D.sel||1].concat((rows||[]).map(function(r){return r.gw||0})));
+  var by={};
+  (rows||[]).forEach(function(r){by[r.gw]=r});
+  var out=[];
+  for(var gw=1;gw<=max;gw++){
+    out.push(by[gw]||{gw:gw,total:0,correct_winner:0,correct_score:0,exact_score:0,points:null,accuracy_pct:null,score_acc_pct:null,empty:true});
+  }
+  return out;
+}
 function aiDayBreakdown(rows,gwLbl,lgCol){
   if(!rows||!rows.length)return"";
   var latest=rows[rows.length-1].gw;
   var h='<div class="sec" style="margin-bottom:.25rem">'+gwLbl+' Breakdown</div><div class="aidays">';
-  rows.slice().reverse().forEach(function(r){
-    var col=r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)';
+  aiFullDayRows(rows).forEach(function(r){
+    var empty=!r.total;
+    var col=empty?'var(--tm)':(r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)');
     var badges=(r.gw===D.sel?'<span class="aibadge cur">selected</span>':'')+(r.gw===latest?'<span class="aibadge latest">latest</span>':'');
     var dt=aiDayDate(r.gw),pts=r.points!=null?r.points:"-";
-    h+='<div class="aiday"><div class="aiday-top"><div class="aiday-title"><b>'+gwLbl+r.gw+badges+'</b><span>'+(dt||'Completed matches')+'</span></div><div class="aiday-hit" style="color:'+col+'">'+r.accuracy_pct+'%</div></div>'+
-      '<div class="aibar"><div class="aifill" style="width:'+Math.max(3,Math.round(r.accuracy_pct))+'%;background:'+col+'"></div></div>'+
-      '<div class="aiday-meta"><span><b>'+r.total+'</b>games</span><span><b>'+r.correct_winner+'/'+r.total+'</b>result</span><span><b>'+r.correct_score+'/'+r.total+'</b>exact</span><span><b>'+pts+'</b>pts</span></div></div>';
+    h+='<div class="aiday'+(empty?' empty':'')+'"><div class="aiday-top"><div class="aiday-title"><b>'+gwLbl+r.gw+badges+'</b><span>'+(dt||(empty?'No checked games yet':'Completed matches'))+'</span></div><div class="aiday-hit'+(empty?' empty':'')+'" style="color:'+col+'">'+(empty?'-':r.accuracy_pct+'%')+'</div></div>'+
+      '<div class="aibar"><div class="aifill" style="width:'+(empty?0:Math.max(3,Math.round(r.accuracy_pct)))+'%;background:'+col+'"></div></div>'+
+      '<div class="aiday-meta"><span><b>'+r.total+'</b>games</span><span><b>'+(empty?'-':r.correct_winner+'/'+r.total)+'</b>result</span><span><b>'+(empty?'-':r.correct_score+'/'+r.total)+'</b>exact</span><span><b>'+pts+'</b>pts</span></div></div>';
   });
   return h+'</div>';
 }
