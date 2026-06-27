@@ -138,6 +138,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowra
 .ailist{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.45rem;margin-bottom:.5rem}.aiitem{padding:.35rem 0;border-bottom:1px solid var(--bd)}.aiitem:last-child{border:none}.aiitem-top{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.62rem}.aiitem-top b{font-size:.66rem}.aiitem-top span{color:var(--tm);font-size:.54rem}.aipct{font-weight:900;font-size:.62rem}.aibar{height:7px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;margin-top:.25rem}.aifill{height:100%;border-radius:999px}
 .aifactor .aiitem-top{align-items:flex-start}.aifactor small{display:block;color:var(--tm);font-size:.5rem;margin-top:.08rem}.ainote{font-size:.52rem;color:var(--tm);line-height:1.45;margin:-.15rem 0 .35rem}
 .aisrc{display:grid;grid-template-columns:1fr;gap:.3rem;margin-bottom:.5rem}.aisrc div{background:var(--cd);border:1px solid var(--bd);border-radius:var(--rs);padding:.45rem}.aisrc b{display:block;font-size:.62rem;color:var(--cy);margin-bottom:.12rem}.aisrc span{display:block;font-size:.55rem;color:var(--tm);line-height:1.45}
+.aidays{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.4rem;margin-bottom:.5rem}.aiday{padding:.38rem 0;border-bottom:1px solid var(--bd)}.aiday:last-child{border:none}.aiday-top{display:grid;grid-template-columns:minmax(70px,1fr) auto;gap:.45rem;align-items:center}.aiday-title{min-width:0}.aiday-title b{display:block;font-size:.66rem}.aiday-title span{display:block;color:var(--tm);font-size:.5rem;margin-top:.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.aiday-hit{font-weight:900;font-size:.82rem;white-space:nowrap}.aiday-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:.25rem;margin-top:.32rem}.aiday-meta span{background:rgba(255,255,255,.04);border-radius:var(--rs);padding:.22rem .18rem;text-align:center;font-size:.48rem;color:var(--tm);font-weight:800}.aiday-meta b{display:block;color:var(--tx);font-size:.58rem;margin-bottom:.04rem}.aibadge{display:inline-block;margin-left:.25rem;border-radius:999px;padding:.08rem .25rem;font-size:.42rem;font-weight:900;background:rgba(255,255,255,.07);color:var(--tm);vertical-align:middle}.aibadge.cur{background:rgba(247,201,72,.16);color:var(--cy)}.aibadge.latest{background:rgba(0,255,135,.12);color:var(--g)}
 /* History */
 .hc{background:var(--cd);border:1px solid var(--bd);border-radius:var(--r);padding:.35rem .5rem;display:flex;align-items:center;justify-content:space-between;margin-bottom:.25rem;cursor:pointer}
 .hc .hg{font-weight:700;font-size:.7rem;min-width:40px}
@@ -1726,15 +1727,47 @@ function localLearningRows(){
   D.fx.forEach(function(f){
     if(!f.fin||f.hs==null)return;
     var p=pred(f.h,f.a,f.e,f),aw=f.hs>f.as?"home":f.hs===f.as?"draw":"away";
-    if(!by[f.e])by[f.e]={gw:f.e,total:0,correct_winner:0,exact_score:0};
+    if(!by[f.e])by[f.e]={gw:f.e,total:0,correct_winner:0,correct_score:0,exact_score:0,points:0};
     by[f.e].total++;
     if(p.rec===aw)by[f.e].correct_winner++;
-    if(p.rh===f.hs&&p.ra===f.as)by[f.e].exact_score++;
+    if(p.rh===f.hs&&p.ra===f.as){by[f.e].correct_score++;by[f.e].exact_score++}
   });
-  return Object.keys(by).map(function(k){var r=by[k];r.accuracy_pct=r.total?Math.round(r.correct_winner/r.total*1000)/10:0;return r}).sort(function(a,b){return a.gw-b.gw});
+  return Object.keys(by).map(function(k){return by[k]}).sort(function(a,b){return a.gw-b.gw});
+}
+function normAIRows(rows){
+  return (rows||[]).map(function(r){
+    var total=+r.total||0,cw=+r.correct_winner||0,cs=r.correct_score!=null?+r.correct_score:(r.exact_score!=null?+r.exact_score:0),pts=+r.points||0;
+    return{gw:+r.gw||0,total:total,correct_winner:cw,correct_score:cs,exact_score:cs,points:pts,accuracy_pct:total?Math.round(cw/total*1000)/10:0,score_acc_pct:total?Math.round(cs/total*1000)/10:0};
+  }).filter(function(r){return r.gw&&r.total>0}).sort(function(a,b){return a.gw-b.gw});
+}
+function aiOverall(rows){
+  var out={total:0,correct_winner:0,correct_score:0,points:0};
+  (rows||[]).forEach(function(r){out.total+=+r.total||0;out.correct_winner+=+r.correct_winner||0;out.correct_score+=+r.correct_score||0;out.points+=+r.points||0});
+  out.accuracy_pct=out.total?Math.round(out.correct_winner/out.total*1000)/10:0;
+  out.score_acc_pct=out.total?Math.round(out.correct_score/out.total*1000)/10:0;
+  return out;
+}
+function aiDayDate(gw){
+  var ms=D.fx.filter(function(f){return f.e===gw&&f.ko}).sort(function(a,b){return(a.ko||"").localeCompare(b.ko||"")});
+  if(!ms.length)return"";
+  try{return new Date(ms[0].ko).toLocaleDateString("en-GB",{timeZone:"Asia/Jerusalem",weekday:"short",day:"numeric",month:"short"})}catch(e){return""}
+}
+function aiDayBreakdown(rows,gwLbl,lgCol){
+  if(!rows||!rows.length)return"";
+  var latest=rows[rows.length-1].gw;
+  var h='<div class="sec" style="margin-bottom:.25rem">'+gwLbl+' Breakdown</div><div class="aidays">';
+  rows.slice().reverse().forEach(function(r){
+    var col=r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)';
+    var badges=(r.gw===D.sel?'<span class="aibadge cur">selected</span>':'')+(r.gw===latest?'<span class="aibadge latest">latest</span>':'');
+    var dt=aiDayDate(r.gw),pts=r.points!=null?r.points:"-";
+    h+='<div class="aiday"><div class="aiday-top"><div class="aiday-title"><b>'+gwLbl+r.gw+badges+'</b><span>'+(dt||'Completed matches')+'</span></div><div class="aiday-hit" style="color:'+col+'">'+r.accuracy_pct+'%</div></div>'+
+      '<div class="aibar"><div class="aifill" style="width:'+Math.max(3,Math.round(r.accuracy_pct))+'%;background:'+col+'"></div></div>'+
+      '<div class="aiday-meta"><span><b>'+r.total+'</b>games</span><span><b>'+r.correct_winner+'/'+r.total+'</b>result</span><span><b>'+r.correct_score+'/'+r.total+'</b>exact</span><span><b>'+pts+'</b>pts</span></div></div>';
+  });
+  return h+'</div>';
 }
 function aiTrendChart(rows,gwLbl,lgCol){
-  var rs=(rows||[]).filter(function(r){return r&&r.total>0&&isFinite(+r.accuracy_pct)}).map(function(r){return{gw:r.gw,total:r.total,correct_winner:r.correct_winner||0,accuracy_pct:+r.accuracy_pct||0}});
+  var rs=normAIRows(rows);
   if(!rs.length)return '';
   var left=24,right=310,top=14,bottom=92,w=right-left,h=bottom-top;
   function x(i){return rs.length===1?(left+right)/2:left+(i*w/(rs.length-1))}
@@ -1747,7 +1780,7 @@ function aiTrendChart(rows,gwLbl,lgCol){
   var labels=pts.map(function(p,i){return(i%tickEvery===0||i===pts.length-1)?'<text class="xl" x="'+p.x.toFixed(1)+'" y="110">'+gwLbl+p.r.gw+'</text>':''}).join('');
   var dots=pts.map(function(p,i){
     var prev=i?rs[i-1].accuracy_pct:p.r.accuracy_pct,cls=Math.abs(p.r.accuracy_pct-prev)<.05?'flat':p.r.accuracy_pct>prev?'up':'down';
-    return'<circle class="dot '+cls+'" cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="4"><title>'+gwLbl+p.r.gw+': '+p.r.accuracy_pct+'% ('+p.r.correct_winner+'/'+p.r.total+')</title></circle>';
+    return'<circle class="dot '+cls+'" cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="4"><title>'+gwLbl+p.r.gw+': '+p.r.accuracy_pct+'% ('+p.r.correct_winner+'/'+p.r.total+' games)</title></circle>';
   }).join('');
   var last=rs[rs.length-1],prev=rs.length>1?rs[rs.length-2]:null,dayDelta=prev?last.accuracy_pct-prev.accuracy_pct:null;
   var cls=dayDelta==null||Math.abs(dayDelta)<.05?'flat':dayDelta>0?'up':'down';
@@ -1759,20 +1792,17 @@ function rAI(){
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
   var lgKey=D.league,isPL=lgKey==='pl',isWC=lgKey==='wc';
   var lgData=lh[lgKey]||{gw_results:[]};
-  var rows=(lgData.gw_results||[]).slice().sort(function(a,b){return a.gw-b.gw});
-  var localRows=false;
-  if(!rows.length){rows=localLearningRows();localRows=rows.length>0}
-  var tot=lgData.total_evaluated||0,acc=lgData.overall_accuracy||0;
-  if((localRows||!tot)&&rows.length){
-    var cor=0;tot=0;rows.forEach(function(r){cor+=r.correct_winner||0;tot+=r.total||0});
-    acc=tot?Math.round(cor/tot*1000)/10:0;
-  }
+  var rows=normAIRows(lgData.gw_results||[]);
+  if(!rows.length)rows=normAIRows(localLearningRows());
+  var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
   var hasOwnWeights=!!(lgData.current_weights&&Object.keys(lgData.current_weights).length);
   var wts=hasOwnWeights?lgData.current_weights:((lh.pl||{}).current_weights||{});
   var cal=isWC?(lgData.calibration||activeCalibration()):null,meta=(lgData.model_meta||{});
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';
   var lgName=isPL?'Premier League':isWC?'World Cup':'La Liga';
+  var focus=null;for(var fi=0;fi<rows.length;fi++){if(rows[fi].gw===D.sel){focus=rows[fi];break}}
+  if(!focus&&rows.length)focus=rows[rows.length-1];
   function trendDelta(rs){
     if(rs.length<2)return null;
     var n=Math.min(2,rs.length),last=rs.slice(-n),prev=rs.slice(-(n*2),-n);
@@ -1781,10 +1811,11 @@ function rAI(){
   }
   var delta=trendDelta(rows);
   var tSpan=delta===null?'<span class="aitrend">No trend yet</span>':'<span class="aitrend '+(delta>=0?'up':'down')+'">'+(delta>=0?'Up ':'Down ')+Math.abs(delta).toFixed(1)+'%</span>';
+  var mainAcc=focus?focus.accuracy_pct:acc,focusName=focus?(focus.gw===D.sel?'Selected ':'Latest ')+gwLbl+focus.gw:'Overall';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
-  h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+(localRows?' tracking':' accuracy')+'</div><div class="ainum" style="color:'+lgCol+'">'+acc+'%</div><div class="aimeta">'+tot+' matches checked · '+rows.length+' '+gwLbl+'s '+(localRows?'tracked':'learned')+'</div></div>'+tSpan+'</div></div>';
+  h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+' '+focusName+' hit rate</div><div class="ainum" style="color:'+lgCol+'">'+mainAcc+'%</div><div class="aimeta">'+(focus?focus.correct_winner+'/'+focus.total+' games on this '+gwLbl.toLowerCase()+' · ':'')+'overall '+acc+'% ('+overall.correct_winner+'/'+tot+') · exact '+overall.score_acc_pct+'%</div></div>'+tSpan+'</div></div>';
   h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, ESPN roster availability, manual absence overrides, points in the group, goal difference, and qualification pressure.</span></div>'+
-    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson score model, blends it with factor probabilities, then chooses a calibrated scoreline that matches the recommended result.</span></div>'+
+    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson score model, checks upset value, then chooses the scoreline with the best expected points under the competition rules.</span></div>'+
     '<div><b>Learning state</b><span>'+(isWC?'Predictions are saved as pre-match snapshots. After the match, only newly checked snapshots train the model, so the same match is not learned repeatedly.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
   if(isWC&&cal){
     h+='<div class="sec" style="margin-bottom:.25rem">Learning Adjustments</div><div class="aimetrics">';
@@ -1796,17 +1827,17 @@ function rAI(){
   if(rows.length){
     var last=rows[rows.length-1],best=rows.slice().sort(function(a,b){return b.accuracy_pct-a.accuracy_pct})[0],weak=rows.slice().sort(function(a,b){return a.accuracy_pct-b.accuracy_pct})[0];
     h+='<div class="aimetrics">';
-    h+='<div class="aimetric"><span>Latest</span><b>'+last.correct_winner+'/'+last.total+'</b><em>'+gwLbl+last.gw+' winners</em></div>';
-    h+='<div class="aimetric"><span>Best</span><b style="color:var(--g)">'+best.accuracy_pct+'%</b><em>'+gwLbl+best.gw+'</em></div>';
-    h+='<div class="aimetric"><span>Weakest</span><b style="color:var(--pk)">'+weak.accuracy_pct+'%</b><em>'+gwLbl+weak.gw+'</em></div>';
+    h+='<div class="aimetric"><span>'+(focus&&focus.gw===D.sel?'Selected':'Latest')+'</span><b>'+mainAcc+'%</b><em>'+(focus?gwLbl+focus.gw+' · '+focus.correct_winner+'/'+focus.total:'no games')+'</em></div>';
+    h+='<div class="aimetric"><span>Exact score</span><b>'+overall.score_acc_pct+'%</b><em>'+overall.correct_score+'/'+tot+' exact results</em></div>';
+    h+='<div class="aimetric"><span>Total points</span><b>'+(overall.points||0)+'</b><em>'+rows.length+' '+gwLbl.toLowerCase()+' rows</em></div>';
+    h+='</div>';
+    h+='<div class="aimetrics">';
+    h+='<div class="aimetric"><span>Best '+gwLbl.toLowerCase()+'</span><b style="color:var(--g)">'+best.accuracy_pct+'%</b><em>'+gwLbl+best.gw+' · '+best.correct_winner+'/'+best.total+'</em></div>';
+    h+='<div class="aimetric"><span>Weakest '+gwLbl.toLowerCase()+'</span><b style="color:var(--pk)">'+weak.accuracy_pct+'%</b><em>'+gwLbl+weak.gw+' · '+weak.correct_winner+'/'+weak.total+'</em></div>';
+    h+='<div class="aimetric"><span>Overall</span><b>'+acc+'%</b><em>'+overall.correct_winner+'/'+tot+' winners</em></div>';
     h+='</div>';
     h+=aiTrendChart(rows,gwLbl,lgCol);
-    h+='<div class="sec" style="margin-bottom:.25rem">Recent Accuracy</div><div class="ailist">';
-    rows.slice(-6).reverse().forEach(function(r){
-      var col=r.accuracy_pct>=60?'var(--g)':r.accuracy_pct>=45?'var(--cy)':'var(--pk)';
-      h+='<div class="aiitem"><div class="aiitem-top"><div><b>'+gwLbl+r.gw+'</b><span> · '+r.correct_winner+' of '+r.total+' winners</span></div><div class="aipct" style="color:'+col+'">'+r.accuracy_pct+'%</div></div><div class="aibar"><div class="aifill" style="width:'+Math.max(3,Math.round(r.accuracy_pct))+'%;background:'+col+'"></div></div></div>';
-    });
-    h+='</div>';
+    h+=aiDayBreakdown(rows,gwLbl,lgCol);
   } else {
     h+='<div class="emp" style="margin:1.2rem 0;line-height:1.7">No '+lgName+' data yet.<br><span style="font-size:.55rem;color:var(--tm)">Builds automatically after each completed gameweek.</span></div>';
   }
