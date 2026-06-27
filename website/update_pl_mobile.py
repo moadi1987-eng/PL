@@ -1,5 +1,5 @@
 """
-Run this to update pl_mobile.html with fresh PL data.
+Run this to update pl_mobile.html and index.html with fresh PL data.
 Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
 
 Usage:  python update_pl_mobile.py
@@ -20,6 +20,7 @@ ROOT = os.path.join(HERE, "..")
 FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY", "").strip()
 FOOTBALL_API = "https://v3.football.api-sports.io"
 OUT = os.path.join(HERE, "pl_mobile.html")
+INDEX_OUT = os.path.abspath(os.path.join(ROOT, "index.html"))
 TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
@@ -1826,8 +1827,11 @@ else:
 
 with open(OUT, "w", encoding="utf-8") as f:
     f.write(html)
+with open(INDEX_OUT, "w", encoding="utf-8") as f:
+    f.write(html)
 
 print(f"Updated: {OUT}")
+print(f"Updated: {INDEX_OUT}")
 
 live_data = {
     "fix": fixtures,
