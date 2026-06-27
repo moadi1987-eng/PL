@@ -334,7 +334,7 @@ AI_WEIGHT_DEFAULTS = {
     "streak": 0.12, "h2h": 0.08, "home_away_split": 0.08,
     "goals_trend": 0.06, "upset": 0.06, "clean_sheet": 0.05, "draw_tendency": 0.05,
 }
-WC_MODEL_VERSION = 3
+WC_MODEL_VERSION = 4
 WC_CALIBRATION_DEFAULTS = {
     "goal_mult": 1.0,
     "home_goal_bias": 0.0,
@@ -714,6 +714,73 @@ def _wc_score_for_expected_points(lam_h, lam_a, probs, match, calibration=None, 
     return best
 
 
+def _wc_v4_score_pick(pred):
+    """Choose a scoreline with a stronger exact-score bias than the v3 xPts pick."""
+    hp = _num(pred.get("home_win_pct"))
+    dp = _num(pred.get("draw_pct"))
+    ap = _num(pred.get("away_win_pct"))
+    lam_h = _num(pred.get("expected_home_goals"))
+    lam_a = _num(pred.get("expected_away_goals"))
+    total_goals = lam_h + lam_a
+    xg_gap = abs(lam_h - lam_a)
+    side_gap = abs(hp - ap)
+    max_side = max(hp, ap)
+    snapshot = pred.get("input_snapshot") or {}
+    home_prior = snapshot.get("home_prior") or {}
+    away_prior = snapshot.get("away_prior") or {}
+    drawish = (_num(home_prior.get("draw_rate")) + _num(away_prior.get("draw_rate"))) / 2
+
+    reason = "base"
+    if (side_gap <= 9 and xg_gap <= 0.35 and dp >= 21) or (drawish >= 0.45 and xg_gap <= 0.75 and dp >= 18):
+        if total_goals < 2.65:
+            hs, away_score = 0, 0
+        elif total_goals < 3.1:
+            hs, away_score = 1, 1
+        else:
+            hs, away_score = 2, 2
+        return {
+            "winner": "draw",
+            "home_score": hs,
+            "away_score": away_score,
+            "reason": "draw-v4",
+            "score_model": "v4_scoreline",
+        }
+
+    winner = "home" if hp >= ap else "away"
+    fav_lam = lam_h if winner == "home" else lam_a
+    dog_lam = lam_a if winner == "home" else lam_h
+    if max_side >= 52 and xg_gap >= 0.95:
+        if dog_lam < 0.78:
+            fav_goals, dog_goals, reason = 3, 0, "strong-clean-win"
+        elif total_goals >= 3.0:
+            fav_goals, dog_goals, reason = 3, 1, "strong-open-win"
+        else:
+            fav_goals, dog_goals, reason = 2, 0, "strong-controlled-win"
+    elif total_goals >= 3.15:
+        fav_goals, dog_goals, reason = 3, 1, "open-win"
+    elif dog_lam < 0.75:
+        if total_goals < 2.25:
+            fav_goals, dog_goals, reason = 1, 0, "low-total-edge"
+        else:
+            fav_goals, dog_goals, reason = 2, 0, "clean-win"
+    elif total_goals < 2.25:
+        fav_goals, dog_goals, reason = 1, 0, "tight-win"
+    else:
+        fav_goals, dog_goals, reason = 2, 1, "balanced-win"
+
+    if winner == "home":
+        hs, away_score = fav_goals, dog_goals
+    else:
+        hs, away_score = dog_goals, fav_goals
+    return {
+        "winner": winner,
+        "home_score": hs,
+        "away_score": away_score,
+        "reason": reason,
+        "score_model": "v4_scoreline",
+    }
+
+
 def _wc_group_pressure(row):
     played = int(row.get("played", 0) or 0)
     pts = int(row.get("pts", 0) or 0)
@@ -898,6 +965,22 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
         (_wc_group_pressure(h_group).get("urgent") or _wc_group_pressure(a_group).get("urgent")) and
         (h_group.get("played", 0) >= 1 or a_group.get("played", 0) >= 1)
     )
+    input_snapshot = {
+        "home_rating": round(h_rating, 1),
+        "away_rating": round(a_rating, 1),
+        "home_prior": h_stats,
+        "away_prior": a_stats,
+        "home_group": h_group,
+        "away_group": a_group,
+        "calibration": {k: round(_num(v), 4) for k, v in calibration.items()},
+        "factor_weights": {k: round(_num(v), 4) for k, v in weights.items()},
+        "missing": {
+            "home_attack": round(_wc_missing_penalty(home, "attack"), 1),
+            "home_defense": round(_wc_missing_penalty(home, "defense"), 1),
+            "away_attack": round(_wc_missing_penalty(away, "attack"), 1),
+            "away_defense": round(_wc_missing_penalty(away, "defense"), 1),
+        },
+    }
     score_pick = _wc_score_for_expected_points(
         lam_h,
         lam_a,
@@ -907,8 +990,20 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
         upset=upset_radar,
         open_match=open_match,
     )
-    winner = score_pick["winner"]
-    rh, ra = score_pick["home_score"], score_pick["away_score"]
+    base_pick = {
+        "winner": score_pick["winner"],
+        "home_score": score_pick["home_score"],
+        "away_score": score_pick["away_score"],
+        "home_win_pct": round(home_pct, 1),
+        "draw_pct": round(draw_pct, 1),
+        "away_win_pct": round(away_pct, 1),
+        "expected_home_goals": round(lam_h, 2),
+        "expected_away_goals": round(lam_a, 2),
+        "input_snapshot": input_snapshot,
+    }
+    v4_pick = _wc_v4_score_pick(base_pick)
+    winner = v4_pick["winner"]
+    rh, ra = v4_pick["home_score"], v4_pick["away_score"]
     return {
         "model_version": model.get("version", WC_MODEL_VERSION),
         "match_id": match.get("id"),
@@ -928,26 +1023,18 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
         "expected_away_goals": round(lam_a, 2),
         "expected_points": score_pick["expected_points"],
         "exact_score_prob": score_pick["exact_prob"],
-        "prediction_strategy": "expected_points",
+        "prediction_strategy": "v4_scoreline",
+        "v4_reason": v4_pick.get("reason", ""),
+        "base_v3_prediction": {
+            "winner": score_pick["winner"],
+            "home_score": score_pick["home_score"],
+            "away_score": score_pick["away_score"],
+            "expected_points": score_pick["expected_points"],
+        },
         "phase_rule": score_pick["rule"],
         "upset_radar": upset_radar,
         "signals": signals,
-        "input_snapshot": {
-            "home_rating": round(h_rating, 1),
-            "away_rating": round(a_rating, 1),
-            "home_prior": h_stats,
-            "away_prior": a_stats,
-            "home_group": h_group,
-            "away_group": a_group,
-            "calibration": {k: round(_num(v), 4) for k, v in calibration.items()},
-            "factor_weights": {k: round(_num(v), 4) for k, v in weights.items()},
-            "missing": {
-                "home_attack": round(_wc_missing_penalty(home, "attack"), 1),
-                "home_defense": round(_wc_missing_penalty(home, "defense"), 1),
-                "away_attack": round(_wc_missing_penalty(away, "attack"), 1),
-                "away_defense": round(_wc_missing_penalty(away, "defense"), 1),
-            },
-        },
+        "input_snapshot": input_snapshot,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "checked": False,
     }
@@ -956,6 +1043,67 @@ def _wc_predict_snapshot(teams_obj, fixtures, match, model):
 def _avg(values, default=0.0):
     values = [v for v in values if v is not None]
     return sum(values) / len(values) if values else default
+
+
+def _wc_pick_points(rule, winner, home_score, away_score, actual_winner, actual_home, actual_away):
+    exact = home_score == actual_home and away_score == actual_away
+    return rule["exact"] if exact else rule["result"] if winner == actual_winner else 0
+
+
+def _wc_compare_summary(checked_predictions):
+    baseline = {"winner": 0, "exact": 0, "points": 0, "draws": 0, "scores": {}}
+    challenger = {"winner": 0, "exact": 0, "points": 0, "draws": 0, "scores": {}}
+    total = 0
+    for pred in checked_predictions:
+        actual_winner = pred.get("actual_winner")
+        actual_home = pred.get("actual_home_score")
+        actual_away = pred.get("actual_away_score")
+        if actual_winner is None or actual_home is None or actual_away is None:
+            continue
+        rule = _wc_phase_rule(pred)
+        base = pred.get("base_v3_prediction") or pred
+        v4 = pred.get("v4_shadow") or _wc_v4_score_pick(pred)
+        total += 1
+        for bucket, pick in ((baseline, base), (challenger, v4)):
+            winner = pick.get("winner")
+            home_score = pick.get("home_score")
+            away_score = pick.get("away_score")
+            bucket["winner"] += 1 if winner == actual_winner else 0
+            bucket["exact"] += 1 if home_score == actual_home and away_score == actual_away else 0
+            bucket["points"] += _wc_pick_points(rule, winner, home_score, away_score, actual_winner, actual_home, actual_away)
+            bucket["draws"] += 1 if winner == "draw" else 0
+            key = f"{home_score}-{away_score}"
+            bucket["scores"][key] = bucket["scores"].get(key, 0) + 1
+
+    def finish(bucket):
+        top_scores = sorted(bucket["scores"].items(), key=lambda kv: (-kv[1], kv[0]))[:6]
+        return {
+            "winner_correct": bucket["winner"],
+            "winner_accuracy": round(bucket["winner"] / max(total, 1) * 100, 1) if total else 0,
+            "exact_correct": bucket["exact"],
+            "exact_accuracy": round(bucket["exact"] / max(total, 1) * 100, 1) if total else 0,
+            "points": bucket["points"],
+            "draw_picks": bucket["draws"],
+            "unique_scores": len(bucket["scores"]),
+            "top_scores": [{"score": score, "count": count} for score, count in top_scores],
+        }
+
+    base_out = finish(baseline)
+    v4_out = finish(challenger)
+    return {
+        "total": total,
+        "baseline_model": "v3 expected-points",
+        "challenger_model": "v4 scoreline",
+        "baseline": base_out,
+        "challenger": v4_out,
+        "delta": {
+            "winner_accuracy": round(v4_out["winner_accuracy"] - base_out["winner_accuracy"], 1),
+            "exact_accuracy": round(v4_out["exact_accuracy"] - base_out["exact_accuracy"], 1),
+            "points": v4_out["points"] - base_out["points"],
+            "unique_scores": v4_out["unique_scores"] - base_out["unique_scores"],
+            "draw_picks": v4_out["draw_picks"] - base_out["draw_picks"],
+        },
+    }
 
 
 def _wc_update_model(model, checked_predictions):
@@ -1048,9 +1196,26 @@ def run_wc_learning(wc_payload, history):
 
     now = datetime.now(timezone.utc)
     new_locked = 0
+    refreshed = 0
     for match in fixtures:
         mid = str(match.get("id"))
-        if not mid or mid in pred_store["matches"]:
+        if not mid:
+            continue
+        existing = pred_store["matches"].get(mid)
+        if existing:
+            if (
+                not existing.get("checked")
+                and not match.get("fin")
+                and not match.get("st")
+                and int(_num(existing.get("model_version"), 0)) < WC_MODEL_VERSION
+            ):
+                pred = _wc_predict_snapshot(teams_obj, fixtures, match, model)
+                if pred:
+                    pred["created_at"] = existing.get("created_at") or pred.get("created_at")
+                    pred["upgraded_from_model"] = existing.get("model_version")
+                    pred["upgraded_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    pred_store["matches"][mid] = pred
+                    refreshed += 1
             continue
         if match.get("fin") or match.get("st"):
             continue
@@ -1097,6 +1262,17 @@ def run_wc_learning(wc_payload, history):
         rule = _wc_phase_rule(f)
         pred["points"] = rule["exact"] if pred["score_correct"] else rule["result"] if pred["winner_correct"] else 0
         pred["phase"] = rule["key"]
+        v4_pick = _wc_v4_score_pick(pred)
+        pred["v4_shadow"] = {
+            "model_version": WC_MODEL_VERSION,
+            "winner": v4_pick.get("winner"),
+            "home_score": v4_pick.get("home_score"),
+            "away_score": v4_pick.get("away_score"),
+            "reason": v4_pick.get("reason"),
+            "winner_correct": v4_pick.get("winner") == actual_winner,
+            "score_correct": v4_pick.get("home_score") == f.get("hs") and v4_pick.get("away_score") == f.get("as"),
+            "points": _wc_pick_points(rule, v4_pick.get("winner"), v4_pick.get("home_score"), v4_pick.get("away_score"), actual_winner, f.get("hs"), f.get("as")),
+        }
         checked.append(pred)
         if not was_trained:
             train_batch.append(pred)
@@ -1125,6 +1301,7 @@ def run_wc_learning(wc_payload, history):
     rows.sort(key=lambda r: r["gw"])
     total = sum(r["total"] for r in rows)
     correct = sum(r["correct_winner"] for r in rows)
+    model_comparison = _wc_compare_summary(checked)
     wc_hist = {
         "gw_results": rows,
         "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
@@ -1132,15 +1309,19 @@ def run_wc_learning(wc_payload, history):
         "current_weights": model["factors"],
         "calibration": model["calibration"],
         "model_meta": model.get("meta", {}),
+        "model_comparison": model_comparison,
         "trained_this_build": len(train_batch),
+        "refreshed_predictions": refreshed,
         "snapshots_locked": len(pred_store["matches"]),
     }
     history["wc"] = wc_hist
+    pred_store["version"] = WC_MODEL_VERSION
+    pred_store["model_comparison"] = model_comparison
     pred_store["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     _save_json_file(WC_PREDICTIONS_FILE, pred_store)
     _save_json_file(WC_WEIGHTS_FILE, model)
     _save_json_file(LEARNING_HISTORY_FILE, history)
-    print(f"World Cup ML: {new_locked} new locked predictions, {total} checked, {len(train_batch)} trained, accuracy {wc_hist['overall_accuracy']}%")
+    print(f"World Cup ML: {new_locked} new locked predictions, {refreshed} refreshed, {total} checked, {len(train_batch)} trained, accuracy {wc_hist['overall_accuracy']}%")
     return history
 
 
