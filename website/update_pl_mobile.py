@@ -1957,7 +1957,7 @@ html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.n
 # ── ML Learning Engine ────────────────────────────────────────────────────
 try:
     import sys as _sys_ml; _sys_ml.path.insert(0, HERE)
-    from ml_engine import run_pl_learning
+    from ml_engine import run_pl_learning, run_ll_learning
 
     # Compute standings (for position factor in weight updates)
     _pts = {}
@@ -1974,6 +1974,10 @@ try:
     )}
     teams_ml = {tid: {**t, "position": _pos.get(tid, 10)} for tid, t in teams.items()}
     learning_history = run_pl_learning(fx, teams_ml)
+    learning_history = run_ll_learning(
+        globals().get("ll_fixtures", []),
+        _load_json_file(os.path.join(ROOT, "ai_predictions_laliga.json"), {}),
+    )
     print("ML learning complete")
 except Exception as _ml_err:
     learning_history = {"pl": {"gw_results": []}, "laliga": {"gw_results": []}}
@@ -2064,7 +2068,7 @@ if GITHUB_TOKEN:
         print("live.json uploaded!")
 
     # Upload AI learning state.
-    for _ml_file in ("learning_history.json", "ai_weights.json", "ai_predictions_wc.json", "ai_weights_wc.json"):
+    for _ml_file in ("learning_history.json", "ai_weights.json", "ai_predictions_laliga.json", "ai_weights_laliga.json", "ai_predictions_wc.json", "ai_weights_wc.json"):
         _ml_path = os.path.join(ROOT, _ml_file)
         if not os.path.exists(_ml_path): continue
         try:

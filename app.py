@@ -153,7 +153,27 @@ def _scoreline_for_winner(lambda_home, lambda_away, winner, max_goals=5):
     return best
 
 
-def _recommended_prediction_from_probs(prediction):
+def _league_prefers_v4(league="pl"):
+    if league == "wc":
+        return True
+    try:
+        path = os.path.join(DATA_DIR, "learning_history.json")
+        if not os.path.exists(path):
+            return True
+        with open(path, "r", encoding="utf-8") as f:
+            history = json.load(f)
+        cmp = (history.get(league) or {}).get("model_comparison") or {}
+        delta = cmp.get("delta") or {}
+        return not (
+            float(delta.get("points", 0)) < 0 and
+            float(delta.get("exact_accuracy", 0)) <= 0 and
+            float(delta.get("winner_accuracy", 0)) <= 0
+        )
+    except Exception:
+        return True
+
+
+def _recommended_prediction_from_probs(prediction, league="pl"):
     winner = prediction.get("recommended_winner")
     if winner not in ("home", "draw", "away"):
         winner = _pick_recommended_winner(
@@ -169,6 +189,19 @@ def _recommended_prediction_from_probs(prediction):
         home_score = prediction.get("predicted_home_goals", 0)
         away_score = prediction.get("predicted_away_goals", 0)
     home_score, away_score = _align_score_to_winner(home_score, away_score, winner)
+    if not _league_prefers_v4(league):
+        base_winner = _pick_recommended_winner(
+            prediction.get("home_win_pct", 0),
+            prediction.get("draw_pct", 0),
+            prediction.get("away_win_pct", 0),
+            calibrate=False,
+        )
+        base_home, base_away = _align_score_to_winner(
+            prediction.get("predicted_home_goals", 0),
+            prediction.get("predicted_away_goals", 0),
+            base_winner,
+        )
+        return base_winner, base_home, base_away
     return winner, home_score, away_score
 
 
@@ -2412,16 +2445,16 @@ def save_ai_preds(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def store_ai_predictions_for_gw(gw, force_refresh=False):
+def store_ai_predictions_for_gw(gw, force_refresh=False, league="pl"):
     """Generate and store AI predictions for a gameweek. Only before matches start.
     If force_refresh=True, regenerate even if predictions exist (for post-learning updates)."""
-    ai_data = load_ai_preds()
+    ai_data = load_ai_preds_league(league)
     key = str(gw)
 
     if key in ai_data and not force_refresh:
         return ai_data[key]
 
-    matches = fixtures_for_gameweek(gw)
+    matches = league_fixtures_for_gw(gw, league)
 
     # Block if ANY match has already started (can't change predictions mid-game)
     if any(m.get("started") or m.get("finished") for m in matches):
@@ -2435,10 +2468,35 @@ def store_ai_predictions_for_gw(gw, force_refresh=False):
     preds = []
     changes = []
     for m in matches:
-        pred = predict_match(m["home_id"], m["away_id"], gw)
-        winner, home_score, away_score = _recommended_prediction_from_probs(pred)
+        pred = league_predict_match(m["home_id"], m["away_id"], gw, league)
+        v4_winner = pred.get("recommended_winner")
+        if v4_winner not in ("home", "draw", "away"):
+            v4_winner = _pick_recommended_winner(
+                pred.get("home_win_pct", 0),
+                pred.get("draw_pct", 0),
+                pred.get("away_win_pct", 0),
+            )
+        v4_score = pred.get("poisson_score")
+        if v4_score and len(v4_score) == 2:
+            v4_home, v4_away = v4_score
+        else:
+            v4_home, v4_away = pred.get("predicted_home_goals", 0), pred.get("predicted_away_goals", 0)
+        v4_home, v4_away = _align_score_to_winner(v4_home, v4_away, v4_winner)
+        winner, home_score, away_score = _recommended_prediction_from_probs(pred, league)
+        base_winner = _pick_recommended_winner(
+            pred.get("home_win_pct", 0),
+            pred.get("draw_pct", 0),
+            pred.get("away_win_pct", 0),
+            calibrate=False,
+        )
+        base_home, base_away = _align_score_to_winner(
+            pred.get("predicted_home_goals", 0),
+            pred.get("predicted_away_goals", 0),
+            base_winner,
+        )
 
         new_pred = {
+            "model_version": 4,
             "match_id": m["id"],
             "winner": winner,
             "home_score": home_score,
@@ -2446,6 +2504,20 @@ def store_ai_predictions_for_gw(gw, force_refresh=False):
             "home_win_pct": pred["home_win_pct"],
             "draw_pct": pred["draw_pct"],
             "away_win_pct": pred["away_win_pct"],
+            "expected_home_goals": pred.get("predicted_home_goals"),
+            "expected_away_goals": pred.get("predicted_away_goals"),
+            "prediction_strategy": "adaptive_scoreline",
+            "selected_model": "v4_scoreline" if (winner, home_score, away_score) == (v4_winner, v4_home, v4_away) else "baseline",
+            "base_v3_prediction": {
+                "winner": base_winner,
+                "home_score": base_home,
+                "away_score": base_away,
+            },
+            "v4_shadow": {
+                "winner": v4_winner,
+                "home_score": v4_home,
+                "away_score": v4_away,
+            },
         }
         preds.append(new_pred)
 
@@ -2474,7 +2546,7 @@ def store_ai_predictions_for_gw(gw, force_refresh=False):
         for c in changes:
             print(f"  {c['home']} vs {c['away']}: {c['old_winner']}({c['old_score']}) → {c['new_winner']}({c['new_score']})")
 
-    save_ai_preds(ai_data)
+    save_ai_preds_league(ai_data, league)
     return ai_data[key]
 
 
@@ -2995,7 +3067,7 @@ def api_best_bets_score(gw):
             if score_ok:
                 score_ok_count += 1
 
-            ai_winner, ai_pred_home, ai_pred_away = _recommended_prediction_from_probs(pred)
+            ai_winner, ai_pred_home, ai_pred_away = _recommended_prediction_from_probs(pred, league)
             ai_winner_ok = bool(actual_winner and ai_winner == actual_winner)
             if ai_winner_ok:
                 ai_winner_ok_count += 1
@@ -3062,7 +3134,7 @@ def api_guesses_history():
         return jsonify({"error": str(e)}), 500
 
 
-def build_reasoning(m, pred, rec_winner):
+def build_reasoning(m, pred, rec_winner, league="pl"):
     """Build human-readable reasoning for a prediction."""
     home_name = m["home_short"]
     away_name = m["away_short"]
@@ -3104,10 +3176,7 @@ def build_reasoning(m, pred, rec_winner):
 
     # Conclusion
     winner_labels = {"home": home_name, "draw": "Draw", "away": away_name}
-    rec_home = pred.get("recommended_home_score")
-    rec_away = pred.get("recommended_away_score")
-    if rec_home is None or rec_away is None:
-        _, rec_home, rec_away = _recommended_prediction_from_probs(pred)
+    _, rec_home, rec_away = _recommended_prediction_from_probs(pred, league)
     reasons.append(f"Prediction: {winner_labels[rec_winner]} ({rec_home}-{rec_away})")
 
     return reasons
@@ -3121,9 +3190,9 @@ def api_guess_advice(gw):
         advice = []
         for m in matches:
             pred = league_predict_match(m["home_id"], m["away_id"], gw, league)
-            rec_winner, rec_home, rec_away = _recommended_prediction_from_probs(pred)
+            rec_winner, rec_home, rec_away = _recommended_prediction_from_probs(pred, league)
 
-            reasons = build_reasoning(m, pred, rec_winner)
+            reasons = build_reasoning(m, pred, rec_winner, league)
 
             advice.append({
                 "match_id": m["id"],
@@ -3133,8 +3202,8 @@ def api_guess_advice(gw):
                 "confidence": pred,
                 "reasons": reasons,
             })
-        if league == "pl":
-            store_ai_predictions_for_gw(gw)
+        if league in ("pl", "laliga"):
+            store_ai_predictions_for_gw(gw, league=league)
         return jsonify({"gameweek": gw, "advice": advice})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -1150,6 +1150,20 @@ function scoreV4Pick(lH,lA,prob,ctx){
   else if(total<2.25){fg=1;dg=0;reason="tight-win"}
   return rec==="home"?{rec:rec,h:fg,a:dg,reason:reason}:{rec:rec,h:dg,a:fg,reason:reason}
 }
+function scoreModelChoice(){
+  var out={useV4:true,reason:"v4 active"};
+  try{
+    var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{},cmp=((lh[D.league]||{}).model_comparison)||null;
+    if(D.league!=="wc"&&cmp&&cmp.delta){
+      var pts=+cmp.delta.points||0,exact=+cmp.delta.exact_accuracy||0,winner=+cmp.delta.winner_accuracy||0;
+      if(pts<0&&exact<=0&&winner<=0){
+        out.useV4=false;
+        out.reason="baseline kept: v4 backtest "+pts+" pts, "+exact+"% exact";
+      }
+    }
+  }catch(e){}
+  return out
+}
 function upsetRadar(hid,aid,ctx){
   ctx=ctx||{};var hp=+ctx.hp||0,ap=+ctx.ap||0,dp=+ctx.dp||0,side=hp<=ap?"home":"away",fav=side==="home"?"away":"home",gap=Math.abs(hp-ap);
   var u=side==="home"?{id:hid,s:ctx.hs,tr:ctx.hTrGf,con:ctx.hCon,cs:ctx.hCs,m:ctx.hMot}:{id:aid,s:ctx.as,tr:ctx.aTrGf,con:ctx.aCon,cs:ctx.aCs,m:ctx.aMot};
@@ -1271,8 +1285,9 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   var adj=applyUpsetRadar({home:hp,draw:dp,away:ap},radar);hp=adj.home;dp=adj.draw;ap=adj.away;
   var phg=Math.round(lamH*10)/10,pag=Math.round(lamA*10)/10;
   var ep=scoreForExpectedPoints(lamH,lamA,{home:hp,draw:dp,away:ap},{rule:phaseRule(match),total:lamH+lamA,open:neutral&&(hMot&&aMot)&&(hMot.urgent||aMot.urgent),zeroZeroPenalty:C.zero_zero_penalty,upset:radar});
-  var v4=neutral?scoreV4Pick(lamH,lamA,{home:hp,draw:dp,away:ap},{hDT:hDT,aDT:aDT}):{rec:ep.rec,h:ep.h,a:ep.a,reason:"expected-points"};
-  var rec=v4.rec,sc=[v4.h,v4.a];
+  var v4=scoreV4Pick(lamH,lamA,{home:hp,draw:dp,away:ap},{hDT:hDT,aDT:aDT});
+  var choice=scoreModelChoice();
+  var rec=choice.useV4?v4.rec:ep.rec,sc=choice.useV4?[v4.h,v4.a]:[ep.h,ep.a];
   var rh=sc[0],ra=sc[1];
   // Reasoning
   var reasons=[];
@@ -1292,8 +1307,8 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
     reasons.push("Upset radar: "+uTeam+" value "+radar.score+"/100 | draw "+radar.draw+"/100"+(radar.notes&&radar.notes.length?" ("+radar.notes.join(", ")+")":""));
   }
   reasons.push("Expected-points baseline: "+ep.h+"-"+ep.a+" ("+ep.rule.key+", "+Math.round(ep.ep*100)/100+" xPts)");
-  reasons.push("Predicted: "+rh+"-"+ra+" (v4 scoreline model: "+v4.reason+")");
-  return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,xp:Math.round(ep.ep*100)/100,upset:radar,reasons:reasons};}
+  reasons.push("Predicted: "+rh+"-"+ra+" ("+(choice.useV4?"v4 scoreline model: "+v4.reason:choice.reason)+")");
+  return{hp:hp,dp:dp,ap:ap,phg:phg,pag:pag,rh:rh,ra:ra,rec:rec,baseRec:ep.rec,baseRh:ep.h,baseRa:ep.a,baseXp:Math.round(ep.ep*100)/100,xp:Math.round(ep.ep*100)/100,model:choice.useV4?"v4":"baseline",v4Reason:v4.reason,modelReason:choice.reason,upset:radar,reasons:reasons};}
 function rGW(){var s=$("gws"),h="",lbl=D.gwl||"GW";for(var i=0;i<D.gw.length;i++){var g=D.gw[i];h+='<button class="gp'+(g.id===D.sel?" a":"")+(g.cur?" cur":"")+(g.id===D.nxtId?" nxt":"")+'" onclick="sGW('+g.id+')">'+lbl+g.id+'</button>'}s.innerHTML=h;var a=s.querySelector(".gp.a");if(a)a.scrollIntoView({behavior:"smooth",inline:"center",block:"nearest"});var tb=$("gwToday");if(tb){if(D.cur&&D.sel!==D.cur){tb.textContent='\u25CF '+lbl+D.cur;tb.style.display="flex"}else{tb.style.display="none"}}}
 function sGW(g){D.sel=g;sessionStorage.setItem("plGW",g);sessionStorage.setItem("plGWDate",todayKeyIL());rGW();render()}
 function nGW(d){var n=D.sel+d;if(n>=1&&n<=D.gw.length)sGW(n)}
@@ -1757,8 +1772,30 @@ function localLearningRows(){
     by[f.e].total++;
     if(p.rec===aw)by[f.e].correct_winner++;
     if(p.rh===f.hs&&p.ra===f.as){by[f.e].correct_score++;by[f.e].exact_score++}
+    by[f.e].points+=scoreGuess(f,{w:p.rec,hs:p.rh,as:p.ra}).points;
   });
   return Object.keys(by).map(function(k){return by[k]}).sort(function(a,b){return a.gw-b.gw});
+}
+function localModelComparison(){
+  var total=0,b={winner:0,exact:0,points:0,draws:0,scores:{}},v={winner:0,exact:0,points:0,draws:0,scores:{}};
+  function add(box,f,g){
+    var sc=scoreGuess(f,g),key=(g.hs!=null?g.hs:"-")+"-"+(g.as!=null?g.as:"-");
+    box.winner+=sc.correct?1:0;box.exact+=sc.exact?1:0;box.points+=sc.points;box.draws+=g.w==="draw"?1:0;box.scores[key]=(box.scores[key]||0)+1;
+  }
+  D.fx.forEach(function(f){
+    if(!f.fin||f.hs==null||!aiReadyMatch(f))return;
+    var p=pred(f.h,f.a,f.e,f);
+    total++;
+    add(b,f,{w:p.baseRec,hs:p.baseRh,as:p.baseRa});
+    add(v,f,{w:p.rec,hs:p.rh,as:p.ra});
+  });
+  if(!total)return null;
+  function finish(box){
+    var top=Object.keys(box.scores).map(function(k){return{score:k,count:box.scores[k]}}).sort(function(a,b){return b.count-a.count||a.score.localeCompare(b.score)}).slice(0,6);
+    return{winner_correct:box.winner,winner_accuracy:Math.round(box.winner/total*1000)/10,exact_correct:box.exact,exact_accuracy:Math.round(box.exact/total*1000)/10,points:box.points,draw_picks:box.draws,unique_scores:Object.keys(box.scores).length,top_scores:top};
+  }
+  var bo=finish(b),vo=finish(v);
+  return{total:total,baseline_model:"v3 expected-points",challenger_model:"v4 scoreline",note:"v4 is checked against completed matches in this league using the same scoring rules shown in You vs AI.",baseline:bo,challenger:vo,delta:{winner_accuracy:Math.round((vo.winner_accuracy-bo.winner_accuracy)*10)/10,exact_accuracy:Math.round((vo.exact_accuracy-bo.exact_accuracy)*10)/10,points:vo.points-bo.points,unique_scores:vo.unique_scores-bo.unique_scores,draw_picks:vo.draw_picks-bo.draw_picks}};
 }
 function normAIRows(rows){
   return (rows||[]).map(function(r){
@@ -1808,10 +1845,11 @@ function aiModelComparison(cmp){
   var b=cmp.baseline,v=cmp.challenger,d=cmp.delta||{},good=(d.points||0)>=0&&((d.exact_accuracy||0)>=0);
   function signed(n,suf){n=+n||0;return(n>=0?'+':'')+n+(suf||'')}
   function topScores(rows){return(rows||[]).map(function(x){return x.score+' x'+x.count}).join(' · ')||'none'}
-  var h='<div class="sec" style="margin-bottom:.25rem">Model Test</div><div class="ainote">v4 is checked against the same locked matches as v3, so improvement is measured before trusting the new score model.</div>';
+  var bName=cmp.baseline_model||'v3 baseline',vName=cmp.challenger_model||'v4 scoreline';
+  var h='<div class="sec" style="margin-bottom:.25rem">Model Test</div><div class="ainote">'+(cmp.note||'v4 is checked against the same locked matches as v3, so improvement is measured before trusting the new score model.')+'</div>';
   h+='<div class="aimetrics">';
-  h+='<div class="aimetric"><span>v3 baseline</span><b>'+b.exact_accuracy+'%</b><em>'+b.points+' pts · '+b.winner_accuracy+'% winners</em></div>';
-  h+='<div class="aimetric"><span>v4 scoreline</span><b style="color:'+(good?'var(--g)':'var(--pk)')+'">'+v.exact_accuracy+'%</b><em>'+v.points+' pts · '+v.winner_accuracy+'% winners</em></div>';
+  h+='<div class="aimetric"><span>'+bName+'</span><b>'+b.exact_accuracy+'%</b><em>'+b.points+' pts · '+b.winner_accuracy+'% winners</em></div>';
+  h+='<div class="aimetric"><span>'+vName+'</span><b style="color:'+(good?'var(--g)':'var(--pk)')+'">'+v.exact_accuracy+'%</b><em>'+v.points+' pts · '+v.winner_accuracy+'% winners</em></div>';
   h+='<div class="aimetric"><span>Change</span><b style="color:'+(good?'var(--g)':'var(--pk)')+'">'+signed(d.points)+'</b><em>'+signed(d.exact_accuracy,'%')+' exact · '+signed(d.winner_accuracy,'%')+' winners</em></div>';
   h+='</div><div class="aisrc"><div><b>Score diversity</b><span>v3: '+b.unique_scores+' scorelines · '+topScores(b.top_scores)+'</span></div><div><b>v4 mix</b><span>v4: '+v.unique_scores+' scorelines · '+topScores(v.top_scores)+' · draw picks '+v.draw_picks+'</span></div></div>';
   return h;
@@ -1848,6 +1886,7 @@ function rAI(){
   var hasOwnWeights=!!(lgData.current_weights&&Object.keys(lgData.current_weights).length);
   var wts=hasOwnWeights?lgData.current_weights:((lh.pl||{}).current_weights||{});
   var cal=isWC?(lgData.calibration||activeCalibration()):null,meta=(lgData.model_meta||{});
+  var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';
   var lgName=isPL?'Premier League':isWC?'World Cup':'La Liga';
@@ -1865,16 +1904,16 @@ function rAI(){
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
   h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+' '+focusName+' hit rate</div><div class="ainum" style="color:'+lgCol+'">'+mainAcc+'%</div><div class="aimeta">'+(focus?focus.correct_winner+'/'+focus.total+' games on this '+gwLbl.toLowerCase()+' · ':'')+'overall '+acc+'% ('+overall.correct_winner+'/'+tot+') · exact '+overall.score_acc_pct+'%</div></div>'+tSpan+'</div></div>';
   h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, ESPN roster availability, manual absence overrides, points in the group, goal difference, and qualification pressure.</span></div>'+
-    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson baseline, checks upset and draw value, then v4 chooses a more varied scoreline instead of repeating the same 2-1 pattern.</span></div>'+
-    '<div><b>Learning state</b><span>'+(isWC?'Predictions are saved as pre-match snapshots. After the match, only newly checked snapshots train the model, so the same match is not learned repeatedly.':'After matches finish, the build recalculates accuracy and factor weights from the checked results.')+'</span></div></div>';
+    '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson baseline, checks upset and draw value, then tests v4 against the learned history and uses it only when the backtest is better.</span></div>'+
+    '<div><b>Learning state</b><span>'+(isWC?'Predictions are saved as pre-match snapshots. After the match, only newly checked snapshots train the model, so the same match is not learned repeatedly.':'After matches finish, the build recalculates accuracy, factor weights, and compares v4 against the previous expected-points score model.')+'</span></div></div>';
   if(isWC&&cal){
     h+='<div class="sec" style="margin-bottom:.25rem">Learning Adjustments</div><div class="aimetrics">';
     h+='<div class="aimetric"><span>Goal pace</span><b>'+Number(cal.goal_mult||1).toFixed(2)+'x</b><em>'+(meta.avg_pred_goals!=null?'pred '+meta.avg_pred_goals+' / actual '+meta.avg_actual_goals:'calibrates totals')+'</em></div>';
     h+='<div class="aimetric"><span>Draw bias</span><b>'+Number(cal.draw_bias||1).toFixed(2)+'x</b><em>'+(meta.pred_draw_rate!=null?'pred '+Math.round(meta.pred_draw_rate*100)+'% / actual '+Math.round(meta.actual_draw_rate*100)+'%':'calibrates draws')+'</em></div>';
     h+='<div class="aimetric"><span>0-0 guard</span><b>'+Number(cal.zero_zero_penalty||.62).toFixed(2)+'</b><em>'+(meta.trained_matches||0)+' trained snapshots</em></div>';
     h+='</div>';
-    h+=aiModelComparison(lgData.model_comparison);
   }
+  h+=aiModelComparison(modelCmp);
   if(rows.length){
     var last=rows[rows.length-1],best=rows.slice().sort(function(a,b){return b.accuracy_pct-a.accuracy_pct})[0],weak=rows.slice().sort(function(a,b){return a.accuracy_pct-b.accuracy_pct})[0];
     h+='<div class="aimetrics">';
