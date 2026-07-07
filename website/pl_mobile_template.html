@@ -1473,20 +1473,18 @@ function gG(){
 function sG(d){localStorage.setItem(_gKey(),JSON.stringify(d))}
 function autoFillDueGuesses(){
   if(!D.fx||!D.fx.length)return 0;
-  var now=Date.now(),ag=gG(),changed=0,used=false;
+  var now=Date.now(),ag=gG(),changed=0;
   D.fx.forEach(function(m){
     if(m.fin||m.st||!m.ko||!aiReadyMatch(m))return;
     var kt=new Date(m.ko).getTime();if(!isFinite(kt))return;
     var diff=kt-now;if(diff<0||diff>60*60*1000)return;
     var gw=m.e;if(!ag[gw])ag[gw]={};
     if(_hasGuess(ag[gw][m.id]))return;
-    bSt(gw);used=true;
-    var p=pred(m.h,m.a,gw,m);
-    ag[gw][m.id]={w:p.rec,hs:p.rh,as:p.ra,src:"auto60",auto:true,ts:new Date().toISOString()};
+    var h=_rndGoal(),a=_rndGoal();
+    ag[gw][m.id]={w:h>a?"home":h===a?"draw":"away",hs:h,as:a,src:"auto_random60",auto:true,ts:new Date().toISOString()};
     changed++;
   });
   if(changed){sG(ag);autoSync()}
-  if(used)bSt(D.sel);
   return changed;
 }
 var _autoFillWatchTmr=null;
@@ -1634,7 +1632,8 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
-    if((g.src==="auto60"||g.src==="auto30")&&!m.fin)bdg+='<span class="tbg auto">AUTO AI</span>';
+    if((g.src==="auto_random60"||g.src==="auto_random30")&&!m.fin)bdg+='<span class="tbg auto">AUTO RANDOM</span>';
+    else if((g.src==="auto60"||g.src==="auto30")&&!m.fin)bdg+='<span class="tbg auto">AUTO AI</span>';
     if(m.st&&!m.fin){act='<div class="act">'+liveText(m.ko,m.mn,m.sx||'')+': <b>'+(m.hs||0)+' - '+(m.as||0)+'</b></div>'}
     var phase=D.league==="wc"?wcPhase(m):null,phaseTag=phase?'<div class="phase">'+phase.label+'</div>':"";
     if(isLockedMatch(m)){
