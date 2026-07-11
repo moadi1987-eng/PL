@@ -1,7 +1,9 @@
 import copy
 import math
 import unittest
+from unittest.mock import patch
 
+import website.league_predictor as predictor
 from website.league_predictor import (
     _poisson_grid,
     default_model_state,
@@ -140,6 +142,52 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertAlmostEqual(outcomes["home"], sum(value for (home, away), value in grid.items() if home > away), places=12)
         self.assertAlmostEqual(outcomes["draw"], sum(value for (home, away), value in grid.items() if home == away), places=12)
         self.assertAlmostEqual(outcomes["away"], sum(value for (home, away), value in grid.items() if home < away), places=12)
+
+    def test_baseline_grid_matches_final_blended_outcome_probabilities(self):
+        model = default_model_state("pl")
+        model["calibration"].update({"goal_mult": 0.82, "home_goal_bias": -1.5, "away_goal_bias": -1.5})
+        captured = {}
+        original = predictor._expected_points_pick
+
+        def capture(grid, outcomes, rule):
+            captured["grid"] = grid
+            captured["outcomes"] = outcomes
+            return original(grid, outcomes, rule)
+
+        with patch.object(predictor, "_expected_points_pick", side_effect=capture):
+            predict_league_snapshot(self.target, [self.target], self.teams, model, "pl")
+
+        grid, outcomes = captured["grid"], captured["outcomes"]
+        self.assertAlmostEqual(1.0, sum(grid.values()), places=12)
+        for winner, predicate in {
+            "home": lambda home, away: home > away,
+            "draw": lambda home, away: home == away,
+            "away": lambda home, away: home < away,
+        }.items():
+            cells = [value for (home, away), value in grid.items() if predicate(home, away)]
+            self.assertAlmostEqual(outcomes[winner], sum(cells), places=12)
+            self.assertTrue(all(value <= outcomes[winner] for value in cells))
+
+    def test_training_rejects_semantically_invalid_rows_without_state_changes(self):
+        model = default_model_state("pl")
+        invalid_rows = [
+            {"actual_winner": "home", "fixture": {"hs": -1, "as": 0}, "factor_edges": {"strength": 0.8}, "expected_home_goals": 1.2, "expected_away_goals": 1.1},
+            {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": 0.8}, "expected_home_goals": -0.1, "expected_away_goals": 1.1},
+            {"actual_winner": "draw", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": 0.8}, "expected_home_goals": 1.2, "expected_away_goals": 1.1},
+        ]
+        trained = train_factor_model(model, invalid_rows)
+        self.assertEqual(model["factors"], trained["factors"])
+        self.assertEqual(model["calibration"], trained["calibration"])
+        self.assertEqual(model["meta"], trained["meta"])
+
+    def test_training_counts_only_semantically_valid_rows_in_mixed_batch(self):
+        model = default_model_state("pl")
+        valid_row = {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": 0.8}, "expected_home_goals": 1.2, "expected_away_goals": 1.1}
+        invalid_row = {"actual_winner": "away", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": 0.8}, "expected_home_goals": 1.2, "expected_away_goals": 1.1}
+        trained = train_factor_model(model, [valid_row, invalid_row])
+        self.assertEqual(1, trained["meta"]["trained_matches"])
+        self.assertEqual(1, trained["meta"]["last_batch_size"])
+        self.assertNotEqual("", trained["meta"]["last_trained_at"])
 
 
 if __name__ == "__main__":

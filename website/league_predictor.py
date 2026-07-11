@@ -219,10 +219,24 @@ def _poisson_grid(lam_h, lam_a, maximum=6):
     return grid, {"home": home / total, "draw": draw / total, "away": away / total}
 
 
+def _score_winner(home_score, away_score):
+    return "home" if home_score > away_score else "away" if away_score > home_score else "draw"
+
+
+def _reweight_score_grid(grid, poisson_outcomes, target_outcomes):
+    adjusted = {}
+    for (home_score, away_score), probability in grid.items():
+        winner = _score_winner(home_score, away_score)
+        source = _number(poisson_outcomes.get(winner), 0.0)
+        target = max(_number(target_outcomes.get(winner), 0.0), 0.0)
+        adjusted[(home_score, away_score)] = probability * target / source if source > 0 else 0.0
+    return adjusted
+
+
 def _expected_points_pick(grid, outcomes, rule):
     best = None
     for (home_score, away_score), exact_probability in grid.items():
-        winner = "home" if home_score > away_score else "away" if away_score > home_score else "draw"
+        winner = _score_winner(home_score, away_score)
         if rule.get("additive"):
             value = outcomes[winner] * rule["result"] + exact_probability * rule["exact"]
         else:
@@ -313,6 +327,7 @@ def predict_league_snapshot(fixture, fixtures, teams, model, league):
     probabilities["draw"] *= calibration["draw_bias"]
     total = sum(probabilities.values())
     probabilities = {key: value / total for key, value in probabilities.items()}
+    adjusted_grid = _reweight_score_grid(grid, poisson, probabilities)
     rule = competition_rule(league, fixture)
     shown_home = round(probabilities["home"] * 100, 1)
     shown_draw = round(probabilities["draw"] * 100, 1)
@@ -325,7 +340,7 @@ def predict_league_snapshot(fixture, fixtures, teams, model, league):
         "expected_home_goals": round(lam_h, 3),
         "expected_away_goals": round(lam_a, 3),
         "picks": {
-            "baseline": _expected_points_pick(grid, probabilities, rule),
+            "baseline": _expected_points_pick(adjusted_grid, probabilities, rule),
             "v4": _v4_pick(lam_h, lam_a, probabilities, (home["draw"] + away["draw"]) / 2),
         },
     }
@@ -352,13 +367,20 @@ def _is_training_number(value):
         return False
 
 
+def _is_score_count(value):
+    return _is_training_number(value) and float(value) >= 0 and float(value).is_integer()
+
+
 def _is_training_row(row):
     fixture = row.get("fixture") if isinstance(row, dict) else None
+    home_score = fixture.get("hs") if isinstance(fixture, dict) else None
+    away_score = fixture.get("as") if isinstance(fixture, dict) else None
     return (
         isinstance(fixture, dict)
-        and row.get("actual_winner") in {"home", "away", "draw"}
-        and all(_is_training_number(fixture.get(key)) for key in ("hs", "as"))
-        and all(_is_training_number(row.get(key)) for key in ("expected_home_goals", "expected_away_goals"))
+        and _is_score_count(home_score)
+        and _is_score_count(away_score)
+        and all(_is_training_number(row.get(key)) and float(row[key]) >= 0 for key in ("expected_home_goals", "expected_away_goals"))
+        and row.get("actual_winner") == _score_winner(float(home_score), float(away_score))
     )
 
 
@@ -391,5 +413,6 @@ def train_factor_model(model, rows):
     meta = model["meta"]
     meta["trained_matches"] += len(valid_rows)
     meta["last_batch_size"] = len(valid_rows)
-    meta["last_trained_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if valid_rows:
+        meta["last_trained_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return model
