@@ -288,6 +288,56 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual(0, counts["trained"])
         self.assertEqual([], trainer_calls)
 
+    def test_checked_unmarked_version_one_snapshot_with_picks_is_not_retrained(self):
+        legacy = self.legacy_wc_store()
+        legacy["version"] = 1
+        legacy["matches"]["91"]["picks"] = {
+            "baseline": {"winner": "home", "home_score": 2, "away_score": 1},
+            "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+        }
+        legacy["matches"]["91"].pop("v4_shadow")
+        trainer_calls = []
+        fixture = {"id": 91, "e": 6, "grp": "A", "fin": True, "hs": 2, "as": 1}
+        store, _, history, counts = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=legacy, model=self.model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+            now=self.now,
+        )
+        self.assertEqual(1, history["total_evaluated"])
+        self.assertTrue(store["matches"]["91"]["legacy"])
+        self.assertTrue(store["matches"]["91"]["model_trained"])
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual([], trainer_calls)
+
+    def test_list_form_wc_matches_preserve_history_without_retraining(self):
+        legacy = self.legacy_wc_store()
+        raw = {"version": 4, "matches": [legacy["matches"]["91"]]}
+        trainer_calls = []
+        fixture = {"id": 91, "e": 6, "grp": "A", "fin": True, "hs": 2, "as": 1}
+        store, _, history, counts = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=raw, model=self.model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+            now=self.now,
+        )
+        self.assertEqual(1, history["total_evaluated"])
+        self.assertEqual(6, history["gw_results"][0]["gw"])
+        self.assertIn("91", store["matches"])
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual([], trainer_calls)
+
+    def test_normalization_skips_malformed_match_entries(self):
+        raw = {
+            "matches": {
+                "bad-list": [],
+                "bad-string": "not a snapshot",
+                "91": self.legacy_wc_store()["matches"]["91"],
+            },
+        }
+        migrated = normalize_prediction_store(raw, "wc")
+        self.assertEqual({"91"}, set(migrated["matches"]))
+
     def assert_invalid_builder_can_retry(self, invalid_snapshot):
         store, model, _, counts = evolve_competition_state(
             league="pl", fixtures=[self.fixture], store={}, model=self.model,

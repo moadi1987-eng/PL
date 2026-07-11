@@ -135,14 +135,26 @@ def _valid_lock_snapshot(snapshot):
 
 def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
     raw = copy.deepcopy(raw or {})
+    if isinstance(raw.get("matches"), list):
+        matches = {}
+        for snapshot in raw["matches"]:
+            if not isinstance(snapshot, dict):
+                continue
+            match_id = snapshot.get("match_id", snapshot.get("id"))
+            if match_id is not None:
+                matches[str(match_id)] = snapshot
+        raw["matches"] = matches
     if isinstance(raw.get("matches"), dict):
-        is_lifecycle_store = raw.get("lifecycle_version") == STORE_VERSION or raw.get("version") == STORE_VERSION
+        is_lifecycle_store = raw.get("lifecycle_version") == STORE_VERSION
         raw.setdefault("version", STORE_VERSION)
         raw.setdefault("league", league)
         raw.setdefault("lifecycle_version", STORE_VERSION)
-        for match_id, snapshot in raw["matches"].items():
-            is_legacy_snapshot = snapshot.get("legacy") is True or (
-                not is_lifecycle_store and snapshot.get("lifecycle_version") != STORE_VERSION
+        for match_id, snapshot in list(raw["matches"].items()):
+            if not isinstance(snapshot, dict):
+                del raw["matches"][match_id]
+                continue
+            is_legacy_snapshot = snapshot.get("legacy") is True or not (
+                is_lifecycle_store or snapshot.get("lifecycle_version") == STORE_VERSION
             )
             snapshot.setdefault("match_id", int(match_id) if str(match_id).isdigit() else match_id)
             snapshot.setdefault("locked", True)
