@@ -338,6 +338,75 @@ class SnapshotLifecycleTests(unittest.TestCase):
         migrated = normalize_prediction_store(raw, "wc")
         self.assertEqual({"91"}, set(migrated["matches"]))
 
+    def test_legacy_rows_do_not_form_a_promotion_cohort(self):
+        matches = {}
+        fixtures = []
+        for match_id in range(30):
+            matches[str(match_id)] = {
+                "match_id": match_id,
+                "checked": True,
+                "actual_home_score": 1,
+                "actual_away_score": 0,
+                "picks": {
+                    "baseline": {"winner": "home", "home_score": 2, "away_score": 0},
+                    "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+                },
+            }
+            fixtures.append({"id": match_id, "e": 1, "fin": True, "hs": 1, "as": 0})
+        _, model, _, _ = evolve_competition_state(
+            league="pl", fixtures=fixtures, store={"version": 4, "matches": matches}, model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        self.assertFalse(model["status"]["promote"])
+        self.assertEqual(0, model["comparison"]["total"])
+
+    def test_wc_v4_active_prediction_preserves_its_historical_points(self):
+        raw = {
+            "version": 4,
+            "matches": {
+                "760485": {
+                    "model_version": 4,
+                    "match_id": 760485,
+                    "day": 18,
+                    "winner": "away",
+                    "home_score": 0,
+                    "away_score": 2,
+                    "prediction_strategy": "v4_scoreline",
+                    "base_v3_prediction": {"winner": "away", "home_score": 1, "away_score": 2},
+                    "phase_rule": {"key": "group", "result": 1, "exact": 3},
+                    "checked": True,
+                    "actual_home_score": 0,
+                    "actual_away_score": 2,
+                    "actual_winner": "away",
+                    "points": 3,
+                    "phase": "group",
+                    "v4_shadow": {"winner": "away", "home_score": 0, "away_score": 2, "points": 3},
+                    "model_trained": True,
+                },
+            },
+        }
+        fixture = {"id": 760485, "e": 18, "grp": "A", "fin": True, "hs": 0, "as": 2}
+        store, _, history, _ = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=raw, model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        self.assertEqual("v4", store["matches"]["760485"]["active_strategy_at_lock"])
+        self.assertEqual(3, history["gw_results"][0]["points"])
+
+    def test_malformed_nested_legacy_pick_is_skipped_without_losing_valid_history(self):
+        raw = self.legacy_wc_store()
+        raw["matches"]["91"]["picks"] = {
+            "baseline": {"winner": "home", "home_score": 2, "away_score": 1},
+            "v4": [],
+        }
+        raw["matches"]["91"].pop("v4_shadow")
+        migrated = normalize_prediction_store(raw, "wc")
+        snapshot = migrated["matches"]["91"]
+        self.assertEqual({"baseline"}, set(snapshot["picks"]))
+        self.assertEqual(3, snapshot["evaluations"]["baseline"]["points"])
+
     def assert_invalid_builder_can_retry(self, invalid_snapshot):
         store, model, _, counts = evolve_competition_state(
             league="pl", fixtures=[self.fixture], store={}, model=self.model,

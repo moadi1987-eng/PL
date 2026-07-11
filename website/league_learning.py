@@ -117,20 +117,33 @@ def eligible_to_lock(fixture, now, lock_hours=36):
     return 0 <= seconds <= lock_hours * 3600
 
 
-def _valid_lock_snapshot(snapshot):
-    picks = snapshot.get("picks") if isinstance(snapshot, dict) else None
-    if not isinstance(picks, dict):
-        return False
-    for strategy in ("baseline", "v4"):
-        pick = picks.get(strategy)
-        if not isinstance(pick, dict) or pick.get("winner") not in {"home", "away", "draw"}:
-            return False
-        if not all(
+def _valid_pick(pick):
+    return (
+        isinstance(pick, dict)
+        and pick.get("winner") in {"home", "away", "draw"}
+        and all(
             isinstance(pick.get(score), Real) and not isinstance(pick.get(score), bool)
             for score in ("home_score", "away_score")
-        ):
-            return False
-    return True
+        )
+    )
+
+
+def _valid_lock_snapshot(snapshot):
+    picks = snapshot.get("picks") if isinstance(snapshot, dict) else None
+    return isinstance(picks, dict) and all(_valid_pick(picks.get(strategy)) for strategy in ("baseline", "v4"))
+
+
+def _legacy_active_strategy(snapshot):
+    picks = snapshot["picks"]
+    active = snapshot.get("active_strategy_at_lock")
+    if active in picks:
+        return active
+    prediction_strategy = str(snapshot.get("prediction_strategy") or "").lower()
+    if ("v4" in prediction_strategy or snapshot.get("model_version") == 4) and "v4" in picks:
+        return "v4"
+    if "baseline" in picks:
+        return "baseline"
+    return "v4" if "v4" in picks else None
 
 
 def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
@@ -160,8 +173,10 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
             snapshot.setdefault("locked", True)
             if is_legacy_snapshot:
                 snapshot["legacy"] = True
+                snapshot["lock_verified"] = False
             else:
                 snapshot.setdefault("lifecycle_version", STORE_VERSION)
+                snapshot.setdefault("lock_verified", snapshot.get("locked") is True)
             if "round" not in snapshot and snapshot.get("day") is not None:
                 snapshot["round"] = snapshot["day"]
             if "picks" not in snapshot:
@@ -175,8 +190,18 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                 ))
                 snapshot["picks"] = {"baseline": baseline, "v4": candidate}
                 snapshot["legacy"] = True
+                snapshot["lock_verified"] = False
+            picks = snapshot.get("picks")
+            snapshot["picks"] = {
+                name: pick for name, pick in picks.items()
+                if _valid_pick(pick)
+            } if isinstance(picks, dict) else {}
             if snapshot.get("checked") and snapshot.get("legacy"):
                 snapshot["model_trained"] = True
+            if snapshot.get("legacy") and snapshot.get("active_strategy_at_lock") not in snapshot["picks"]:
+                active_strategy = _legacy_active_strategy(snapshot)
+                if active_strategy:
+                    snapshot["active_strategy_at_lock"] = active_strategy
             actual_scores = (snapshot.get("actual_home_score"), snapshot.get("actual_away_score"))
             if snapshot.get("checked") and not snapshot.get("evaluations") and all(
                 isinstance(score, Real) and not isinstance(score, bool) for score in actual_scores
@@ -205,7 +230,7 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
             matches[match_id] = {
                 "match_id": pick.get("match_id"), "league": league, "round": int(round_key),
                 "created_at": packet.get("created_at", ""), "locked": True, "legacy": True,
-                "checked": False, "model_trained": True,
+                "lock_verified": False, "checked": False, "model_trained": True,
                 "features": {}, "missing": {"legacy_features": True},
                 "picks": {"baseline": baseline, "v4": candidate},
             }
@@ -271,7 +296,7 @@ def evolve_competition_state(
             "home_id": fixture.get("h"), "away_id": fixture.get("a"),
             "kickoff_time": fixture.get("ko", ""), "created_at": timestamp,
             "locked": True, "checked": False, "model_trained": False,
-            "lifecycle_version": STORE_VERSION,
+            "lifecycle_version": STORE_VERSION, "lock_verified": True,
             "active_strategy_at_lock": model.get("active_strategy", "baseline"),
         })
         store["matches"][match_id] = snapshot
@@ -298,7 +323,7 @@ def evolve_competition_state(
         if {"baseline", "v4"}.issubset(snapshot.get("picks", {})):
             comparison_rows.append({
                 "match_id": snapshot.get("match_id"),
-                "locked": snapshot.get("locked") is True,
+                "locked": snapshot.get("locked") is True and snapshot.get("lock_verified") is True,
                 "fixture": {"fin": True, "hs": fixture["hs"], "as": fixture["as"]},
                 "rule": snapshot.get("rule") or competition_rule(league, fixture),
                 "picks": snapshot["picks"],
@@ -359,7 +384,7 @@ def evolve_competition_state(
     history = {
         "gw_results": gw_results,
         "overall_accuracy": comparison["models"].get(model["active_strategy"], {}).get("winner_accuracy", 0),
-        "total_evaluated": comparison["total"],
+        "total_evaluated": sum(row["total"] for row in gw_results),
         "current_weights": model.get("factors", {}),
         "calibration": model.get("calibration", {}),
         "model_meta": model.get("meta", {}),
