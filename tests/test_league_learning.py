@@ -66,6 +66,20 @@ class LeagueLearningRulesTests(unittest.TestCase):
         }
         self.assertEqual("winner_guard", promotion_decision(comparison)["status"])
 
+    def test_missing_winner_counts_never_promote_after_sample_threshold(self):
+        comparison = {
+            "total": 30,
+            "active_strategy": "baseline",
+            "candidate_strategy": "v4",
+            "models": {
+                "baseline": {"points": 60, "winner_accuracy": 70.0},
+                "v4": {"points": 70, "winner_accuracy": 70.0},
+            },
+        }
+        decision = promotion_decision(comparison)
+        self.assertFalse(decision["promote"])
+        self.assertEqual("winner_guard", decision["status"])
+
     def test_candidate_collects_until_thirty_rows(self):
         comparison = {
             "total": 29,

@@ -84,11 +84,9 @@ def promotion_decision(comparison, minimum_samples=30):
         return {"promote": False, "status": "collecting", "next_active_strategy": active_name}
     active = comparison["models"][active_name]
     candidate = comparison["models"][candidate_name]
-    if "winner_correct" in active and "winner_correct" in candidate:
-        winner_loss = candidate["winner_correct"] < active["winner_correct"]
-    else:
-        winner_loss = candidate["winner_accuracy"] < active["winner_accuracy"]
-    if winner_loss:
+    if "winner_correct" not in active or "winner_correct" not in candidate:
+        return {"promote": False, "status": "winner_guard", "next_active_strategy": active_name}
+    if candidate["winner_correct"] < active["winner_correct"]:
         return {"promote": False, "status": "winner_guard", "next_active_strategy": active_name}
     if candidate["points"] <= active["points"]:
         return {"promote": False, "status": "points_guard", "next_active_strategy": active_name}
