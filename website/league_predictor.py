@@ -56,6 +56,17 @@ def _normalized_factors(values):
     return {key: value / total for key, value in sanitized.items()}
 
 
+def _rounded_normalized_factors(values):
+    normalized = _normalized_factors(values)
+    keys = tuple(DEFAULT_FACTORS)
+    scaled = {key: normalized[key] * 10000 for key in keys}
+    units = {key: math.floor(scaled[key]) for key in keys}
+    remainder = 10000 - sum(units.values())
+    for key in sorted(keys, key=lambda item: (-(scaled[item] - units[item]), item))[:remainder]:
+        units[key] += 1
+    return {key: units[key] / 10000 for key in keys}
+
+
 def default_model_state(league, active_strategy="baseline"):
     active = _strategy(active_strategy, "baseline")
     return {
@@ -204,6 +215,7 @@ def _poisson_grid(lam_h, lam_a, maximum=6):
                 away += probability
             else:
                 draw += probability
+    grid = {score: probability / total for score, probability in grid.items()}
     return grid, {"home": home / total, "draw": draw / total, "away": away / total}
 
 
@@ -247,6 +259,10 @@ def _v4_pick(lam_h, lam_a, probabilities, draw_rate):
 
 def _team_strength(team, attack_key, defense_key):
     return (_number(team.get(attack_key), 1000.0) + _number(team.get(defense_key), 1000.0)) / 2
+
+
+def _has_usable_availability(team):
+    return any(team.get(key) for key in ("inj", "sq"))
 
 
 def predict_league_snapshot(fixture, fixtures, teams, model, league):
@@ -304,7 +320,7 @@ def predict_league_snapshot(fixture, fixtures, teams, model, league):
     return {
         "features": {"home": home, "away": away, "positions": {"home": positions.get(home_id), "away": positions.get(away_id)}},
         "factor_edges": factor_edges,
-        "missing": {"squad_availability": not any(key in home_team or key in away_team for key in ("inj", "sq"))},
+        "missing": {"squad_availability": not (_has_usable_availability(home_team) and _has_usable_availability(away_team))},
         "probabilities": {"home": shown_home, "draw": shown_draw, "away": shown_away},
         "expected_home_goals": round(lam_h, 3),
         "expected_away_goals": round(lam_a, 3),
@@ -327,17 +343,35 @@ def legacy_v4_pick(pick):
     return _v4_pick(max(_number(pick.get("home_score"), 1.0), 0.3), max(_number(pick.get("away_score"), 1.0), 0.3), probabilities, probabilities["draw"])
 
 
+def _is_training_number(value):
+    if isinstance(value, bool) or value is None:
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_training_row(row):
+    fixture = row.get("fixture") if isinstance(row, dict) else None
+    return (
+        isinstance(fixture, dict)
+        and row.get("actual_winner") in {"home", "away", "draw"}
+        and all(_is_training_number(fixture.get(key)) for key in ("hs", "as"))
+        and all(_is_training_number(row.get(key)) for key in ("expected_home_goals", "expected_away_goals"))
+    )
+
+
 def train_factor_model(model, rows):
     raw_model = model if isinstance(model, dict) else {}
     league = raw_model.get("league") if isinstance(raw_model.get("league"), str) else "pl"
     model = normalize_model_state(raw_model, league, raw_model.get("active_strategy", "baseline"))
     rows = rows if isinstance(rows, list) else []
+    valid_rows = [row for row in rows if _is_training_row(row)]
     factor_scores = {key: [] for key in model["factors"]}
     actual_totals = []
     predicted_totals = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    for row in valid_rows:
         actual = row.get("actual_winner")
         for key, edge in (row.get("factor_edges") or {}).items():
             edge = _number(edge)
@@ -349,13 +383,13 @@ def train_factor_model(model, rows):
     for key, values in factor_scores.items():
         if len(values) >= 3:
             model["factors"][key] = _clip(model["factors"][key] + ((sum(values) / len(values)) - 0.5) * 0.04, 0.03, 0.25)
-    model["factors"] = {key: round(value, 4) for key, value in _normalized_factors(model["factors"]).items()}
-    if rows:
-        actual_avg = sum(actual_totals) / len(rows)
-        predicted_avg = sum(predicted_totals) / len(rows)
+    model["factors"] = _rounded_normalized_factors(model["factors"])
+    if valid_rows:
+        actual_avg = sum(actual_totals) / len(valid_rows)
+        predicted_avg = sum(predicted_totals) / len(valid_rows)
         model["calibration"]["goal_mult"] = round(_clip(model["calibration"]["goal_mult"] + _clip((actual_avg - predicted_avg) * 0.035, -0.06, 0.06), 0.82, 1.22), 4)
     meta = model["meta"]
-    meta["trained_matches"] += len(rows)
-    meta["last_batch_size"] = len(rows)
+    meta["trained_matches"] += len(valid_rows)
+    meta["last_batch_size"] = len(valid_rows)
     meta["last_trained_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return model

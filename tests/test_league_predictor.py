@@ -3,6 +3,7 @@ import math
 import unittest
 
 from website.league_predictor import (
+    _poisson_grid,
     default_model_state,
     legacy_v4_pick,
     normalize_model_state,
@@ -49,6 +50,17 @@ class LeaguePredictorTests(unittest.TestCase):
         snapshot = predict_league_snapshot(self.target, self.history + [self.target], self.teams, default_model_state("pl"), "pl")
         self.assertTrue(snapshot["missing"]["squad_availability"])
 
+    def test_squad_data_requires_nonempty_availability_for_both_teams(self):
+        incomplete = copy.deepcopy(self.teams)
+        incomplete[1]["inj"] = []
+        incomplete[2]["sq"] = ["available-player"]
+        complete = copy.deepcopy(self.teams)
+        complete[1]["inj"] = ["injured-player"]
+        complete[2]["sq"] = ["available-player"]
+        model = default_model_state("pl")
+        self.assertTrue(predict_league_snapshot(self.target, self.history, incomplete, model, "pl")["missing"]["squad_availability"])
+        self.assertFalse(predict_league_snapshot(self.target, self.history, complete, model, "pl")["missing"]["squad_availability"])
+
     def test_training_normalizes_weights_and_updates_metadata(self):
         model = default_model_state("laliga")
         rows = [{
@@ -62,6 +74,42 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertEqual(3, trained["meta"]["trained_matches"])
         self.assertGreater(trained["factors"]["strength"], model["factors"]["strength"])
         self.assertEqual("laliga", trained["league"])
+
+    def test_training_exactly_normalizes_factor_weights_after_rounding(self):
+        model = default_model_state("pl")
+        rows = [{
+            "actual_winner": "home", "fixture": {"hs": 2, "as": 0},
+            "factor_edges": {"strength": 0.8, "form": 0.4},
+            "expected_home_goals": 1.2, "expected_away_goals": 1.1,
+        } for _ in range(3)]
+        trained = train_factor_model(model, rows)
+        self.assertLess(abs(sum(trained["factors"].values()) - 1.0), 1e-12)
+
+    def test_training_rounding_keeps_skewed_factor_weights_nonnegative(self):
+        model = default_model_state("pl")
+        keys = tuple(model["factors"])
+        model["factors"] = {
+            **{key: 0.10006 for key in keys[:9]},
+            keys[9]: 0.09945,
+            keys[10]: 0.00001,
+        }
+        trained = train_factor_model(model, [])
+        self.assertTrue(all(value >= 0 for value in trained["factors"].values()))
+        self.assertLess(abs(sum(trained["factors"].values()) - 1.0), 1e-12)
+
+    def test_training_ignores_malformed_rows_for_calibration_and_metadata(self):
+        model = default_model_state("pl")
+        valid_row = {
+            "actual_winner": "home", "fixture": {"hs": 3, "as": 1},
+            "factor_edges": {"strength": 0.8},
+            "expected_home_goals": 1.2, "expected_away_goals": 1.1,
+        }
+        trained_valid = train_factor_model(model, [valid_row])
+        trained_mixed = train_factor_model(model, [valid_row, None])
+        self.assertEqual(trained_valid["calibration"], trained_mixed["calibration"])
+        self.assertEqual(trained_valid["factors"], trained_mixed["factors"])
+        self.assertEqual(1, trained_mixed["meta"]["trained_matches"])
+        self.assertEqual(1, trained_mixed["meta"]["last_batch_size"])
 
     def test_normalization_sanitizes_malformed_model_numbers(self):
         model = normalize_model_state({
@@ -85,6 +133,13 @@ class LeaguePredictorTests(unittest.TestCase):
         trained = train_factor_model(pl, [])
         self.assertEqual(laliga, default_model_state("laliga"))
         self.assertEqual("pl", trained["league"])
+
+    def test_poisson_grid_cells_and_outcomes_share_normalized_mass(self):
+        grid, outcomes = _poisson_grid(4.4, 4.4)
+        self.assertAlmostEqual(1.0, sum(grid.values()), places=12)
+        self.assertAlmostEqual(outcomes["home"], sum(value for (home, away), value in grid.items() if home > away), places=12)
+        self.assertAlmostEqual(outcomes["draw"], sum(value for (home, away), value in grid.items() if home == away), places=12)
+        self.assertAlmostEqual(outcomes["away"], sum(value for (home, away), value in grid.items() if home < away), places=12)
 
 
 if __name__ == "__main__":
