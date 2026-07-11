@@ -5,3 +5,4 @@ __pycache__/
 venv/
 website/pl_mobile.html
 index.html
+.worktrees/
