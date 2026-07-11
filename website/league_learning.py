@@ -125,6 +125,8 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
         for match_id, snapshot in raw["matches"].items():
             snapshot.setdefault("match_id", int(match_id) if str(match_id).isdigit() else match_id)
             snapshot.setdefault("locked", True)
+            if "round" not in snapshot and snapshot.get("day") is not None:
+                snapshot["round"] = snapshot["day"]
             if "picks" not in snapshot:
                 baseline = copy.deepcopy(snapshot.get("base_v3_prediction") or {
                     "winner": snapshot.get("winner"),
@@ -135,6 +137,23 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                     legacy_candidate_builder(snapshot) if legacy_candidate_builder else baseline
                 ))
                 snapshot["picks"] = {"baseline": baseline, "v4": candidate}
+                snapshot["legacy"] = True
+            if snapshot.get("checked") and snapshot.get("legacy"):
+                snapshot["model_trained"] = True
+            actual_scores = (snapshot.get("actual_home_score"), snapshot.get("actual_away_score"))
+            if snapshot.get("checked") and not snapshot.get("evaluations") and all(
+                isinstance(score, Real) and not isinstance(score, bool) for score in actual_scores
+            ):
+                fixture = {"hs": actual_scores[0], "as": actual_scores[1], "e": snapshot.get("round")}
+                if snapshot.get("phase") == "group":
+                    fixture["grp"] = "legacy"
+                rule = snapshot.get("rule") or snapshot.get("phase_rule") or competition_rule(league, fixture)
+                snapshot.setdefault("actual_winner", _winner(*actual_scores))
+                snapshot.setdefault("rule", rule)
+                snapshot["evaluations"] = {
+                    name: score_pick(pick, fixture, rule)
+                    for name, pick in snapshot["picks"].items()
+                }
         return raw
     matches = {}
     for round_key, packet in raw.items():
@@ -159,8 +178,11 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
 def load_json_state(path, default):
     try:
         with open(path, encoding="utf-8") as handle:
-            return json.load(handle), True
-    except (OSError, ValueError, TypeError):
+            value = json.load(handle)
+        if not isinstance(value, dict):
+            return copy.deepcopy(default), False
+        return value, True
+    except (OSError, UnicodeError, ValueError, TypeError):
         return copy.deepcopy(default), False
 
 

@@ -227,6 +227,46 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual("home", migrated["matches"]["9"]["picks"]["baseline"]["winner"])
         self.assertTrue(migrated["matches"]["9"]["legacy"])
 
+    @staticmethod
+    def legacy_wc_store():
+        return {
+            "version": 4,
+            "matches": {
+                "91": {
+                    "match_id": 91,
+                    "day": 6,
+                    "phase": "group",
+                    "winner": "home",
+                    "home_score": 2,
+                    "away_score": 1,
+                    "checked": True,
+                    "actual_home_score": 2,
+                    "actual_away_score": 1,
+                    "v4_shadow": {"winner": "home", "home_score": 1, "away_score": 0},
+                },
+            },
+        }
+
+    def test_migrated_wc_day_becomes_history_round(self):
+        migrated = normalize_prediction_store(self.legacy_wc_store(), "wc")
+        self.assertEqual(6, migrated["matches"]["91"]["round"])
+
+    def test_checked_wc_snapshot_backfills_history_without_retraining(self):
+        trainer_calls = []
+        fixture = {"id": 91, "e": 6, "grp": "A", "fin": True, "hs": 2, "as": 1}
+        store, _, history, counts = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=self.legacy_wc_store(), model=self.model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+            now=self.now,
+        )
+        self.assertEqual(1, history["total_evaluated"])
+        self.assertEqual(6, history["gw_results"][0]["gw"])
+        self.assertEqual(3, history["gw_results"][0]["points"])
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual([], trainer_calls)
+        self.assertTrue(store["matches"]["91"]["model_trained"])
+
     def test_invalid_json_does_not_replace_valid_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -236,6 +276,22 @@ class SnapshotLifecycleTests(unittest.TestCase):
             self.assertFalse(valid)
             atomic_save_json(str(path), {"safe": "new"})
             self.assertEqual({"safe": "new"}, json.loads(path.read_text(encoding="utf-8")))
+
+    def test_load_json_state_rejects_non_dict_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("[]", encoding="utf-8")
+            value, valid = load_json_state(str(path), {"safe": True})
+            self.assertEqual({"safe": True}, value)
+            self.assertFalse(valid)
+
+    def test_load_json_state_rejects_invalid_utf8(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_bytes(b"\xff")
+            value, valid = load_json_state(str(path), {"safe": True})
+            self.assertEqual({"safe": True}, value)
+            self.assertFalse(valid)
 
 
 if __name__ == "__main__":
