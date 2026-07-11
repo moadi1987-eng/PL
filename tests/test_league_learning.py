@@ -41,6 +41,7 @@ class LeagueLearningRulesTests(unittest.TestCase):
             actual = {"hs": 1, "as": 0, "fin": True}
             rows.append({
                 "match_id": match_id,
+                "locked": True,
                 "fixture": actual,
                 "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
                 "picks": {
@@ -76,6 +77,56 @@ class LeagueLearningRulesTests(unittest.TestCase):
             },
         }
         self.assertEqual("collecting", promotion_decision(comparison)["status"])
+
+    def test_unlocked_and_incomplete_rows_do_not_count_toward_sample_gate(self):
+        rows = []
+        for match_id in range(29):
+            fixture = {"hs": 1, "as": 0, "fin": True}
+            rows.append({
+                "match_id": match_id,
+                "locked": True,
+                "fixture": fixture,
+                "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+                "picks": {
+                    "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                    "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+                },
+            })
+        rows.append({
+            "match_id": 29,
+            "locked": False,
+            "fixture": {"hs": 1, "as": 0, "fin": True},
+            "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+            },
+        })
+        rows.append({
+            "match_id": 30,
+            "locked": True,
+            "fixture": {"hs": 1, "as": 0, "fin": False},
+            "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+            },
+        })
+        comparison = comparison_summary(rows, "baseline", "v4")
+        self.assertEqual(29, comparison["total"])
+        self.assertEqual("collecting", promotion_decision(comparison)["status"])
+
+    def test_promotion_uses_exact_winner_counts_at_rounded_boundary(self):
+        comparison = {
+            "total": 2000,
+            "active_strategy": "baseline",
+            "candidate_strategy": "v4",
+            "models": {
+                "baseline": {"points": 60, "winner_correct": 1000, "winner_accuracy": 50.0},
+                "v4": {"points": 70, "winner_correct": 999, "winner_accuracy": 50.0},
+            },
+        }
+        self.assertEqual("winner_guard", promotion_decision(comparison)["status"])
 
 
 if __name__ == "__main__":

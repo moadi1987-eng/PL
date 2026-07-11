@@ -1,4 +1,5 @@
 from collections import Counter
+from numbers import Real
 
 
 def _winner(home_score, away_score):
@@ -49,14 +50,24 @@ def score_pick(pick, fixture, rule):
 def comparison_summary(rows, active_strategy, candidate_strategy):
     strategies = (active_strategy, candidate_strategy)
     metrics = {name: {"winner_correct": 0, "exact_correct": 0, "points": 0, "scores": Counter()} for name in strategies}
-    for row in rows:
+    valid_rows = [
+        row for row in rows
+        if row.get("locked") is True
+        and row.get("fixture", {}).get("fin") is True
+        and all(
+            isinstance(row["fixture"].get(key), Real)
+            and not isinstance(row["fixture"].get(key), bool)
+            for key in ("hs", "as")
+        )
+    ]
+    for row in valid_rows:
         for name in strategies:
             scored = score_pick(row["picks"][name], row["fixture"], row["rule"])
             metrics[name]["winner_correct"] += int(scored["winner_correct"])
             metrics[name]["exact_correct"] += int(scored["exact"])
             metrics[name]["points"] += scored["points"]
             metrics[name]["scores"][scored["score"]] += 1
-    total = len(rows)
+    total = len(valid_rows)
     for box in metrics.values():
         box["winner_accuracy"] = round(box["winner_correct"] / max(total, 1) * 100, 1)
         box["exact_accuracy"] = round(box["exact_correct"] / max(total, 1) * 100, 1)
@@ -73,7 +84,11 @@ def promotion_decision(comparison, minimum_samples=30):
         return {"promote": False, "status": "collecting", "next_active_strategy": active_name}
     active = comparison["models"][active_name]
     candidate = comparison["models"][candidate_name]
-    if candidate["winner_accuracy"] < active["winner_accuracy"]:
+    if "winner_correct" in active and "winner_correct" in candidate:
+        winner_loss = candidate["winner_correct"] < active["winner_correct"]
+    else:
+        winner_loss = candidate["winner_accuracy"] < active["winner_accuracy"]
+    if winner_loss:
         return {"promote": False, "status": "winner_guard", "next_active_strategy": active_name}
     if candidate["points"] <= active["points"]:
         return {"promote": False, "status": "points_guard", "next_active_strategy": active_name}
