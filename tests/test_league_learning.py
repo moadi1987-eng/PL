@@ -267,6 +267,54 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual([], trainer_calls)
         self.assertTrue(store["matches"]["91"]["model_trained"])
 
+    def test_checked_wc_snapshot_with_picks_is_not_retrained(self):
+        legacy = self.legacy_wc_store()
+        legacy["matches"]["91"]["picks"] = {
+            "baseline": {"winner": "home", "home_score": 2, "away_score": 1},
+            "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+        }
+        legacy["matches"]["91"].pop("v4_shadow")
+        trainer_calls = []
+        fixture = {"id": 91, "e": 6, "grp": "A", "fin": True, "hs": 2, "as": 1}
+        store, _, history, counts = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=legacy, model=self.model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+            now=self.now,
+        )
+        self.assertEqual(1, history["total_evaluated"])
+        self.assertTrue(store["matches"]["91"]["evaluations"])
+        self.assertTrue(store["matches"]["91"]["model_trained"])
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual([], trainer_calls)
+
+    def assert_invalid_builder_can_retry(self, invalid_snapshot):
+        store, model, _, counts = evolve_competition_state(
+            league="pl", fixtures=[self.fixture], store={}, model=self.model,
+            snapshot_builder=lambda fixture, state: invalid_snapshot,
+            model_trainer=lambda state, rows: state, now=self.now,
+        )
+        self.assertEqual({}, store["matches"])
+        self.assertEqual(1, counts["skipped"])
+        store, _, _, retry_counts = evolve_competition_state(
+            league="pl", fixtures=[self.fixture], store=store, model=model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: state, now=self.now + timedelta(minutes=5),
+        )
+        self.assertEqual(1, retry_counts["locked"])
+        self.assertIn("77", store["matches"])
+
+    def test_empty_builder_output_does_not_block_later_valid_lock(self):
+        self.assert_invalid_builder_can_retry({"picks": {}})
+
+    def test_malformed_builder_output_does_not_block_later_valid_lock(self):
+        self.assert_invalid_builder_can_retry({
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 2, "away_score": 1},
+                "v4": {"winner": "home"},
+            },
+        })
+
     def test_invalid_json_does_not_replace_valid_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"

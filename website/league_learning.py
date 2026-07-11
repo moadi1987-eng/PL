@@ -117,14 +117,39 @@ def eligible_to_lock(fixture, now, lock_hours=36):
     return 0 <= seconds <= lock_hours * 3600
 
 
+def _valid_lock_snapshot(snapshot):
+    picks = snapshot.get("picks") if isinstance(snapshot, dict) else None
+    if not isinstance(picks, dict):
+        return False
+    for strategy in ("baseline", "v4"):
+        pick = picks.get(strategy)
+        if not isinstance(pick, dict) or pick.get("winner") not in {"home", "away", "draw"}:
+            return False
+        if not all(
+            isinstance(pick.get(score), Real) and not isinstance(pick.get(score), bool)
+            for score in ("home_score", "away_score")
+        ):
+            return False
+    return True
+
+
 def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
     raw = copy.deepcopy(raw or {})
     if isinstance(raw.get("matches"), dict):
+        is_lifecycle_store = raw.get("lifecycle_version") == STORE_VERSION or raw.get("version") == STORE_VERSION
         raw.setdefault("version", STORE_VERSION)
         raw.setdefault("league", league)
+        raw.setdefault("lifecycle_version", STORE_VERSION)
         for match_id, snapshot in raw["matches"].items():
+            is_legacy_snapshot = snapshot.get("legacy") is True or (
+                not is_lifecycle_store and snapshot.get("lifecycle_version") != STORE_VERSION
+            )
             snapshot.setdefault("match_id", int(match_id) if str(match_id).isdigit() else match_id)
             snapshot.setdefault("locked", True)
+            if is_legacy_snapshot:
+                snapshot["legacy"] = True
+            else:
+                snapshot.setdefault("lifecycle_version", STORE_VERSION)
             if "round" not in snapshot and snapshot.get("day") is not None:
                 snapshot["round"] = snapshot["day"]
             if "picks" not in snapshot:
@@ -172,7 +197,13 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                 "features": {}, "missing": {"legacy_features": True},
                 "picks": {"baseline": baseline, "v4": candidate},
             }
-    return {"version": STORE_VERSION, "league": league, "matches": matches, "updated_at": ""}
+    return {
+        "version": STORE_VERSION,
+        "lifecycle_version": STORE_VERSION,
+        "league": league,
+        "matches": matches,
+        "updated_at": "",
+    }
 
 
 def load_json_state(path, default):
@@ -220,11 +251,15 @@ def evolve_competition_state(
             counts["skipped"] += 1
             continue
         snapshot = copy.deepcopy(snapshot_builder(fixture, model))
+        if not _valid_lock_snapshot(snapshot):
+            counts["skipped"] += 1
+            continue
         snapshot.update({
             "match_id": fixture["id"], "league": league, "round": fixture.get("e"),
             "home_id": fixture.get("h"), "away_id": fixture.get("a"),
             "kickoff_time": fixture.get("ko", ""), "created_at": timestamp,
             "locked": True, "checked": False, "model_trained": False,
+            "lifecycle_version": STORE_VERSION,
             "active_strategy_at_lock": model.get("active_strategy", "baseline"),
         })
         store["matches"][match_id] = snapshot
