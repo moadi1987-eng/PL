@@ -395,6 +395,38 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual("v4", store["matches"]["760485"]["active_strategy_at_lock"])
         self.assertEqual(3, history["gw_results"][0]["points"])
 
+    def test_inflight_wc_v4_prediction_uses_top_level_scoreline_without_shadow(self):
+        raw = {
+            "version": 4,
+            "matches": {
+                "760514": {
+                    "model_version": 4,
+                    "match_id": 760514,
+                    "day": 18,
+                    "winner": "away",
+                    "home_score": 0,
+                    "away_score": 2,
+                    "prediction_strategy": "v4_scoreline",
+                    "base_v3_prediction": {"winner": "away", "home_score": 1, "away_score": 2},
+                    "phase_rule": {"key": "group", "result": 1, "exact": 3},
+                    "phase": "group",
+                    "checked": False,
+                },
+            },
+        }
+        fixture = {"id": 760514, "e": 18, "grp": "A", "fin": True, "hs": 0, "as": 2}
+        store, _, history, counts = evolve_competition_state(
+            league="wc", fixtures=[fixture], store=raw, model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        snapshot = store["matches"]["760514"]
+        self.assertEqual({"winner": "away", "home_score": 0, "away_score": 2}, snapshot["picks"]["v4"])
+        self.assertEqual("v4", snapshot["active_strategy_at_lock"])
+        self.assertFalse(snapshot["lock_verified"])
+        self.assertEqual(3, history["gw_results"][0]["points"])
+        self.assertEqual(0, counts["trained"])
+
     def test_malformed_nested_legacy_pick_is_skipped_without_losing_valid_history(self):
         raw = self.legacy_wc_store()
         raw["matches"]["91"]["picks"] = {

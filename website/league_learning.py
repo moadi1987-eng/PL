@@ -185,8 +185,15 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                     "home_score": snapshot.get("home_score"),
                     "away_score": snapshot.get("away_score"),
                 })
+                prediction_strategy = str(snapshot.get("prediction_strategy") or "").lower()
+                active_v4 = {
+                    "winner": snapshot.get("winner"),
+                    "home_score": snapshot.get("home_score"),
+                    "away_score": snapshot.get("away_score"),
+                }
                 candidate = copy.deepcopy(snapshot.get("v4_shadow") or (
-                    legacy_candidate_builder(snapshot) if legacy_candidate_builder else baseline
+                    active_v4 if "v4" in prediction_strategy or snapshot.get("model_version") == 4
+                    else legacy_candidate_builder(snapshot) if legacy_candidate_builder else baseline
                 ))
                 snapshot["picks"] = {"baseline": baseline, "v4": candidate}
                 snapshot["legacy"] = True
