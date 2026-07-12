@@ -1,6 +1,6 @@
 """
 Run this to update pl_mobile.html and index.html with fresh PL data.
-Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
+Publishing to GitHub Pages is opt-in for local runs.
 
 Usage:  python update_pl_mobile.py
 """
@@ -19,6 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY", "").strip()
 FOOTBALL_API = "https://v3.football.api-sports.io"
+PUBLISH_TO_GITHUB = os.environ.get("PUBLISH_TO_GITHUB", "") == "1"
 OUT = os.path.join(HERE, "pl_mobile.html")
 INDEX_OUT = os.path.abspath(os.path.join(ROOT, "index.html"))
 TPL = os.path.join(HERE, "pl_mobile_template.html")
@@ -2242,11 +2243,12 @@ with open(os.path.join(ROOT, "live.json"), "w", encoding="utf-8") as f:
     f.write(live_json)
 print("Updated: live.json")
 
-# ── Auto-upload to GitHub Pages ──
+# ── Optional local upload to GitHub Pages ──
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = "moadi1987-eng/PL"
 
-if GITHUB_TOKEN:
+if PUBLISH_TO_GITHUB and not IS_CI:
+  if GITHUB_TOKEN:
     headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
 
     # Upload live.json (small, fast — browser fetches this for live updates)
@@ -2295,8 +2297,9 @@ if GITHUB_TOKEN:
         print(f"Uploaded to https://moadi1987-eng.github.io/PL/")
     else:
         print(f"GitHub upload failed: {resp.status_code} {resp.text[:200]}")
+  else:
+    print("PUBLISH_TO_GITHUB=1 but no GITHUB_TOKEN is set — skipping GitHub upload.")
 else:
-    print("No GITHUB_TOKEN set — skipping GitHub upload.")
-    print("To enable: set GITHUB_TOKEN in .env or environment variables.")
+    print("GitHub upload disabled — set PUBLISH_TO_GITHUB=1 for a local publish.")
 
 print("\nDone! Open pl_mobile.html in Chrome or visit https://moadi1987-eng.github.io/PL/")

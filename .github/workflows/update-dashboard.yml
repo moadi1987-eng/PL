@@ -142,7 +142,6 @@ jobs:
         if: steps.check.outputs.should_update == 'true'
         run: python website/update_pl_mobile.py
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
 
       - name: Commit and push if changed
@@ -151,7 +150,10 @@ jobs:
           cp -f website/pl_mobile.html index.html
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html live.json learning_history.json ai_weights.json ai_predictions_wc.json ai_weights_wc.json 2>/dev/null || git add index.html live.json
+          git add index.html website/pl_mobile.html live.json learning_history.json \
+            ai_predictions.json ai_weights.json \
+            ai_predictions_laliga.json ai_weights_laliga.json \
+            ai_predictions_wc.json ai_weights_wc.json
           if git diff --staged --quiet; then
             echo "No changes to deploy"
           else
