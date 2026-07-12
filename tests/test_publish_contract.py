@@ -205,7 +205,6 @@ def _wrapper_bypass_reasons(workflow):
     shell_names = {"bash", "sh", "zsh"}
     powershell_names = {"pwsh", "powershell"}
     wrapper_names = {"env", "command", "xargs", "eval", "exec", "source", "."}
-    control_prefixes = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
 
     def basename(token):
         return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
@@ -215,16 +214,9 @@ def _wrapper_bypass_reasons(workflow):
             if _has_executable_substitution(command):
                 reasons.append(f"{step_name}: command substitution")
                 continue
-            for tokens in _shell_invocations(command):
-                if not tokens:
-                    continue
-                first_index = 0
-                while first_index < len(tokens) and tokens[first_index].lower() in control_prefixes:
-                    first_index += 1
-                if first_index == len(tokens):
-                    continue
-                lowered = [token.lower() for token in tokens[first_index:]]
-                first = basename(tokens[first_index])
+            for tokens in _normalized_shell_segments(command):
+                first = basename(tokens[0])
+                lowered = [token.lower() for token in tokens]
                 if first in {"echo", "printf"}:
                     continue
                 if first in wrapper_names:
@@ -313,32 +305,40 @@ def _extract_workflow_steps(workflow):
     for scope_start, scope_end, scope_indent in step_scopes:
         candidates = []
         for index in range(scope_start, scope_end):
-            match = re.match(
-                r"^(?P<indent>[ \t]*)-\s+(?P<key>name|run|uses):\s*(?P<value>.*?)\s*$",
-                lines[index],
-            )
+            match = re.match(r"^(?P<indent>[ \t]*)-\s+", lines[index])
             if not match:
                 continue
             item_indent = len(match.group("indent"))
             if scope_indent >= 0 and item_indent <= scope_indent:
                 continue
-            candidates.append((index, item_indent, match.group("key"), match.group("value")))
+            candidates.append((index, item_indent))
 
         if not candidates:
             continue
-        step_indent = min(item_indent for _, item_indent, _, _ in candidates)
+        step_indent = min(item_indent for _, item_indent in candidates)
         headers = [candidate for candidate in candidates if candidate[1] == step_indent]
-        for position, (start, indent, key, value) in enumerate(headers):
-            if key == "name":
-                name = value.strip().strip("'\"")
-            else:
-                name = f"<unnamed-step-{unnamed_index}>"
-                unnamed_index += 1
+        for position, (start, indent) in enumerate(headers):
             end = scope_end
-            for next_start, next_indent, _, _ in headers[position + 1 :]:
+            for next_start, next_indent in headers[position + 1 :]:
                 if next_indent == indent:
                     end = next_start
                     break
+            name = None
+            for name_line in lines[start:end]:
+                name_match = re.match(
+                    r"^(?P<indent>[ \t]*)(?:-\s+)?name:\s*(?P<value>.*?)\s*$",
+                    name_line,
+                )
+                if not name_match:
+                    continue
+                name_indent = len(name_match.group("indent"))
+                if name_indent not in {indent, indent + 2}:
+                    continue
+                name = name_match.group("value").strip().strip("'\"")
+                break
+            if name is None:
+                name = f"<unnamed-step-{unnamed_index}>"
+                unnamed_index += 1
             entries.append((start, name, "\n".join(lines[start:end])))
 
     entries.sort(key=lambda entry: entry[0])
@@ -390,39 +390,69 @@ def _shell_commands(script):
     return commands
 
 
+SHELL_CONTROLS = frozenset({";", "&&", "||", "(", ")", "|", "{", "}"})
+SHELL_CONTROL_PREFIXES = frozenset(
+    {"if", "then", "else", "elif", "while", "until", "do", "!", "{", "}", "fi", "done"}
+)
+SHELL_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
 def _shell_invocations(script):
-    controls = {";", "&&", "||", "(", ")", "|"}
-    for command in _shell_commands(script):
-        tokens = _shell_control_tokens(command)
-        current = []
-        for token in tokens:
-            if token in controls:
-                if current:
-                    yield current
-                current = []
-            else:
-                current.append(token)
-        if current:
-            yield current
+    for _, _, segment, _, _ in _shell_invocation_records(script):
+        yield segment
+
+
+def _split_shell_tokens(tokens):
+    current = []
+    start = 0
+    for index, token in enumerate(tokens):
+        if token in SHELL_CONTROLS:
+            if current:
+                yield current, start, index
+            current = []
+            start = index + 1
+        else:
+            current.append(token)
+    if current:
+        yield current, start, len(tokens)
+
+
+def _shell_invocation_records(script):
+    for command_index, command in enumerate(_shell_commands(script)):
+        command_tokens = _shell_control_tokens(command)
+        for segment, start, end in _split_shell_tokens(command_tokens):
+            yield command_index, command_tokens, segment, start, end
+
+
+def _normalize_shell_segment(tokens):
+    index = 0
+    while index < len(tokens) and tokens[index].lower() in SHELL_CONTROL_PREFIXES:
+        index += 1
+    while index < len(tokens) and SHELL_ASSIGNMENT.match(tokens[index]):
+        index += 1
+    return tokens[index:]
+
+
+def _normalized_shell_segments(script):
+    for tokens in _shell_invocations(script):
+        normalized = _normalize_shell_segment(tokens)
+        if normalized:
+            yield normalized
 
 
 def _shell_control_tokens(command):
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}")
     lexer.whitespace_split = True
     lexer.commenters = "#"
     return list(lexer)
 
 
 def _executable_git_commands(script, verb):
-    for tokens in _shell_invocations(script):
-        for index in range(len(tokens) - 1):
-            if tokens[index : index + 2] != ["git", verb]:
-                continue
-            prefix = tokens[:index]
-            if prefix and prefix[-1] in {"echo", "printf"}:
-                continue
-            yield tokens[index + 2 :]
-            break
+    for tokens in _normalized_shell_segments(script):
+        if tokens[0].lower() in {"echo", "printf"}:
+            continue
+        if tokens[:2] == ["git", verb]:
+            yield tokens[2:]
 
 
 def _git_add_paths(step):
@@ -462,21 +492,30 @@ def _forbidden_build_env(step):
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", token)
         return match.group(1) if match else None
 
-    for tokens in _shell_invocations(_extract_run_script(step)):
-        if not tokens or tokens[0] in {"echo", "printf"}:
+    for raw_tokens in _shell_invocations(_extract_run_script(step)):
+        if not raw_tokens:
             continue
-        if tokens[0] == "export":
-            assignment_tokens = tokens[1:]
-        elif tokens[0] == "env":
-            assignment_tokens = tokens[1:]
-        else:
-            assignment_tokens = tokens
-        for token in assignment_tokens:
-            name = assignment_name(token)
+        index = 0
+        while index < len(raw_tokens) and raw_tokens[index].lower() in SHELL_CONTROL_PREFIXES:
+            index += 1
+        while index < len(raw_tokens):
+            name = assignment_name(raw_tokens[index])
             if name is None:
                 break
             if name in FORBIDDEN_BUILD_ENV:
                 found.add(name)
+            index += 1
+
+        tokens = _normalize_shell_segment(raw_tokens)
+        if not tokens or tokens[0].lower() in {"echo", "printf"}:
+            continue
+        if tokens[0].lower() in {"export", "env"}:
+            for token in tokens[1:]:
+                name = assignment_name(token)
+                if name is None:
+                    break
+                if name in FORBIDDEN_BUILD_ENV:
+                    found.add(name)
     return found
 
 
@@ -564,43 +603,18 @@ def _has_concurrency_group(workflow):
 
 
 def _has_rebase_push_retry(step):
-    controls = {";", "&&", "||", "(", ")", "|"}
-
-    def command_end(tokens, start):
-        end = start + 2
-        while end < len(tokens) and tokens[end] not in controls:
-            end += 1
-        return end
-
-    def git_commands(tokens):
-        commands = []
-        index = 0
-        while index < len(tokens) - 1:
-            if tokens[index] != "git" or tokens[index + 1] not in {"pull", "push"}:
-                index += 1
-                continue
-            if index > 0 and tokens[index - 1] in {"echo", "printf"}:
-                index += 1
-                continue
-            end = command_end(tokens, index)
-            commands.append((tokens[index + 1], tokens[index + 2 : end], index))
-            index = end
-        return commands
-
-    command_tokens = [
-        (command_index, _shell_control_tokens(command))
-        for command_index, command in enumerate(_shell_commands(_extract_run_script(step)))
-    ]
+    command_records = list(_shell_invocation_records(_extract_run_script(step)))
     push_records = []
-    for command_index, tokens in command_tokens:
-        for verb, args, index in git_commands(tokens):
-            if verb == "push":
-                push_records.append((command_index, tokens, args, index))
+    for command_index, command_tokens, segment, start, end in command_records:
+        normalized = _normalize_shell_segment(segment)
+        if normalized[:2] == ["git", "push"]:
+            push_records.append(
+                (command_index, command_tokens, normalized, start, end)
+            )
     if len(push_records) != 2:
         return False
 
-    initial_command, initial_tokens, initial_args, initial_index = push_records[0]
-    initial_end = command_end(initial_tokens, initial_index)
+    initial_command, initial_tokens, initial_segment, initial_index, initial_end = push_records[0]
     if initial_end >= len(initial_tokens) or initial_tokens[initial_end] != "||":
         return False
     if initial_end + 1 >= len(initial_tokens) or initial_tokens[initial_end + 1] != "(":
@@ -621,37 +635,38 @@ def _has_rebase_push_retry(step):
         return False
 
     branch_tokens = initial_tokens[initial_end + 2 : closing]
-    pull_start = 0
-    if branch_tokens[0:2] != ["git", "pull"]:
-        return False
-    pull_end = command_end(branch_tokens, pull_start)
-    expected_pull = ["--rebase", "--autostash", "origin", "main"]
-    if branch_tokens[2:pull_end] != expected_pull:
-        return False
-    if pull_end >= len(branch_tokens) or branch_tokens[pull_end] != "&&":
+    branch_records = list(_split_shell_tokens(branch_tokens))
+    if len(branch_records) != 2:
         return False
 
-    retry_start = pull_end + 1
-    if branch_tokens[retry_start : retry_start + 2] != ["git", "push"]:
+    pull_segment, pull_start, pull_end = branch_records[0]
+    retry_segment, retry_start, retry_end = branch_records[1]
+    if pull_end >= len(branch_tokens) or branch_tokens[pull_end] != "&&":
         return False
-    retry_end = command_end(branch_tokens, retry_start)
+    if retry_start != pull_end + 1:
+        return False
+
+    normalized_pull = _normalize_shell_segment(pull_segment)
+    normalized_retry = _normalize_shell_segment(retry_segment)
+    if normalized_pull != ["git", "pull", "--rebase", "--autostash", "origin", "main"]:
+        return False
+    if normalized_retry != ["git", "push", "origin", "main"]:
+        return False
     if retry_end != len(branch_tokens):
         return False
 
-    retry_command, retry_tokens, retry_args, retry_index = push_records[1]
+    retry_command, retry_tokens, retry_args, retry_absolute_start, retry_absolute_end = push_records[1]
     expected_retry_index = initial_end + 2 + retry_start
     if retry_command != initial_command or retry_tokens is not initial_tokens:
         return False
-    if retry_index != expected_retry_index:
+    if retry_absolute_start != expected_retry_index:
         return False
-
-    def push_target(args):
-        positional = [argument for argument in args if not argument.startswith("-")]
-        return tuple(positional[:2]) if len(positional) >= 2 else None
-
-    if initial_args != ["origin", "main"] or retry_args != ["origin", "main"]:
-        return False
-    return push_target(initial_args) == push_target(retry_args)
+    return initial_segment == ["git", "push", "origin", "main"] and retry_args == [
+        "git",
+        "push",
+        "origin",
+        "main",
+    ]
 
 
 def _has_global_rebase_push_retry(workflow):
@@ -730,18 +745,18 @@ def _alternate_upload_paths(workflow):
             uses_match = re.match(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)", line)
             if uses_match and "upload" in uses_match.group(1).lower():
                 findings.append(f"{step_name}: alternate action")
-        for tokens in _shell_invocations(_extract_run_script(step)):
+        for tokens in _normalized_shell_segments(_extract_run_script(step)):
             lowered = [token.lower() for token in tokens]
             method_upload = has_upload_method(tokens)
-            if lowered and lowered[0] in {"echo", "printf"}:
+            if not lowered or lowered[0] in {"echo", "printf"}:
                 continue
             gh_write = has_write_flag(tokens, gh_write_flags)
             curl_write = has_write_flag(tokens, curl_write_flags)
-            if "gh" in lowered and "api" in lowered and (method_upload or gh_write):
-                findings.append(f"{step_name}: gh api upload")
-            if lowered and lowered[0] == "curl" and (
-                method_upload or curl_write
+            if lowered[0] == "gh" and len(lowered) > 1 and lowered[1] == "api" and (
+                method_upload or gh_write
             ):
+                findings.append(f"{step_name}: gh api upload")
+            if lowered[0] == "curl" and (method_upload or curl_write):
                 findings.append(f"{step_name}: curl upload")
     return findings
 
@@ -1061,6 +1076,20 @@ class PublishContractTests(unittest.TestCase):
             )
         )
 
+        trailing_control_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git pull --rebase --autostash origin main && git push origin main | )
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _unique_workflow_step(
+                    _extract_workflow_steps(trailing_control_fixture),
+                    "Commit and push if changed",
+                )
+            )
+        )
+
         extra_fallback_push_fixture = """
       - name: Commit and push if changed
         run: |
@@ -1308,6 +1337,80 @@ steps:
         self.assertEqual(2, len(_extract_workflow_steps(safe_fixture)))
         self.assertEqual([], _wrapper_bypass_reasons(safe_fixture))
         self.assertEqual([], _alternate_upload_paths(safe_fixture))
+
+    def test_steps_with_arbitrary_first_keys_are_ordered_and_scanned(self):
+        malicious_fixture = """
+jobs:
+  update:
+    steps:
+      - if: always()
+        run: bash -c "git commit -m hidden"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        env:
+          SAFE: value
+"""
+        steps = _extract_workflow_steps(malicious_fixture)
+        self.assertEqual(2, len(steps))
+        self.assertTrue(all(step_name.startswith("<unnamed-step-") for step_name, _ in steps))
+        self.assertTrue(_wrapper_bypass_reasons(malicious_fixture))
+        self.assertTrue(_alternate_upload_paths(malicious_fixture))
+
+        named_later_fixture = """
+steps:
+  - if: always()
+    name: Conditional build
+    run: echo safe
+"""
+        self.assertEqual(
+            ["Conditional build"],
+            [step_name for step_name, _ in _extract_workflow_steps(named_later_fixture)],
+        )
+        self.assertEqual([], _wrapper_bypass_reasons(named_later_fixture))
+        self.assertEqual(set(), _forbidden_workflow_env(named_later_fixture))
+
+    def test_shell_assignments_are_normalized_before_command_scans(self):
+        wrapper_fixture = """
+      - name: Hidden assignment wrapper
+        run: FOO=1 BAR=2 bash -c "git commit -m hidden"
+"""
+        self.assertTrue(_wrapper_bypass_reasons(wrapper_fixture))
+
+        upload_fixture = """
+      - name: Hidden assignment upload
+        run: FOO=1 BAR=2 curl --request=PUT remote/endpoint
+"""
+        self.assertTrue(_alternate_upload_paths(upload_fixture))
+
+        sensitive_fixture = """
+      - name: Sensitive assignment
+        run: FOO=1 GITHUB_TOKEN=secret python build.py
+"""
+        self.assertEqual(
+            {"GITHUB_TOKEN"},
+            _forbidden_workflow_env(sensitive_fixture),
+        )
+
+        safe_fixture = """
+      - name: Safe assignment
+        run: FOO=1 BAR=2 python build.py
+"""
+        self.assertEqual([], _wrapper_bypass_reasons(safe_fixture))
+        self.assertEqual([], _alternate_upload_paths(safe_fixture))
+
+    def test_echo_segments_are_output_data_not_git_or_upload_commands(self):
+        payload_fixture = """
+      - name: Echo payload
+        run: printf '%s' 'git' push origin main
+"""
+        self.assertEqual(0, _count_executable_git_commands(payload_fixture, "push"))
+        self.assertEqual([], _alternate_upload_paths(payload_fixture))
+
+        chained_fixture = """
+      - name: Real second segment
+        run: printf '%s' 'git' push origin main; git push origin main
+"""
+        self.assertEqual(1, _count_executable_git_commands(chained_fixture, "push"))
 
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
