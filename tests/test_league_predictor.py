@@ -214,6 +214,16 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertEqual(model["calibration"], trained["calibration"])
         self.assertEqual(model["meta"], trained["meta"])
 
+    def test_training_rejects_explicit_falsy_factor_edges_and_preserves_precision(self):
+        model = default_model_state("pl")
+        model["factors"]["form"] = 0.150001
+        invalid_rows = [
+            {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": value, "expected_home_goals": 1.2, "expected_away_goals": 1.1}
+            for value in ([], "", 0, None)
+        ]
+        trained = train_factor_model(model, invalid_rows)
+        self.assertEqual(model, trained)
+
 
 if __name__ == "__main__":
     unittest.main()

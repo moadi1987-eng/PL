@@ -388,23 +388,28 @@ def _is_training_row(row):
     fixture = row.get("fixture") if isinstance(row, dict) else None
     home_score = fixture.get("hs") if isinstance(fixture, dict) else None
     away_score = fixture.get("as") if isinstance(fixture, dict) else None
-    factor_edges = row.get("factor_edges") if isinstance(row, dict) else None
+    factor_edges_valid = (
+        "factor_edges" not in row
+        or (isinstance(row["factor_edges"], Mapping) and all(_is_training_number(value) for value in row["factor_edges"].values()))
+    ) if isinstance(row, dict) else False
     return (
         isinstance(fixture, dict)
         and _is_score_count(home_score)
         and _is_score_count(away_score)
         and all(_is_training_number(row.get(key)) and float(row[key]) >= 0 for key in ("expected_home_goals", "expected_away_goals"))
         and row.get("actual_winner") == _score_winner(float(home_score), float(away_score))
-        and (not factor_edges or (isinstance(factor_edges, Mapping) and all(_is_training_number(value) for value in factor_edges.values())))
+        and factor_edges_valid
     )
 
 
 def train_factor_model(model, rows):
     raw_model = model if isinstance(model, dict) else {}
-    league = raw_model.get("league") if isinstance(raw_model.get("league"), str) else "pl"
-    model = normalize_model_state(raw_model, league, raw_model.get("active_strategy", "baseline"))
     rows = rows if isinstance(rows, list) else []
     valid_rows = [row for row in rows if _is_training_row(row)]
+    if not valid_rows:
+        return copy.deepcopy(raw_model)
+    league = raw_model.get("league") if isinstance(raw_model.get("league"), str) else "pl"
+    model = normalize_model_state(raw_model, league, raw_model.get("active_strategy", "baseline"))
     factor_scores = {key: [] for key in model["factors"]}
     actual_totals = []
     predicted_totals = []
