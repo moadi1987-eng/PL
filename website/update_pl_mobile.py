@@ -25,10 +25,10 @@ TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
 try:
-    from league_learning import atomic_save_json, merge_learning_history, run_persistent_competition
+    from league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
 except ImportError:
-    from .league_learning import atomic_save_json, merge_learning_history, run_persistent_competition
+    from .league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
 try:
     from zoneinfo import ZoneInfo
@@ -1294,10 +1294,9 @@ def _wc_archive_comparison(previous, snapshots):
     }
 
 
-def _wc_merge_verified_archive(previous, lifecycle_history):
+def _wc_merge_verified_archive(previous, lifecycle_history, store):
     previous = previous if isinstance(previous, dict) else {}
     merged = copy.deepcopy(lifecycle_history)
-    store = _load_json_file(WC_PREDICTIONS_FILE, {"matches": {}})
     matches = store.get("matches", {}) if isinstance(store, dict) else {}
     seen = {str(match_id) for match_id in previous.get("merged_lifecycle_match_ids", [])}
     new_snapshots = []
@@ -1356,7 +1355,7 @@ def run_wc_learning(wc_payload, history):
     teams_obj = wc.get("teams", {})
     fixtures = wc.get("fix", [])
     previous = copy.deepcopy((history or {}).get("wc", {}))
-    wc_history, counts, _ = run_persistent_competition(
+    store, model, wc_history, counts = _prepare_persistent_competition(
         league="wc",
         fixtures=fixtures,
         teams=teams_obj,
@@ -1368,9 +1367,11 @@ def run_wc_learning(wc_payload, history):
         model_trainer=_wc_shared_trainer,
         default_model=_wc_default_model(),
     )
-    wc_history = _wc_merge_verified_archive(previous, wc_history)
+    wc_history = _wc_merge_verified_archive(previous, wc_history, store)
     wc_history["refreshed_predictions"] = 0
     history = merge_learning_history(history, "wc", wc_history)
+    atomic_save_json(WC_PREDICTIONS_FILE, store)
+    atomic_save_json(WC_WEIGHTS_FILE, model)
     atomic_save_json(LEARNING_HISTORY_FILE, history)
     print(f"World Cup ML: {counts['locked']} new locked predictions, 0 refreshed, {counts['checked']} checked, {counts['trained']} trained, accuracy {history['wc'].get('overall_accuracy', 0)}%")
     return history
@@ -1389,7 +1390,7 @@ def _compact_pl_learning_fixtures(fixtures):
 def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
     now = datetime.now(timezone.utc)
     compact_pl = _compact_pl_learning_fixtures(pl_fixtures)
-    pl_history, _, _ = run_persistent_competition(
+    pl_store, pl_model, pl_history, _ = _prepare_persistent_competition(
         league="pl", fixtures=compact_pl, teams=pl_teams,
         prediction_path=PL_PREDICTIONS_FILE, model_path=PL_WEIGHTS_FILE,
         history=(history or {}).get("pl", {}), now=now,
@@ -1397,16 +1398,20 @@ def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
         model_trainer=train_factor_model, default_model=default_model_state("pl"),
         legacy_candidate_builder=legacy_v4_pick,
     )
-    history = merge_learning_history(history, "pl", pl_history)
     compact_ll = ll_fixtures if isinstance(ll_fixtures, list) else []
-    ll_history, _, _ = run_persistent_competition(
+    ll_store, ll_model, ll_history, _ = _prepare_persistent_competition(
         league="laliga", fixtures=compact_ll, teams=ll_teams if isinstance(ll_teams, dict) else {},
         prediction_path=LL_PREDICTIONS_FILE, model_path=LL_WEIGHTS_FILE,
-        history=history.get("laliga", {}), now=now,
+        history=(history or {}).get("laliga", {}), now=now,
         snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_ll, ll_teams, model, "laliga"),
         model_trainer=train_factor_model, default_model=default_model_state("laliga"),
     )
+    history = merge_learning_history(history, "pl", pl_history)
     history = merge_learning_history(history, "laliga", ll_history)
+    atomic_save_json(PL_PREDICTIONS_FILE, pl_store)
+    atomic_save_json(PL_WEIGHTS_FILE, pl_model)
+    atomic_save_json(LL_PREDICTIONS_FILE, ll_store)
+    atomic_save_json(LL_WEIGHTS_FILE, ll_model)
     atomic_save_json(LEARNING_HISTORY_FILE, history)
     return history
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import website.league_learning as learning
 from website import ml_engine
 from website.league_learning import (
+    _prepare_persistent_competition,
     load_json_state,
     merge_learning_history,
     normalize_prediction_store,
@@ -370,6 +371,63 @@ class PersistentCompetitionTests(unittest.TestCase):
         with patch.object(namespace["os"].path, "exists", return_value=True), patch("builtins.open", side_effect=PermissionError("denied")):
             with self.assertRaisesRegex(PermissionError, "denied"):
                 namespace["_load_json_file"]("learning_history.json", {})
+
+    def test_league_prepare_failure_saves_neither_competition(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pl_prediction = root / "pl-predictions.json"
+            pl_model = root / "pl-model.json"
+            pl_prediction.write_text('{"before":"prediction"}', encoding="utf-8")
+            pl_model.write_text('{"before":"model"}', encoding="utf-8")
+            namespace["PL_PREDICTIONS_FILE"] = str(pl_prediction)
+            namespace["PL_WEIGHTS_FILE"] = str(pl_model)
+            namespace["LL_PREDICTIONS_FILE"] = str(root / "ll-predictions.json")
+            namespace["LL_WEIGHTS_FILE"] = str(root / "ll-model.json")
+            saves = []
+            namespace["atomic_save_json"] = lambda path, value: saves.append(path)
+            namespace["_prepare_persistent_competition"] = lambda **kwargs: (
+                ({"matches": {}}, {"league": "pl"}, {"snapshots_locked": 0}, {})
+                if kwargs["league"] == "pl" else (_ for _ in ()).throw(PermissionError("laliga denied"))
+            )
+            with self.assertRaisesRegex(PermissionError, "laliga denied"):
+                namespace["run_league_learning"]([], {}, [], {}, {})
+            self.assertEqual([], saves)
+            self.assertEqual('{"before":"prediction"}', pl_prediction.read_text(encoding="utf-8"))
+            self.assertEqual('{"before":"model"}', pl_model.read_text(encoding="utf-8"))
+
+    def test_wc_merges_prepared_store_without_post_save_read(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        store = {"matches": {}}
+        prepared = (store, {"league": "wc"}, {"gw_results": [], "model_comparison": {"total": 0}, "model_status": {}}, {"locked": 0, "checked": 0, "trained": 0})
+        saves = []
+        namespace["_prepare_persistent_competition"] = lambda **kwargs: prepared
+        namespace["_load_json_file"] = lambda *args: (_ for _ in ()).throw(PermissionError("post-save read"))
+        namespace["atomic_save_json"] = lambda path, value: saves.append(path)
+        history = namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
+        self.assertEqual([], history["wc"]["gw_results"])
+        self.assertEqual([namespace["WC_PREDICTIONS_FILE"], namespace["WC_WEIGHTS_FILE"], namespace["LEARNING_HISTORY_FILE"]], saves)
+
+    def test_wc_prepare_read_error_saves_nothing(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        saves = []
+        namespace["_prepare_persistent_competition"] = lambda **kwargs: (_ for _ in ()).throw(PermissionError("wc denied"))
+        namespace["atomic_save_json"] = lambda path, value: saves.append(path)
+        with self.assertRaisesRegex(PermissionError, "wc denied"):
+            namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
+        self.assertEqual([], saves)
 
 
 if __name__ == "__main__":

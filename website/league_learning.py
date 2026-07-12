@@ -474,7 +474,7 @@ def merge_learning_history(history, league, league_history):
     return merged
 
 
-def run_persistent_competition(
+def _prepare_persistent_competition(
     *, league, fixtures, teams, prediction_path, model_path, history, now,
     snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
 ):
@@ -482,8 +482,7 @@ def run_persistent_competition(
     store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
     raw_model, model_valid = load_json_state(model_path, default_model)
     model = _persistent_model(raw_model if model_valid else {}, default_model, league)
-
-    store, model, league_history, counts = evolve_competition_state(
+    return evolve_competition_state(
         league=league,
         fixtures=fixtures if isinstance(fixtures, list) else [],
         store=store,
@@ -491,6 +490,25 @@ def run_persistent_competition(
         snapshot_builder=snapshot_builder,
         model_trainer=model_trainer,
         now=now,
+    )
+
+
+def run_persistent_competition(
+    *, league, fixtures, teams, prediction_path, model_path, history, now,
+    snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
+):
+    store, model, league_history, counts = _prepare_persistent_competition(
+        league=league,
+        fixtures=fixtures,
+        teams=teams,
+        prediction_path=prediction_path,
+        model_path=model_path,
+        history=history,
+        snapshot_builder=snapshot_builder,
+        model_trainer=model_trainer,
+        now=now,
+        default_model=default_model,
+        legacy_candidate_builder=legacy_candidate_builder,
     )
     atomic_save_json(prediction_path, store)
     atomic_save_json(model_path, model)
