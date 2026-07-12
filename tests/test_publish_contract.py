@@ -324,59 +324,69 @@ def _has_rebase_push_retry(step):
             index = end
         return commands
 
-    for command in _shell_commands(_extract_run_script(step)):
-        tokens = _shell_control_tokens(command)
-        for index, token in enumerate(tokens[:-1]):
-            if token != "git" or tokens[index + 1] != "push":
-                continue
-            end = command_end(tokens, index)
-            if end >= len(tokens) or tokens[end] != "||":
-                continue
-            initial_args = tokens[index + 2 : end]
-            if not {"origin", "main"}.issubset(initial_args):
-                continue
+    command_tokens = [
+        (command_index, _shell_control_tokens(command))
+        for command_index, command in enumerate(_shell_commands(_extract_run_script(step)))
+    ]
+    push_records = []
+    for command_index, tokens in command_tokens:
+        for verb, args, index in git_commands(tokens):
+            if verb == "push":
+                push_records.append((command_index, tokens, args, index))
+    if len(push_records) != 2:
+        return False
 
-            branch_start = end + 1
-            branch_end = len(tokens)
-            branch_tokens = tokens[branch_start:]
-            if branch_tokens and branch_tokens[0] == "(":
-                depth = 0
-                closing = None
-                for offset, branch_token in enumerate(branch_tokens):
-                    if branch_token == "(":
-                        depth += 1
-                    elif branch_token == ")":
-                        depth -= 1
-                        if depth == 0:
-                            closing = offset
-                            break
-                if closing is None:
-                    continue
-                branch_end = branch_start + closing + 1
-                branch_tokens = branch_tokens[1:closing]
-            else:
-                branch_tokens = branch_tokens[:]
+    initial_command, initial_tokens, initial_args, initial_index = push_records[0]
+    initial_end = command_end(initial_tokens, initial_index)
+    if initial_end >= len(initial_tokens) or initial_tokens[initial_end] != "||":
+        return False
+    if initial_end + 1 >= len(initial_tokens) or initial_tokens[initial_end + 1] != "(":
+        return False
 
-            branch_commands = git_commands(branch_tokens)
-            pulls = [item for item in branch_commands if item[0] == "pull"]
-            pushes = [item for item in branch_commands if item[0] == "push"]
-            if len(pulls) != 1 or len(pushes) != 1:
-                continue
-            pull = pulls[0]
-            retry_push = pushes[0]
-            if pull[2] >= retry_push[2] or not {
-                "--rebase",
-                "--autostash",
-                "origin",
-                "main",
-            }.issubset(pull[1]):
-                continue
-            if not {"origin", "main"}.issubset(retry_push[1]):
-                continue
-            if branch_end <= branch_start:
-                continue
-            return True
-    return False
+    depth = 0
+    closing = None
+    for index in range(initial_end + 1, len(initial_tokens)):
+        token = initial_tokens[index]
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+            if depth == 0:
+                closing = index
+                break
+    if closing is None or closing != len(initial_tokens) - 1:
+        return False
+
+    branch_tokens = initial_tokens[initial_end + 2 : closing]
+    pull_start = 0
+    if branch_tokens[0:2] != ["git", "pull"]:
+        return False
+    pull_end = command_end(branch_tokens, pull_start)
+    expected_pull = ["--rebase", "--autostash", "origin", "main"]
+    if branch_tokens[2:pull_end] != expected_pull:
+        return False
+    if pull_end >= len(branch_tokens) or branch_tokens[pull_end] != "&&":
+        return False
+
+    retry_start = pull_end + 1
+    if branch_tokens[retry_start : retry_start + 2] != ["git", "push"]:
+        return False
+    retry_end = command_end(branch_tokens, retry_start)
+    if retry_end != len(branch_tokens):
+        return False
+
+    retry_command, retry_tokens, retry_args, retry_index = push_records[1]
+    expected_retry_index = initial_end + 2 + retry_start
+    if retry_command != initial_command or retry_tokens is not initial_tokens:
+        return False
+    if retry_index != expected_retry_index:
+        return False
+
+    def push_target(args):
+        positional = [argument for argument in args if not argument.startswith("-")]
+        return tuple(positional[:2]) if len(positional) >= 2 else None
+
+    return push_target(initial_args) is not None and push_target(initial_args) == push_target(retry_args)
 
 
 def _alternate_upload_paths(workflow):
@@ -655,6 +665,50 @@ class PublishContractTests(unittest.TestCase):
         self.assertFalse(
             _has_rebase_push_retry(
                 _extract_workflow_steps(malformed_order_fixture)["Commit and push if changed"]
+            )
+        )
+
+        semicolon_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git pull --rebase --autostash origin main; git push origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(semicolon_fixture)["Commit and push if changed"]
+            )
+        )
+
+        trailing_push_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git pull --rebase --autostash origin main && git push origin main) || git push origin main
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(trailing_push_fixture)["Commit and push if changed"]
+            )
+        )
+
+        extra_fallback_push_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git pull --rebase --autostash origin main && git push origin main && git push origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(extra_fallback_push_fixture)["Commit and push if changed"]
+            )
+        )
+
+        mismatched_target_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git pull --rebase --autostash origin main && git push backup main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(mismatched_target_fixture)["Commit and push if changed"]
             )
         )
 
