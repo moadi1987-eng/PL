@@ -144,15 +144,22 @@ def _extract_workflow_steps(workflow):
         if match:
             name = match.group("name").strip().strip("'\"")
             headers.append((index, len(match.group("indent")), name))
-    steps = {}
+    steps = []
     for position, (start, indent, name) in enumerate(headers):
         end = len(lines)
         for next_start, next_indent, _ in headers[position + 1 :]:
             if next_indent == indent:
                 end = next_start
                 break
-        steps[name] = "\n".join(lines[start:end])
+        steps.append((name, "\n".join(lines[start:end])))
     return steps
+
+
+def _unique_workflow_step(steps, name):
+    matches = [step for step_name, step in steps if step_name == name]
+    if len(matches) != 1:
+        raise AssertionError(f"expected exactly one workflow step named {name!r}")
+    return matches[0]
 
 
 def _extract_run_script(step):
@@ -241,7 +248,7 @@ def _git_add_paths(step):
 def _count_executable_git_commands(workflow, verb):
     return sum(
         1
-        for step in _extract_workflow_steps(workflow).values()
+        for _, step in _extract_workflow_steps(workflow)
         for _ in _executable_git_commands(_extract_run_script(step), verb)
     )
 
@@ -283,6 +290,34 @@ def _forbidden_build_env(step):
     return found
 
 
+def _forbidden_workflow_env(workflow):
+    found = set()
+    lines = workflow.splitlines()
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            continue
+        inline = re.match(r"^(?P<indent>[ \t]*)env:\s*\{(?P<body>.*)\}\s*$", line)
+        if inline:
+            for key in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:", inline.group("body")):
+                if key in FORBIDDEN_BUILD_ENV:
+                    found.add(key)
+            continue
+        env_match = re.match(r"^(?P<indent>[ \t]*)env:\s*$", line)
+        if not env_match:
+            continue
+        env_indent = len(env_match.group("indent"))
+        for env_line in lines[index + 1 :]:
+            if env_line.strip() and len(env_line) - len(env_line.lstrip(" \t")) <= env_indent:
+                break
+            key_match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", env_line)
+            if key_match and key_match.group(1) in FORBIDDEN_BUILD_ENV:
+                found.add(key_match.group(1))
+
+    for _, step in _extract_workflow_steps(workflow):
+        found.update(_forbidden_build_env(step))
+    return found
+
+
 def _has_concurrency_group(workflow):
     lines = workflow.splitlines()
     for index, line in enumerate(lines):
@@ -317,6 +352,9 @@ def _has_rebase_push_retry(step):
         index = 0
         while index < len(tokens) - 1:
             if tokens[index] != "git" or tokens[index + 1] not in {"pull", "push"}:
+                index += 1
+                continue
+            if index > 0 and tokens[index - 1] in {"echo", "printf"}:
                 index += 1
                 continue
             end = command_end(tokens, index)
@@ -386,7 +424,9 @@ def _has_rebase_push_retry(step):
         positional = [argument for argument in args if not argument.startswith("-")]
         return tuple(positional[:2]) if len(positional) >= 2 else None
 
-    return push_target(initial_args) is not None and push_target(initial_args) == push_target(retry_args)
+    if initial_args != ["origin", "main"] or retry_args != ["origin", "main"]:
+        return False
+    return push_target(initial_args) == push_target(retry_args)
 
 
 def _alternate_upload_paths(workflow):
@@ -449,7 +489,7 @@ def _alternate_upload_paths(workflow):
         "--data",
     }
 
-    for step_name, step in _extract_workflow_steps(workflow).items():
+    for step_name, step in _extract_workflow_steps(workflow):
         for line in step.splitlines():
             uses_match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
             if uses_match and "upload" in uses_match.group(1).lower():
@@ -542,7 +582,8 @@ class PublishContractTests(unittest.TestCase):
 
     def test_build_step_does_not_receive_a_github_token_or_publish_flag(self):
         steps = _extract_workflow_steps(self.workflow)
-        self.assertEqual(set(), _forbidden_build_env(steps["Build dashboard"]))
+        self.assertEqual(set(), _forbidden_workflow_env(self.workflow))
+        self.assertEqual(set(), _forbidden_build_env(_unique_workflow_step(steps, "Build dashboard")))
 
         inline_fixture = """
       - name: Build dashboard
@@ -552,7 +593,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(
             {"GITHUB_TOKEN"},
-            _forbidden_build_env(_extract_workflow_steps(inline_fixture)["Build dashboard"]),
+            _forbidden_build_env(
+                _unique_workflow_step(_extract_workflow_steps(inline_fixture), "Build dashboard")
+            ),
         )
 
         export_fixture = """
@@ -563,7 +606,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(
             {"GH_TOKEN"},
-            _forbidden_build_env(_extract_workflow_steps(export_fixture)["Build dashboard"]),
+            _forbidden_build_env(
+                _unique_workflow_step(_extract_workflow_steps(export_fixture), "Build dashboard")
+            ),
         )
 
         publish_fixture = """
@@ -574,7 +619,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(
             {"PUBLISH_TO_GITHUB"},
-            _forbidden_build_env(_extract_workflow_steps(publish_fixture)["Build dashboard"]),
+            _forbidden_build_env(
+                _unique_workflow_step(_extract_workflow_steps(publish_fixture), "Build dashboard")
+            ),
         )
 
         safe_text_fixture = """
@@ -587,7 +634,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(
             set(),
-            _forbidden_build_env(_extract_workflow_steps(safe_text_fixture)["Build dashboard"]),
+            _forbidden_build_env(
+                _unique_workflow_step(_extract_workflow_steps(safe_text_fixture), "Build dashboard")
+            ),
         )
 
         env_command_fixture = """
@@ -596,7 +645,11 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(
             {"PUBLISH_TO_GITHUB"},
-            _forbidden_build_env(_extract_workflow_steps(env_command_fixture)["Build dashboard"]),
+            _forbidden_build_env(
+                _unique_workflow_step(
+                    _extract_workflow_steps(env_command_fixture), "Build dashboard"
+                )
+            ),
         )
 
     def test_workflow_stages_every_generated_file_once(self):
@@ -614,7 +667,10 @@ class PublishContractTests(unittest.TestCase):
         }
         steps = _extract_workflow_steps(self.workflow)
         self.assertEqual(1, _count_executable_git_commands(self.workflow, "add"))
-        self.assertEqual(required, _git_add_paths(steps["Commit and push if changed"]))
+        self.assertEqual(
+            required,
+            _git_add_paths(_unique_workflow_step(steps, "Commit and push if changed")),
+        )
 
         substring_fixture = """
       - name: Commit and push if changed
@@ -624,7 +680,9 @@ class PublishContractTests(unittest.TestCase):
         self.assertNotEqual(
             required,
             _git_add_paths(
-                _extract_workflow_steps(substring_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(substring_fixture), "Commit and push if changed"
+                )
             ),
         )
 
@@ -632,7 +690,22 @@ class PublishContractTests(unittest.TestCase):
         steps = _extract_workflow_steps(self.workflow)
         self.assertEqual(1, _count_executable_git_commands(self.workflow, "commit"))
         self.assertTrue(_has_concurrency_group(self.workflow))
-        self.assertTrue(_has_rebase_push_retry(steps["Commit and push if changed"]))
+        self.assertTrue(
+            _has_rebase_push_retry(_unique_workflow_step(steps, "Commit and push if changed"))
+        )
+
+        echo_push_fixture = """
+      - name: Commit and push if changed
+        run: |
+          echo git push origin main || (git pull --rebase --autostash origin main && git push origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _unique_workflow_step(
+                    _extract_workflow_steps(echo_push_fixture), "Commit and push if changed"
+                )
+            )
+        )
 
         comment_fixture = """
       - name: Commit and push if changed
@@ -653,7 +726,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(unrelated_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(unrelated_fixture), "Commit and push if changed"
+                )
             )
         )
 
@@ -664,7 +739,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(malformed_order_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(malformed_order_fixture), "Commit and push if changed"
+                )
             )
         )
 
@@ -675,7 +752,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(semicolon_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(semicolon_fixture), "Commit and push if changed"
+                )
             )
         )
 
@@ -686,7 +765,9 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(trailing_push_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(trailing_push_fixture), "Commit and push if changed"
+                )
             )
         )
 
@@ -697,7 +778,10 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(extra_fallback_push_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(extra_fallback_push_fixture),
+                    "Commit and push if changed",
+                )
             )
         )
 
@@ -708,9 +792,92 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertFalse(
             _has_rebase_push_retry(
-                _extract_workflow_steps(mismatched_target_fixture)["Commit and push if changed"]
+                _unique_workflow_step(
+                    _extract_workflow_steps(mismatched_target_fixture), "Commit and push if changed"
+                )
             )
         )
+
+        extra_ref_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main refs/heads/other || (git pull --rebase --autostash origin main && git push origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _unique_workflow_step(
+                    _extract_workflow_steps(extra_ref_fixture), "Commit and push if changed"
+                )
+            )
+        )
+
+        push_flag_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push --force origin main || (git pull --rebase --autostash origin main && git push --tags origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _unique_workflow_step(
+                    _extract_workflow_steps(push_flag_fixture), "Commit and push if changed"
+                )
+            )
+        )
+
+    def test_workflow_steps_preserve_duplicates_for_global_checks(self):
+        duplicate_fixture = """
+env:
+  SAFE: value
+jobs:
+  update:
+    steps:
+      - name: Commit and push if changed
+        run: |
+          git commit -m hidden
+          gh api --method=PUT remote/hidden
+      - name: Commit and push if changed
+        run: git commit -m visible
+"""
+        steps = _extract_workflow_steps(duplicate_fixture)
+        self.assertEqual(2, len(steps))
+        self.assertEqual(2, _count_executable_git_commands(duplicate_fixture, "commit"))
+        self.assertTrue(_alternate_upload_paths(duplicate_fixture))
+
+    def test_sensitive_workflow_env_inheritance_is_rejected(self):
+        inherited_fixture = """
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  update:
+    env:
+      GH_TOKEN: inherited
+    steps:
+      - name: Build dashboard
+        env:
+          PUBLISH_TO_GITHUB: '1'
+        run: python build.py
+"""
+        self.assertEqual(
+            {"GITHUB_TOKEN", "GH_TOKEN", "PUBLISH_TO_GITHUB"},
+            _forbidden_workflow_env(inherited_fixture),
+        )
+
+        safe_fixture = """
+env:
+  SAFE: value
+jobs:
+  update:
+    env:
+      SAFE_JOB: value
+    steps:
+      - name: Build dashboard
+        run: |
+          # GITHUB_TOKEN: safe comment
+          echo GH_TOKEN=quoted
+          printf 'PUBLISH_TO_GITHUB=quoted'
+          python build.py
+"""
+        self.assertEqual(set(), _forbidden_workflow_env(safe_fixture))
 
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
