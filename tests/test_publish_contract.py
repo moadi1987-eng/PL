@@ -268,6 +268,7 @@ def _workflow_contract_reasons(workflow):
         build_step = _unique_workflow_step(steps, "Build dashboard")
     except AssertionError as error:
         return [str(error)]
+    reasons.extend(_git_global_option_reasons(workflow))
     if _count_executable_git_commands(workflow, "add") != 1:
         reasons.append("workflow must have exactly one git add")
     if _git_add_paths(publish_step) != REQUIRED_GENERATED_PATHS:
@@ -355,20 +356,20 @@ def _top_level_step_fields(step):
         return {}
     item_indent = len(item_match.group("indent"))
     field_indent = item_indent + 2
-    fields = {name: [] for name in ("name", "run", "uses", "env")}
+    fields = {}
 
     for index, line in enumerate(lines):
         match = None
         line_indent = None
         if index == first_index:
             match = re.match(
-                r"^[ \t]*-\s+(?P<key>name|run|uses|env):\s*(?P<value>.*?)\s*$",
+                r"^[ \t]*-\s+(?P<key>[A-Za-z_][A-Za-z0-9_-]*):\s*(?P<value>.*?)\s*$",
                 line,
             )
             line_indent = item_indent
         else:
             match = re.match(
-                r"^(?P<indent>[ \t]+)(?P<key>name|run|uses|env):\s*(?P<value>.*?)\s*$",
+                r"^(?P<indent>[ \t]+)(?P<key>[A-Za-z_][A-Za-z0-9_-]*):\s*(?P<value>.*?)\s*$",
                 line,
             )
             if match:
@@ -376,7 +377,7 @@ def _top_level_step_fields(step):
                 if line_indent != field_indent:
                     match = None
         if match:
-            fields[match.group("key")].append(
+            fields.setdefault(match.group("key"), []).append(
                 {
                     "line": index,
                     "indent": line_indent,
@@ -386,12 +387,31 @@ def _top_level_step_fields(step):
     return fields
 
 
+def _is_literal_block_scalar(value):
+    return bool(re.fullmatch(r"\|\s*(?:[+-]\s*)?(?:#.*)?", value.strip()))
+
+
+def _is_folded_block_scalar(value):
+    return bool(re.fullmatch(r">\s*(?:[+-]\s*)?(?:#.*)?", value.strip()))
+
+
 def _workflow_step_layout_reasons(workflow):
     reasons = []
     for step_name, step in _extract_workflow_steps(workflow):
         fields = _top_level_step_fields(step)
-        if len(fields.get("run", [])) > 1:
-            reasons.append(f"{step_name}: duplicate top-level run field")
+        for field_name, matches in fields.items():
+            if len(matches) > 1:
+                reasons.append(f"{step_name}: duplicate top-level {field_name} field")
+        for field in fields.get("run", []):
+            value = field["value"].strip()
+            if not value:
+                reasons.append(f"{step_name}: run field is empty")
+            elif _is_folded_block_scalar(value):
+                reasons.append(f"{step_name}: folded run scalar")
+        for field in fields.get("uses", []):
+            value = field["value"].strip()
+            if not value or _is_literal_block_scalar(value) or _is_folded_block_scalar(value):
+                reasons.append(f"{step_name}: uses field must be inline")
     return reasons
 
 
@@ -402,7 +422,7 @@ def _extract_run_script(step):
     field = fields[0]
     lines = step.splitlines()
     value = field["value"].strip()
-    if value not in {"|", ">", "|-", ">-", "|+", ">+"}:
+    if not _is_literal_block_scalar(value) and not _is_folded_block_scalar(value):
         return value
     script = []
     for body_line in lines[field["line"] + 1 :]:
@@ -495,6 +515,15 @@ def _executable_git_commands(script, verb):
             continue
         if tokens[:2] == ["git", verb]:
             yield tokens[2:]
+
+
+def _git_global_option_reasons(workflow):
+    reasons = []
+    for step_name, step in _extract_workflow_steps(workflow):
+        for tokens in _normalized_shell_segments(_extract_run_script(step)):
+            if len(tokens) > 1 and tokens[0].lower() == "git" and tokens[1].startswith("-"):
+                reasons.append(f"{step_name}: git global option before verb")
+    return reasons
 
 
 def _git_add_paths(step):
@@ -1484,6 +1513,74 @@ steps:
     run: echo second
 """
         self.assertTrue(_workflow_step_layout_reasons(duplicate_fixture))
+        self.assertTrue(_workflow_contract_reasons(duplicate_fixture))
+
+    def test_git_global_options_are_rejected_but_direct_git_is_safe(self):
+        for command in (
+            "git -C . add index.html",
+            "git -c user.name=hidden commit -m hidden",
+            "git --git-dir=.git push origin main",
+            "git --work-tree=. push origin main",
+        ):
+            fixture = f"""
+      - name: Hidden git global option
+        run: {command}
+"""
+            with self.subTest(command=command):
+                self.assertTrue(_git_global_option_reasons(fixture))
+
+        safe_fixture = """
+      - name: Direct git
+        run: git commit -m direct
+"""
+        self.assertEqual([], _git_global_option_reasons(safe_fixture))
+
+    def test_run_and_uses_scalars_reject_folded_forms(self):
+        folded_fixtures = [
+            """
+      - name: Folded wrapper
+        run: >
+          bash -c "git commit -m hidden"
+""",
+            """
+      - name: Folded curl
+        run: >-
+          curl -X PUT remote/endpoint
+""",
+            """
+      - name: Folded upload action
+        uses: >
+          actions/upload-artifact@v4
+""",
+        ]
+        for fixture in folded_fixtures:
+            with self.subTest(fixture=fixture):
+                self.assertTrue(_workflow_step_layout_reasons(fixture))
+
+        self.assertEqual([], _workflow_step_layout_reasons(self.workflow))
+
+    def test_duplicate_top_level_security_fields_reject_the_workflow_contract(self):
+        duplicate_fixture = """
+steps:
+  - name: First name
+    name: Second name
+    uses: actions/checkout@v4
+    uses: actions/setup-python@v5
+    env:
+      SAFE: one
+    env:
+      SAFE: two
+    if: always()
+    if: success()
+    shell: bash
+    shell: sh
+    with:
+      first: value
+    with:
+      second: value
+"""
+        reasons = _workflow_step_layout_reasons(duplicate_fixture)
+        self.assertGreaterEqual(len(reasons), 5)
         self.assertTrue(_workflow_contract_reasons(duplicate_fixture))
 
     def test_shell_assignments_are_normalized_before_command_scans(self):
