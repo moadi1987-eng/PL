@@ -173,6 +173,114 @@ def _upload_bypass_reasons(source):
     return reasons
 
 
+def _has_executable_substitution(command):
+    single_quote = False
+    double_quote = False
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not single_quote:
+            escaped = True
+            index += 1
+            continue
+        if char == "#" and not single_quote and not double_quote:
+            break
+        if char == "'" and not double_quote:
+            single_quote = not single_quote
+        elif char == '"' and not single_quote:
+            double_quote = not double_quote
+        elif not single_quote and (char == "`" or command.startswith("$(", index)):
+            return True
+        index += 1
+    return False
+
+
+def _wrapper_bypass_reasons(workflow):
+    reasons = []
+    shell_names = {"bash", "sh", "zsh"}
+    powershell_names = {"pwsh", "powershell"}
+    wrapper_names = {"env", "command", "xargs", "eval", "exec", "source", "."}
+
+    def basename(token):
+        return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
+
+    for step_name, step in _extract_workflow_steps(workflow):
+        for command in _shell_commands(_extract_run_script(step)):
+            tokens = _shell_control_tokens(command)
+            if not tokens:
+                continue
+            if _has_executable_substitution(command):
+                reasons.append(f"{step_name}: command substitution")
+                continue
+            lowered = [token.lower() for token in tokens]
+            if lowered[0] in {"echo", "printf"}:
+                continue
+            executable_names = [basename(token) for token in tokens]
+            first = executable_names[0]
+            if first in wrapper_names:
+                reasons.append(f"{step_name}: shell wrapper {first}")
+                continue
+            if first in shell_names and any(token in {"-c", "-lc", "-ic"} for token in lowered[1:]):
+                reasons.append(f"{step_name}: shell interpreter wrapper {first}")
+                continue
+            if first in powershell_names and any(
+                token in {"-c", "-command", "/command", "-encodedcommand"}
+                for token in lowered[1:]
+            ):
+                reasons.append(f"{step_name}: PowerShell wrapper {first}")
+                continue
+            if first in {"cmd", "cmd.exe"} and any(token in {"/c", "/k"} for token in lowered[1:]):
+                reasons.append(f"{step_name}: cmd wrapper")
+    return reasons
+
+
+REQUIRED_GENERATED_PATHS = [
+    "index.html",
+    "website/pl_mobile.html",
+    "live.json",
+    "learning_history.json",
+    "ai_predictions.json",
+    "ai_weights.json",
+    "ai_predictions_laliga.json",
+    "ai_weights_laliga.json",
+    "ai_predictions_wc.json",
+    "ai_weights_wc.json",
+]
+
+
+def _workflow_contract_reasons(workflow):
+    wrapper_reasons = _wrapper_bypass_reasons(workflow)
+    if wrapper_reasons:
+        return wrapper_reasons
+    reasons = []
+    steps = _extract_workflow_steps(workflow)
+    try:
+        publish_step = _unique_workflow_step(steps, "Commit and push if changed")
+        build_step = _unique_workflow_step(steps, "Build dashboard")
+    except AssertionError as error:
+        return [str(error)]
+    if _count_executable_git_commands(workflow, "add") != 1:
+        reasons.append("workflow must have exactly one git add")
+    if _git_add_paths(publish_step) != REQUIRED_GENERATED_PATHS:
+        reasons.append("workflow git add paths are not exact")
+    if _count_executable_git_commands(workflow, "commit") != 1:
+        reasons.append("workflow must have exactly one git commit")
+    if not _has_global_rebase_push_retry(workflow):
+        reasons.append("workflow publish retry structure is invalid")
+    if _alternate_upload_paths(workflow):
+        reasons.append("workflow has an alternate upload path")
+    if _forbidden_workflow_env(workflow):
+        reasons.append("workflow has sensitive environment state")
+    if _forbidden_build_env(build_step):
+        reasons.append("build step has sensitive environment state")
+    return reasons
+
+
 def _extract_workflow_steps(workflow):
     lines = workflow.splitlines()
     headers = []
@@ -1046,6 +1154,65 @@ jobs:
           printf 'GH_TOKEN=quoted'
 """
         self.assertEqual(set(), _forbidden_workflow_env(safe_persistence_fixture))
+
+    def test_workflow_rejects_shell_wrappers_before_global_scans(self):
+        wrapper_fixtures = [
+            """
+      - name: Hidden git
+        run: bash -c 'git add index.html; git commit -m hidden; git push origin main'
+""",
+            """
+      - name: Hidden curl
+        run: env curl -X PUT remote/endpoint
+""",
+            """
+      - name: Hidden curl
+        run: command curl -X PUT remote/endpoint
+""",
+            """
+      - name: Hidden env
+        run: env -i GITHUB_TOKEN=secret python build.py
+""",
+            """
+      - name: Hidden shell
+        run: sh -c "git commit -m hidden"
+""",
+            """
+      - name: Hidden PowerShell
+        run: pwsh -Command "git push origin main"
+""",
+            """
+      - name: Hidden cmd
+        run: cmd /c "git push origin main"
+""",
+            """
+      - name: Hidden substitution
+        run: echo $(git push origin main)
+""",
+            """
+      - name: Hidden backtick
+        run: echo `git commit -m hidden`
+""",
+        ]
+        for fixture in wrapper_fixtures:
+            with self.subTest(fixture=fixture):
+                self.assertTrue(_wrapper_bypass_reasons(fixture))
+
+        safe_fixture = """
+      - name: Safe direct commands
+        run: |
+          # bash -c 'git push origin main'
+          echo 'command curl -X PUT remote/endpoint'
+          printf 'env GITHUB_TOKEN=quoted'
+          git status --short
+"""
+        self.assertEqual([], _wrapper_bypass_reasons(safe_fixture))
+        self.assertEqual([], _workflow_contract_reasons(self.workflow))
+        hidden_global = self.workflow + """
+      - name: Hidden global push
+        run: git push origin main
+"""
+        self.assertTrue(_workflow_contract_reasons(hidden_global))
 
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
