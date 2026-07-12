@@ -560,6 +560,29 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["v4"])
 
 
+    def test_league_learning_replaces_stale_verified_lifecycle_counts(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+
+        namespace["_prepare_persistent_competition"] = lambda **kwargs: (
+            {}, {}, {"model_comparison": {"total": 0}, "model_status": {}}, {}
+        )
+        namespace["atomic_save_json"] = lambda *args: None
+        stale_history = {
+            "pl": {"model_comparison": {"total": 108}, "model_status": {"verified_lifecycle_samples": 108}},
+            "laliga": {"model_comparison": {"total": 108}, "model_status": {"verified_lifecycle_samples": 108}},
+        }
+
+        updated = namespace["run_league_learning"]([], {}, [], {}, stale_history)
+
+        self.assertEqual(0, updated["pl"]["model_status"]["verified_lifecycle_samples"])
+        self.assertEqual(0, updated["laliga"]["model_status"]["verified_lifecycle_samples"])
+        self.assertEqual(108, updated["pl"]["model_comparison"]["total"])
+
+
 class LearningEmbeddingTests(unittest.TestCase):
     def test_learning_runtime_embedding_is_compact_safe_and_complete(self):
         from website.learning_embed import embed_learning_runtime
@@ -604,6 +627,7 @@ class LearningEmbeddingTests(unittest.TestCase):
         self.assertNotIn("function activeCalibration(){", template)
         self.assertNotIn("function scoreModelChoice(){", template)
         self.assertIn("verified_lifecycle_samples", template)
+        self.assertNotIn("lgData&&lgData.model_comparison&&lgData.model_comparison.total", template)
         self.assertIn("if(verified===0)complete=null", template)
         self.assertIn("trainedMatches", template)
         self.assertIn("var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0", template)

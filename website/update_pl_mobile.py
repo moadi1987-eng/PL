@@ -1489,6 +1489,19 @@ def _compact_pl_learning_fixtures(fixtures):
     } for fixture in fixtures if fixture.get("id") is not None]
 
 
+def _set_verified_lifecycle_samples(league_history):
+    league_history = league_history if isinstance(league_history, dict) else {}
+    comparison = league_history.get("model_comparison") or {}
+    try:
+        verified_samples = max(0, int(comparison.get("total", 0)))
+    except (TypeError, ValueError):
+        verified_samples = 0
+    status = copy.deepcopy(league_history.get("model_status") or {})
+    status["verified_lifecycle_samples"] = verified_samples
+    league_history["model_status"] = status
+    return league_history
+
+
 def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
     now = datetime.now(timezone.utc)
     compact_pl = _compact_pl_learning_fixtures(pl_fixtures)
@@ -1508,6 +1521,8 @@ def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
         snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_ll, ll_teams, model, "laliga"),
         model_trainer=train_factor_model, default_model=default_model_state("laliga"),
     )
+    pl_history = _set_verified_lifecycle_samples(pl_history)
+    ll_history = _set_verified_lifecycle_samples(ll_history)
     history = merge_learning_history(history, "pl", pl_history)
     history = merge_learning_history(history, "laliga", ll_history)
     atomic_save_json(PL_PREDICTIONS_FILE, pl_store)

@@ -8,7 +8,12 @@ function learningRuntimeCopy(value){
   return out;
 }
 function learningRuntimePlainObject(value){
-  return !!value&&Object.prototype.toString.call(value)==="[object Object]";
+  if(!value||Object.prototype.toString.call(value)!=="[object Object]")return false;
+  var prototype=Object.getPrototypeOf(value);
+  if(prototype===null)return true;
+  if(!Object.prototype.hasOwnProperty.call(prototype,"constructor"))return false;
+  var constructor=prototype.constructor;
+  return typeof constructor==="function"&&Function.prototype.toString.call(constructor)===Function.prototype.toString.call(Object);
 }
 function learningRuntimeFinite(value){
   return typeof value==="number"&&isFinite(value);

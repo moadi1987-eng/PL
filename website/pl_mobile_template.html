@@ -1825,9 +1825,8 @@ function aiModelComparison(cmp){
 function aiStatusText(value){return String(value==null?"":value).replace(/[&<>"']/g,function(ch){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]})}
 function aiStatusNumber(value){return typeof value==="number"&&isFinite(value)?value:null}
 function aiStatusMetric(box,key,suffix){var n=aiStatusNumber((box||{})[key]);return n===null?"-":n+(suffix||"")}
-function aiVerifiedSamples(status,lgData,league){
+function aiVerifiedSamples(status){
   var verified=aiStatusNumber((status||{}).verified_lifecycle_samples);
-  if(verified===null&&league!=="wc")verified=aiStatusNumber(lgData&&lgData.model_comparison&&lgData.model_comparison.total);
   return Math.max(0,Math.floor(verified===null?0:verified));
 }
 function aiModelStatus(lgData,modelCmp){
@@ -1836,7 +1835,7 @@ function aiModelStatus(lgData,modelCmp){
   var models=(modelCmp&&modelCmp.models)||{};
   if(!Object.keys(models).length&&modelCmp)models={baseline:modelCmp.baseline||{},v4:modelCmp.challenger||{}};
   var activeBox=models[active]||{},candidateBox=models[candidate]||{};
-  var verified=aiVerifiedSamples(status,lgData,D.league);
+  var verified=aiVerifiedSamples(status);
   var phase=choice.status||"collecting",label=phase==="promote"?"Promoted":phase==="winner_guard"?"Held: direction guard":phase==="points_guard"?"Held: points guard":"Collecting "+Math.min(verified,30)+"/30";
   var meta=(lgData&&lgData.model_meta)||state.meta||{},trained=meta.last_trained_at||"not trained";
   var complete=aiStatusNumber(lgData&&lgData.data_completeness_pct);if(verified===0)complete=null;
@@ -1880,7 +1879,7 @@ function rAI(){
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
   var wts=activeWeights(),cal=activeCalibration(),modelState=learningModelState(lgKey),meta=(lgData.model_meta||modelState.meta||{});
   var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
-  var trainedMatches=aiStatusNumber(meta.trained_matches),verifiedSamples=aiVerifiedSamples(lgData.model_status,lgData,lgKey);
+  var trainedMatches=aiStatusNumber(meta.trained_matches),verifiedSamples=aiVerifiedSamples(lgData.model_status);
   var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0;
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';

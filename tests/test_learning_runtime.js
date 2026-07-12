@@ -108,6 +108,31 @@ assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), 
 assert.strictEqual(context.scoreModelChoice().strategy, 'v4');
 assert.notStrictEqual(context.activeWeights().strength, models.pl.factors.strength);
 
+class EmbeddedModel {
+  constructor() {
+    this.factors = { strength: 0.91 };
+    this.calibration = { goal_mult: 1.19 };
+  }
+}
+context.D.league = 'pl';
+context.EMBEDDED_MODELS = { pl: new EmbeddedModel() };
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), defaultCalibrationValues);
+const customPrototype = { factors: { strength: 0.92 }, calibration: { goal_mult: 1.18 } };
+context.EMBEDDED_MODELS = { pl: Object.create(customPrototype) };
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
+const nullModelMap = Object.create(null);
+const nullModel = Object.create(null);
+nullModel.factors = { strength: 0.51 };
+nullModel.calibration = { goal_mult: 1.05 };
+nullModelMap.pl = nullModel;
+context.EMBEDDED_MODELS = nullModelMap;
+assert.strictEqual(context.activeWeights().strength, 0.51);
+assert.strictEqual(context.activeCalibration().goal_mult, 1.05);
+context.EMBEDDED_MODELS = { pl: { factors: { strength: 0.41 }, calibration: { goal_mult: 1.04 } } };
+assert.strictEqual(context.activeWeights().strength, 0.41);
+assert.strictEqual(context.activeCalibration().goal_mult, 1.04);
+
 const template = fs.readFileSync('website/pl_mobile_template.html', 'utf8');
 const statusSource = template.slice(template.indexOf('function aiStatusText'), template.indexOf('function aiTrendChart'));
 const renderContext = {
@@ -137,8 +162,20 @@ const localOnlyStatus = renderContext.aiModelStatus(
 );
 assert.match(localOnlyStatus, /Collecting 0\/30/);
 assert.match(localOnlyStatus, /Trusted inputs unavailable/);
+const stalePlStatus = renderContext.aiModelStatus(
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4' }, data_completeness_pct: 100, model_comparison: { total: 108 } },
+  { total: 108, models: { baseline: {}, v4: {} } },
+);
+assert.match(stalePlStatus, /Collecting 0\/30/);
+assert.match(stalePlStatus, /Trusted inputs unavailable/);
+const explicitLifecycleStatus = renderContext.aiModelStatus(
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 4 }, data_completeness_pct: 76.5, model_comparison: { total: 108 } },
+  { total: 108, models: { baseline: {}, v4: {} } },
+);
+assert.match(explicitLifecycleStatus, /Collecting 4\/30/);
+assert.match(explicitLifecycleStatus, /76\.5%/);
 const verifiedStatus = renderContext.aiModelStatus(
-  { model_status: renderContext.LEARNING_HISTORY.laliga.model_status, data_completeness_pct: 76.5, model_comparison: { total: 2 } },
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 2 }, data_completeness_pct: 76.5, model_comparison: { total: 2 } },
   { total: 2, models: { baseline: {}, v4: {} } },
 );
 assert.match(verifiedStatus, /76\.5%/);
