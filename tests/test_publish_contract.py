@@ -196,10 +196,7 @@ def _shell_commands(script):
 def _shell_invocations(script):
     controls = {";", "&&", "||", "(", ")", "|"}
     for command in _shell_commands(script):
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        tokens = list(lexer)
+        tokens = _shell_control_tokens(command)
         current = []
         for token in tokens:
             if token in controls:
@@ -210,6 +207,13 @@ def _shell_invocations(script):
                 current.append(token)
         if current:
             yield current
+
+
+def _shell_control_tokens(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    return list(lexer)
 
 
 def _executable_git_commands(script, verb):
@@ -300,21 +304,79 @@ def _has_concurrency_group(workflow):
 
 
 def _has_rebase_push_retry(step):
-    pulls = []
-    pushes = []
-    script = _extract_run_script(step)
-    for tokens in _shell_invocations(script):
-        if len(tokens) >= 2 and tokens[0:2] == ["git", "pull"]:
-            pulls.append(tokens[2:])
-        if len(tokens) >= 2 and tokens[0:2] == ["git", "push"]:
-            pushes.append(tokens[2:])
-    pull_ok = [
-        args
-        for args in pulls
-        if {"--rebase", "--autostash", "origin", "main"}.issubset(args)
-    ]
-    push_ok = [args for args in pushes if {"origin", "main"}.issubset(args)]
-    return len(pull_ok) >= 2 and len(push_ok) >= 2
+    controls = {";", "&&", "||", "(", ")", "|"}
+
+    def command_end(tokens, start):
+        end = start + 2
+        while end < len(tokens) and tokens[end] not in controls:
+            end += 1
+        return end
+
+    def git_commands(tokens):
+        commands = []
+        index = 0
+        while index < len(tokens) - 1:
+            if tokens[index] != "git" or tokens[index + 1] not in {"pull", "push"}:
+                index += 1
+                continue
+            end = command_end(tokens, index)
+            commands.append((tokens[index + 1], tokens[index + 2 : end], index))
+            index = end
+        return commands
+
+    for command in _shell_commands(_extract_run_script(step)):
+        tokens = _shell_control_tokens(command)
+        for index, token in enumerate(tokens[:-1]):
+            if token != "git" or tokens[index + 1] != "push":
+                continue
+            end = command_end(tokens, index)
+            if end >= len(tokens) or tokens[end] != "||":
+                continue
+            initial_args = tokens[index + 2 : end]
+            if not {"origin", "main"}.issubset(initial_args):
+                continue
+
+            branch_start = end + 1
+            branch_end = len(tokens)
+            branch_tokens = tokens[branch_start:]
+            if branch_tokens and branch_tokens[0] == "(":
+                depth = 0
+                closing = None
+                for offset, branch_token in enumerate(branch_tokens):
+                    if branch_token == "(":
+                        depth += 1
+                    elif branch_token == ")":
+                        depth -= 1
+                        if depth == 0:
+                            closing = offset
+                            break
+                if closing is None:
+                    continue
+                branch_end = branch_start + closing + 1
+                branch_tokens = branch_tokens[1:closing]
+            else:
+                branch_tokens = branch_tokens[:]
+
+            branch_commands = git_commands(branch_tokens)
+            pulls = [item for item in branch_commands if item[0] == "pull"]
+            pushes = [item for item in branch_commands if item[0] == "push"]
+            if len(pulls) != 1 or len(pushes) != 1:
+                continue
+            pull = pulls[0]
+            retry_push = pushes[0]
+            if pull[2] >= retry_push[2] or not {
+                "--rebase",
+                "--autostash",
+                "origin",
+                "main",
+            }.issubset(pull[1]):
+                continue
+            if not {"origin", "main"}.issubset(retry_push[1]):
+                continue
+            if branch_end <= branch_start:
+                continue
+            return True
+    return False
 
 
 def _alternate_upload_paths(workflow):
@@ -322,20 +384,60 @@ def _alternate_upload_paths(workflow):
 
     def has_upload_method(tokens):
         lowered = [token.lower() for token in tokens]
+        upload_values = {method.lower() for method in UPLOAD_METHODS}
         for index, token in enumerate(lowered):
-            if token in {"--request", "--method", "-x"} and index + 1 < len(lowered):
-                if lowered[index + 1] in {method.lower() for method in UPLOAD_METHODS}:
+            if token in {"--request", "--method"} and index + 1 < len(lowered):
+                if lowered[index + 1] in upload_values:
                     return True
             for prefix in ("--request=", "--method="):
-                if token.startswith(prefix) and token[len(prefix) :] in {
-                    method.lower() for method in UPLOAD_METHODS
-                }:
+                if token.startswith(prefix) and token[len(prefix) :] in upload_values:
                     return True
-            if token.startswith("-x") and token[2:] in {
-                method.lower() for method in UPLOAD_METHODS
-            }:
+            original = tokens[index]
+            if original == "-X" and index + 1 < len(tokens):
+                if lowered[index + 1] in upload_values:
+                    return True
+            if original.startswith("-X") and len(original) > 2:
+                if original[2:].lower() in upload_values:
+                    return True
+        return False
+
+    def has_write_flag(tokens, flags):
+        long_flags = {flag.lower() for flag in flags if flag.startswith("--")}
+        short_flags = {flag for flag in flags if flag.startswith("-") and not flag.startswith("--")}
+        for raw_token in tokens:
+            token = raw_token.lower()
+            if token in long_flags:
+                return True
+            if any(token.startswith(flag + "=") for flag in long_flags):
+                return True
+            if any(
+                raw_token == flag
+                or (len(raw_token) > len(flag) and raw_token.startswith(flag))
+                for flag in short_flags
+            ):
                 return True
         return False
+
+    curl_write_flags = {
+        "-d",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-urlencode",
+        "-T",
+        "--upload-file",
+        "-F",
+        "--form",
+    }
+    gh_write_flags = {
+        "-f",
+        "--raw-field",
+        "-F",
+        "--field",
+        "--input",
+        "-d",
+        "--data",
+    }
 
     for step_name, step in _extract_workflow_steps(workflow).items():
         for line in step.splitlines():
@@ -347,10 +449,12 @@ def _alternate_upload_paths(workflow):
             method_upload = has_upload_method(tokens)
             if lowered and lowered[0] in {"echo", "printf"}:
                 continue
-            if "gh" in lowered and "api" in lowered:
+            gh_write = has_write_flag(tokens, gh_write_flags)
+            curl_write = has_write_flag(tokens, curl_write_flags)
+            if "gh" in lowered and "api" in lowered and (method_upload or gh_write):
                 findings.append(f"{step_name}: gh api upload")
             if lowered and lowered[0] == "curl" and (
-                method_upload or "--upload-file" in lowered or "-t" in lowered
+                method_upload or curl_write
             ):
                 findings.append(f"{step_name}: curl upload")
     return findings
@@ -529,6 +633,31 @@ class PublishContractTests(unittest.TestCase):
 """
         self.assertEqual(1, _count_executable_git_commands(comment_fixture, "commit"))
 
+        unrelated_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main
+          git pull --rebase --autostash origin main
+          git push origin main
+          git pull --rebase --autostash origin main
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(unrelated_fixture)["Commit and push if changed"]
+            )
+        )
+
+        malformed_order_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git push origin main || (git push origin main && git pull --rebase --autostash origin main)
+"""
+        self.assertFalse(
+            _has_rebase_push_retry(
+                _extract_workflow_steps(malformed_order_fixture)["Commit and push if changed"]
+            )
+        )
+
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
         fixture = """
@@ -551,10 +680,15 @@ class PublishContractTests(unittest.TestCase):
           curl --method=PUT remote/endpoint
           curl --method post remote/endpoint
           curl -XPUT remote/endpoint
-          curl -x patch remote/endpoint
           curl -X DELETE remote/endpoint
+          curl -d payload remote/endpoint
+          curl --data=payload remote/endpoint
+          curl -T file remote/endpoint
+          curl --upload-file=file remote/endpoint
+          curl -F field=value remote/endpoint
+          curl --form=field=value remote/endpoint
 """
-        self.assertGreaterEqual(len(_alternate_upload_paths(method_fixture)), 9)
+        self.assertGreaterEqual(len(_alternate_upload_paths(method_fixture)), 14)
 
         safe_text_fixture = """
       - name: Safe text
@@ -562,8 +696,24 @@ class PublishContractTests(unittest.TestCase):
           # gh api --method=PUT remote/endpoint
           echo curl -XPUT remote/endpoint
           printf 'gh api --method=POST remote/endpoint'
+          curl -x patch remote/endpoint
+          curl -f remote/endpoint
+          curl -t remote/endpoint
+          curl https://example.invalid/read
+          gh api repos/x/read
 """
         self.assertEqual([], _alternate_upload_paths(safe_text_fixture))
+
+        gh_data_fixture = """
+      - name: API writes
+        run: |
+          gh api -f key=value remote/endpoint
+          gh api --raw-field=key=value remote/endpoint
+          gh api -F key=value remote/endpoint
+          gh api --field=key=value remote/endpoint
+          gh api --input payload.json remote/endpoint
+"""
+        self.assertGreaterEqual(len(_alternate_upload_paths(gh_data_fixture)), 5)
 
 if __name__ == "__main__":
     unittest.main()
