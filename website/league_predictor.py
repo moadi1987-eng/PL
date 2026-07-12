@@ -4,7 +4,10 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from numbers import Real
 
-from website.league_learning import competition_rule
+if __package__:
+    from .league_learning import competition_rule
+else:
+    from league_learning import competition_rule
 
 
 DEFAULT_FACTORS = {

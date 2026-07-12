@@ -1,5 +1,8 @@
 import copy
 import math
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +18,22 @@ from website.league_predictor import (
 
 
 class LeaguePredictorTests(unittest.TestCase):
+    def test_top_level_predictor_import_supports_direct_dashboard_build(self):
+        root = Path(__file__).resolve().parents[1]
+        website = root / "website"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, sys.argv[1]); import league_predictor; print(league_predictor.competition_rule('pl', {}))",
+                str(website),
+            ],
+            cwd=root / "tests",
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def setUp(self):
         self.teams = {
             1: {"id": 1, "s": "AAA", "sah": 1250, "sdh": 1180, "saa": 1190, "sda": 1160},
