@@ -361,6 +361,34 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertFalse(model["status"]["promote"])
         self.assertEqual(0, model["comparison"]["total"])
 
+    def test_evolved_history_uses_retained_gameweek_accuracy_when_comparison_is_empty(self):
+        matches = {}
+        fixtures = []
+        for match_id in range(108):
+            round_id = match_id // 10 + 1
+            matches[str(match_id)] = {
+                "match_id": match_id,
+                "round": round_id,
+                "legacy": True,
+                "checked": True,
+                "active_strategy_at_lock": "baseline",
+                "picks": {"baseline": {"winner": "home", "home_score": 1, "away_score": 0}},
+                "evaluations": {"baseline": {"winner_correct": match_id < 54, "exact": False, "points": 3 if match_id < 54 else 0}},
+            }
+            fixtures.append({"id": match_id, "e": round_id, "fin": True, "hs": 1, "as": 0})
+
+        _, _, history, _ = evolve_competition_state(
+            league="pl", fixtures=fixtures, store={"version": 4, "matches": matches}, model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+
+        self.assertEqual(11, len(history["gw_results"]))
+        self.assertEqual(108, sum(row["total"] for row in history["gw_results"]))
+        self.assertEqual(54, sum(row["correct_winner"] for row in history["gw_results"]))
+        self.assertEqual(0, history["model_comparison"]["total"])
+        self.assertEqual(50.0, history["overall_accuracy"])
+
     def test_wc_v4_active_prediction_preserves_its_historical_points(self):
         raw = {
             "version": 4,

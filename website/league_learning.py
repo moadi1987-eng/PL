@@ -55,6 +55,22 @@ def score_pick(pick, fixture, rule):
     }
 
 
+def _gameweek_accuracy(gw_results):
+    total = correct = 0
+    for row in gw_results if isinstance(gw_results, list) else []:
+        if not isinstance(row, dict):
+            continue
+        row_total = row.get("total")
+        row_correct = row.get("correct_winner")
+        if not all(isinstance(value, Real) and not isinstance(value, bool) for value in (row_total, row_correct)):
+            continue
+        if row_total <= 0:
+            continue
+        total += row_total
+        correct += row_correct
+    return round(correct / total * 100, 1) if total else None
+
+
 def comparison_summary(rows, active_strategy, candidate_strategy):
     strategies = (active_strategy, candidate_strategy)
     metrics = {name: {"winner_correct": 0, "exact_correct": 0, "points": 0, "scores": Counter()} for name in strategies}
@@ -390,9 +406,12 @@ def evolve_competition_state(
         row["accuracy_pct"] = round(row["correct_winner"] / max(row["total"], 1) * 100, 1)
         row["score_acc_pct"] = round(row["correct_score"] / max(row["total"], 1) * 100, 1)
         gw_results.append(row)
+    overall_accuracy = _gameweek_accuracy(gw_results)
+    if overall_accuracy is None:
+        overall_accuracy = comparison["models"].get(model["active_strategy"], {}).get("winner_accuracy", 0)
     history = {
         "gw_results": gw_results,
-        "overall_accuracy": comparison["models"].get(model["active_strategy"], {}).get("winner_accuracy", 0),
+        "overall_accuracy": overall_accuracy,
         "total_evaluated": sum(row["total"] for row in gw_results),
         "current_weights": model.get("factors", {}),
         "calibration": model.get("calibration", {}),
@@ -470,6 +489,9 @@ def merge_learning_history(history, league, league_history):
         ):
             continue
         combined[key] = value
+    overall_accuracy = _gameweek_accuracy(combined.get("gw_results"))
+    if overall_accuracy is not None:
+        combined["overall_accuracy"] = overall_accuracy
     merged[league] = combined
     return merged
 

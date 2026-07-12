@@ -219,6 +219,31 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual("keep", merged["pl"]["user_guess_note"])
         self.assertEqual(1, merged["pl"]["snapshots_locked"])
 
+    def test_merge_recomputes_accuracy_from_retained_gameweek_results(self):
+        retained_rows = [
+            {"gw": gw, "total": 10 if gw < 11 else 8, "correct_winner": 5 if gw < 11 else 4}
+            for gw in range(1, 12)
+        ]
+        merged = merge_learning_history(
+            {"pl": {"gw_results": retained_rows, "overall_accuracy": 50.0}},
+            "pl",
+            {"gw_results": [], "overall_accuracy": 0.0, "model_comparison": {"total": 0}},
+        )
+
+        self.assertEqual(11, len(merged["pl"]["gw_results"]))
+        self.assertEqual(108, sum(row["total"] for row in merged["pl"]["gw_results"]))
+        self.assertEqual(54, sum(row["correct_winner"] for row in merged["pl"]["gw_results"]))
+        self.assertEqual(50.0, merged["pl"]["overall_accuracy"])
+
+    def test_merge_keeps_genuine_zero_accuracy_from_evaluated_rows(self):
+        merged = merge_learning_history(
+            {"pl": {"gw_results": [{"gw": 1, "total": 10, "correct_winner": 5}], "overall_accuracy": 50.0}},
+            "pl",
+            {"gw_results": [{"gw": 2, "total": 8, "correct_winner": 0}], "overall_accuracy": 50.0, "model_comparison": {"total": 0}},
+        )
+
+        self.assertEqual(0.0, merged["pl"]["overall_accuracy"])
+
     def test_wc_adapter_uses_shared_lifecycle_and_preserves_history(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")
