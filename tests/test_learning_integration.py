@@ -244,6 +244,34 @@ class PersistentCompetitionTests(unittest.TestCase):
 
         self.assertEqual(0.0, merged["pl"]["overall_accuracy"])
 
+    def test_merge_preserves_comparison_only_accuracy_without_incoming_evidence(self):
+        merged = merge_learning_history(
+            {"wc": {"gw_results": [], "overall_accuracy": 64.6, "total_evaluated": 65, "model_comparison": {"total": 65}}},
+            "wc",
+            {"gw_results": [], "overall_accuracy": 0.0, "total_evaluated": 0, "model_comparison": {"total": 0}},
+        )
+
+        self.assertEqual(64.6, merged["wc"]["overall_accuracy"])
+        self.assertEqual(65, merged["wc"]["model_comparison"]["total"])
+
+    def test_merge_uses_new_comparison_accuracy_without_gameweek_rows(self):
+        merged = merge_learning_history(
+            {"wc": {"gw_results": [], "overall_accuracy": 64.6, "total_evaluated": 65, "model_comparison": {"total": 65}}},
+            "wc",
+            {
+                "gw_results": [],
+                "overall_accuracy": 0.0,
+                "total_evaluated": 1,
+                "model_comparison": {
+                    "total": 1,
+                    "active_strategy": "v4",
+                    "models": {"v4": {"winner_accuracy": 100.0}},
+                },
+            },
+        )
+
+        self.assertEqual(100.0, merged["wc"]["overall_accuracy"])
+
     def test_wc_adapter_uses_shared_lifecycle_and_preserves_history(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")

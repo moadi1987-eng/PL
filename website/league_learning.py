@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import tempfile
 from collections import Counter
@@ -55,6 +56,14 @@ def score_pick(pick, fixture, rule):
     }
 
 
+def _finite_number(value):
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _positive_evaluation_count(value):
+    return _finite_number(value) and value > 0
+
+
 def _gameweek_accuracy(gw_results):
     total = correct = 0
     for row in gw_results if isinstance(gw_results, list) else []:
@@ -62,13 +71,34 @@ def _gameweek_accuracy(gw_results):
             continue
         row_total = row.get("total")
         row_correct = row.get("correct_winner")
-        if not all(isinstance(value, Real) and not isinstance(value, bool) for value in (row_total, row_correct)):
+        if not all(_finite_number(value) for value in (row_total, row_correct)):
             continue
         if row_total <= 0:
             continue
         total += row_total
         correct += row_correct
     return round(correct / total * 100, 1) if total else None
+
+
+def _comparison_accuracy(history):
+    comparison = history.get("model_comparison") if isinstance(history, dict) else None
+    if not isinstance(comparison, dict) or not _positive_evaluation_count(comparison.get("total")):
+        return None
+    active = comparison.get("active_strategy")
+    models = comparison.get("models")
+    metrics = models.get(active) if isinstance(models, dict) and isinstance(active, str) else None
+    accuracy = metrics.get("winner_accuracy") if isinstance(metrics, dict) else None
+    return round(accuracy, 1) if _finite_number(accuracy) else None
+
+
+def _has_accuracy_evidence(history):
+    comparison = history.get("model_comparison") if isinstance(history, dict) else None
+    comparison_total = comparison.get("total") if isinstance(comparison, dict) else None
+    return (
+        _gameweek_accuracy(history.get("gw_results") if isinstance(history, dict) else None) is not None
+        or _positive_evaluation_count(comparison_total)
+        or _positive_evaluation_count(history.get("total_evaluated") if isinstance(history, dict) else None)
+    )
 
 
 def comparison_summary(rows, active_strategy, candidate_strategy):
@@ -476,8 +506,11 @@ def merge_learning_history(history, league, league_history):
     existing = merged.get(league)
     combined = copy.deepcopy(existing) if isinstance(existing, dict) else {}
     incoming = copy.deepcopy(league_history) if isinstance(league_history, dict) else {}
+    incoming_has_evidence = _has_accuracy_evidence(incoming)
 
     for key, value in incoming.items():
+        if key == "overall_accuracy" and not incoming_has_evidence and _finite_number(combined.get(key)):
+            continue
         if key == "gw_results" and not value and combined.get(key):
             continue
         if (
@@ -492,6 +525,8 @@ def merge_learning_history(history, league, league_history):
     overall_accuracy = _gameweek_accuracy(combined.get("gw_results"))
     if overall_accuracy is not None:
         combined["overall_accuracy"] = overall_accuracy
+    elif (comparison_accuracy := _comparison_accuracy(incoming)) is not None:
+        combined["overall_accuracy"] = comparison_accuracy
     merged[league] = combined
     return merged
 
