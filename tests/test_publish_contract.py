@@ -205,37 +205,46 @@ def _wrapper_bypass_reasons(workflow):
     shell_names = {"bash", "sh", "zsh"}
     powershell_names = {"pwsh", "powershell"}
     wrapper_names = {"env", "command", "xargs", "eval", "exec", "source", "."}
+    control_prefixes = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
 
     def basename(token):
         return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower()
 
     for step_name, step in _extract_workflow_steps(workflow):
         for command in _shell_commands(_extract_run_script(step)):
-            tokens = _shell_control_tokens(command)
-            if not tokens:
-                continue
             if _has_executable_substitution(command):
                 reasons.append(f"{step_name}: command substitution")
                 continue
-            lowered = [token.lower() for token in tokens]
-            if lowered[0] in {"echo", "printf"}:
-                continue
-            executable_names = [basename(token) for token in tokens]
-            first = executable_names[0]
-            if first in wrapper_names:
-                reasons.append(f"{step_name}: shell wrapper {first}")
-                continue
-            if first in shell_names and any(token in {"-c", "-lc", "-ic"} for token in lowered[1:]):
-                reasons.append(f"{step_name}: shell interpreter wrapper {first}")
-                continue
-            if first in powershell_names and any(
-                token in {"-c", "-command", "/command", "-encodedcommand"}
-                for token in lowered[1:]
-            ):
-                reasons.append(f"{step_name}: PowerShell wrapper {first}")
-                continue
-            if first in {"cmd", "cmd.exe"} and any(token in {"/c", "/k"} for token in lowered[1:]):
-                reasons.append(f"{step_name}: cmd wrapper")
+            for tokens in _shell_invocations(command):
+                if not tokens:
+                    continue
+                first_index = 0
+                while first_index < len(tokens) and tokens[first_index].lower() in control_prefixes:
+                    first_index += 1
+                if first_index == len(tokens):
+                    continue
+                lowered = [token.lower() for token in tokens[first_index:]]
+                first = basename(tokens[first_index])
+                if first in {"echo", "printf"}:
+                    continue
+                if first in wrapper_names:
+                    reasons.append(f"{step_name}: shell wrapper {first}")
+                    continue
+                if first in shell_names and any(
+                    token in {"-c", "-lc", "-ic"} for token in lowered[1:]
+                ):
+                    reasons.append(f"{step_name}: shell interpreter wrapper {first}")
+                    continue
+                if first in powershell_names and any(
+                    token in {"-c", "-command", "/command", "-encodedcommand"}
+                    for token in lowered[1:]
+                ):
+                    reasons.append(f"{step_name}: PowerShell wrapper {first}")
+                    continue
+                if first in {"cmd", "cmd.exe"} and any(
+                    token in {"/c", "/k"} for token in lowered[1:]
+                ):
+                    reasons.append(f"{step_name}: cmd wrapper")
     return reasons
 
 
@@ -283,21 +292,57 @@ def _workflow_contract_reasons(workflow):
 
 def _extract_workflow_steps(workflow):
     lines = workflow.splitlines()
-    headers = []
+    step_scopes = []
     for index, line in enumerate(lines):
-        match = re.match(r"^(?P<indent>[ \t]*)-\s+name:\s*(?P<name>.+?)\s*$", line)
-        if match:
-            name = match.group("name").strip().strip("'\"")
-            headers.append((index, len(match.group("indent")), name))
-    steps = []
-    for position, (start, indent, name) in enumerate(headers):
+        match = re.match(r"^(?P<indent>[ \t]*)steps:\s*$", line)
+        if not match:
+            continue
+        scope_indent = len(match.group("indent"))
         end = len(lines)
-        for next_start, next_indent, _ in headers[position + 1 :]:
-            if next_indent == indent:
-                end = next_start
+        for next_index, next_line in enumerate(lines[index + 1 :], index + 1):
+            if next_line.strip() and len(next_line) - len(next_line.lstrip(" \t")) <= scope_indent:
+                end = next_index
                 break
-        steps.append((name, "\n".join(lines[start:end])))
-    return steps
+        step_scopes.append((index + 1, end, scope_indent))
+
+    if not step_scopes:
+        step_scopes = [(0, len(lines), -1)]
+
+    entries = []
+    unnamed_index = 0
+    for scope_start, scope_end, scope_indent in step_scopes:
+        candidates = []
+        for index in range(scope_start, scope_end):
+            match = re.match(
+                r"^(?P<indent>[ \t]*)-\s+(?P<key>name|run|uses):\s*(?P<value>.*?)\s*$",
+                lines[index],
+            )
+            if not match:
+                continue
+            item_indent = len(match.group("indent"))
+            if scope_indent >= 0 and item_indent <= scope_indent:
+                continue
+            candidates.append((index, item_indent, match.group("key"), match.group("value")))
+
+        if not candidates:
+            continue
+        step_indent = min(item_indent for _, item_indent, _, _ in candidates)
+        headers = [candidate for candidate in candidates if candidate[1] == step_indent]
+        for position, (start, indent, key, value) in enumerate(headers):
+            if key == "name":
+                name = value.strip().strip("'\"")
+            else:
+                name = f"<unnamed-step-{unnamed_index}>"
+                unnamed_index += 1
+            end = scope_end
+            for next_start, next_indent, _, _ in headers[position + 1 :]:
+                if next_indent == indent:
+                    end = next_start
+                    break
+            entries.append((start, name, "\n".join(lines[start:end])))
+
+    entries.sort(key=lambda entry: entry[0])
+    return [(name, block) for _, name, block in entries]
 
 
 def _unique_workflow_step(steps, name):
@@ -310,7 +355,7 @@ def _unique_workflow_step(steps, name):
 def _extract_run_script(step):
     lines = step.splitlines()
     for index, line in enumerate(lines):
-        match = re.match(r"^(?P<indent>[ \t]*)run:\s*(?P<value>.*)$", line)
+        match = re.match(r"^(?P<indent>[ \t]*)(?:-\s+)?run:\s*(?P<value>.*)$", line)
         if not match:
             continue
         value = match.group("value").strip()
@@ -682,7 +727,7 @@ def _alternate_upload_paths(workflow):
 
     for step_name, step in _extract_workflow_steps(workflow):
         for line in step.splitlines():
-            uses_match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
+            uses_match = re.match(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)", line)
             if uses_match and "upload" in uses_match.group(1).lower():
                 findings.append(f"{step_name}: alternate action")
         for tokens in _shell_invocations(_extract_run_script(step)):
@@ -1193,6 +1238,14 @@ jobs:
       - name: Hidden backtick
         run: echo `git commit -m hidden`
 """,
+            """
+      - name: Hidden chained wrapper
+        run: echo ok; env curl -X PUT remote/endpoint
+""",
+            """
+      - name: Hidden conditional wrapper
+        run: if true; then ! bash -c "git push origin main"; fi
+""",
         ]
         for fixture in wrapper_fixtures:
             with self.subTest(fixture=fixture):
@@ -1213,6 +1266,48 @@ jobs:
         run: git push origin main
 """
         self.assertTrue(_workflow_contract_reasons(hidden_global))
+
+    def test_shell_segments_ignore_quoted_text_but_scan_each_command(self):
+        safe_fixture = """
+      - name: Safe shell segments
+        run: |
+          echo "quoted; env curl -X PUT remote/endpoint"
+          printf 'if true; then bash -c "git push"; fi'
+          echo ok; printf 'still safe'
+"""
+        self.assertEqual([], _wrapper_bypass_reasons(safe_fixture))
+
+        chained_fixture = """
+      - name: Chained hidden command
+        run: echo ok && bash -c "git add index.html"
+"""
+        self.assertTrue(_wrapper_bypass_reasons(chained_fixture))
+
+    def test_unnamed_workflow_steps_are_ordered_and_scanned(self):
+        malicious_fixture = """
+jobs:
+  update:
+    steps:
+      - run: bash -c "git commit -m hidden"
+      - uses: actions/upload-artifact@v4
+      - run: |
+          git push origin main
+"""
+        steps = _extract_workflow_steps(malicious_fixture)
+        self.assertEqual(3, len(steps))
+        self.assertTrue(all(step_name.startswith("<unnamed-step-") for step_name, _ in steps))
+        self.assertTrue(_wrapper_bypass_reasons(malicious_fixture))
+        self.assertTrue(_alternate_upload_paths(malicious_fixture))
+        self.assertEqual(1, _count_executable_git_commands(malicious_fixture, "push"))
+
+        safe_fixture = """
+steps:
+  - run: echo "safe; text"
+  - uses: actions/checkout@v4
+"""
+        self.assertEqual(2, len(_extract_workflow_steps(safe_fixture)))
+        self.assertEqual([], _wrapper_bypass_reasons(safe_fixture))
+        self.assertEqual([], _alternate_upload_paths(safe_fixture))
 
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
