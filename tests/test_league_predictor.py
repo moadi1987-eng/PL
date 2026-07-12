@@ -202,6 +202,18 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertEqual(0.5, adjusted[(0, 1)])
         self.assertTrue(all(math.isfinite(value) and value >= 0 for value in adjusted.values()))
 
+    def test_training_rejects_invalid_factor_edges_without_state_changes(self):
+        model = default_model_state("pl")
+        invalid_rows = [
+            {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": ["strength"], "expected_home_goals": 1.2, "expected_away_goals": 1.1},
+            {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": "bad"}, "expected_home_goals": 1.2, "expected_away_goals": 1.1},
+            {"actual_winner": "home", "fixture": {"hs": 2, "as": 0}, "factor_edges": {"strength": float("inf")}, "expected_home_goals": 1.2, "expected_away_goals": 1.1},
+        ]
+        trained = train_factor_model(model, invalid_rows)
+        self.assertEqual(model["factors"], trained["factors"])
+        self.assertEqual(model["calibration"], trained["calibration"])
+        self.assertEqual(model["meta"], trained["meta"])
+
 
 if __name__ == "__main__":
     unittest.main()
