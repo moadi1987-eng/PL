@@ -4,7 +4,7 @@ Publishing to GitHub Pages is opt-in for local runs.
 
 Usage:  python update_pl_mobile.py
 """
-import copy, json, requests, os, base64, re, unicodedata, math
+import copy, json, requests, os, re, unicodedata, math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -29,10 +29,12 @@ try:
     from league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
+    from github_atomic_publish import publish_generated_outputs
 except ImportError:
     from .league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
+    from .github_atomic_publish import publish_generated_outputs
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -2249,54 +2251,27 @@ GITHUB_REPO = "moadi1987-eng/PL"
 
 if PUBLISH_TO_GITHUB and not IS_CI:
   if GITHUB_TOKEN:
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-
-    # Upload live.json (small, fast — browser fetches this for live updates)
-    live_b64 = base64.b64encode(live_json.encode("utf-8")).decode()
-
-    print("Uploading live.json...")
-    live_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/live.json"
-    existing_live = requests.get(live_url, headers=headers, timeout=15)
-    live_sha = existing_live.json().get("sha", "") if existing_live.status_code == 200 else ""
-    live_payload = {"message": "Live update", "content": live_b64}
-    if live_sha:
-        live_payload["sha"] = live_sha
-    resp_live = requests.put(live_url, headers=headers, json=live_payload, timeout=15)
-    if resp_live.status_code in (200, 201):
-        print("live.json uploaded!")
-
-    # Upload AI learning state.
-    for _ml_file in ("learning_history.json", "ai_weights.json", "ai_predictions_laliga.json", "ai_weights_laliga.json", "ai_predictions_wc.json", "ai_weights_wc.json"):
-        _ml_path = os.path.join(ROOT, _ml_file)
-        if not os.path.exists(_ml_path): continue
-        try:
-            _ml_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{_ml_file}"
-            _ml_existing = requests.get(_ml_url, headers=headers, timeout=10)
-            _ml_sha = _ml_existing.json().get("sha", "") if _ml_existing.status_code == 200 else ""
-            _ml_b64 = base64.b64encode(open(_ml_path, "rb").read()).decode()
-            _ml_payload = {"message": f"Update {_ml_file}", "content": _ml_b64}
-            if _ml_sha: _ml_payload["sha"] = _ml_sha
-            _r = requests.put(_ml_url, headers=headers, json=_ml_payload, timeout=15)
-            if _r.status_code in (200, 201): print(f"{_ml_file} uploaded!")
-        except Exception as _e: print(f"{_ml_file} upload failed: {_e}")
-
-    # Upload index.html (full page rebuild)
-    print("Uploading index.html...")
-    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/index.html"
-
-    existing = requests.get(api_url, headers=headers, timeout=15)
-    sha = existing.json().get("sha", "") if existing.status_code == 200 else ""
-
-    content = base64.b64encode(open(OUT, "rb").read()).decode()
-    payload = {"message": "Update PL Dashboard data", "content": content}
-    if sha:
-        payload["sha"] = sha
-
-    resp = requests.put(api_url, headers=headers, json=payload, timeout=30)
-    if resp.status_code in (200, 201):
-        print(f"Uploaded to https://moadi1987-eng.github.io/PL/")
-    else:
-        print(f"GitHub upload failed: {resp.status_code} {resp.text[:200]}")
+    try:
+        publish_generated_outputs(
+            GITHUB_REPO,
+            GITHUB_TOKEN,
+            {
+                "index.html": INDEX_OUT,
+                "website/pl_mobile.html": OUT,
+                "live.json": os.path.join(ROOT, "live.json"),
+                "learning_history.json": os.path.join(ROOT, "learning_history.json"),
+                "ai_predictions.json": os.path.join(ROOT, "ai_predictions.json"),
+                "ai_weights.json": os.path.join(ROOT, "ai_weights.json"),
+                "ai_predictions_laliga.json": os.path.join(ROOT, "ai_predictions_laliga.json"),
+                "ai_weights_laliga.json": os.path.join(ROOT, "ai_weights_laliga.json"),
+                "ai_predictions_wc.json": os.path.join(ROOT, "ai_predictions_wc.json"),
+                "ai_weights_wc.json": os.path.join(ROOT, "ai_weights_wc.json"),
+            },
+            requests.request,
+        )
+        print("Published generated dashboard outputs in one commit.")
+    except Exception as error:
+        print(f"GitHub atomic publish failed: {error}")
   else:
     print("PUBLISH_TO_GITHUB=1 but no GITHUB_TOKEN is set — skipping GitHub upload.")
 else:

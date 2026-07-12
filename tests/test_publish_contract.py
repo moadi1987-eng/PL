@@ -1,6 +1,8 @@
 import ast
+import importlib
 import re
 import shlex
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -935,6 +937,101 @@ class PublishContractTests(unittest.TestCase):
         )
         self.assertIn("if PUBLISH_TO_GITHUB and not IS_CI:", self.source)
         self.assertEqual([], _upload_bypass_reasons(self.source))
+
+    def test_local_publish_delegates_to_an_atomic_commit_operation(self):
+        self.assertNotIn("requests.put(", self.source)
+        self.assertIn("publish_generated_outputs(", self.source)
+
+    def test_atomic_local_publish_updates_the_expected_head_once(self):
+        publisher = importlib.import_module("website.github_atomic_publish")
+        calls = []
+
+        class Response:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        def requester(method, url, *, headers, json, timeout):
+            calls.append((method, url, json, headers, timeout))
+            if method == "GET" and url.endswith("/git/ref/heads/main"):
+                return Response(200, {"object": {"sha": "expected-head"}})
+            if method == "GET" and url.endswith("/git/commits/expected-head"):
+                return Response(200, {"tree": {"sha": "base-tree"}})
+            if method == "POST" and url.endswith("/git/blobs"):
+                return Response(201, {"sha": f"blob-{len(calls)}"})
+            if method == "POST" and url.endswith("/git/trees"):
+                return Response(201, {"sha": "new-tree"})
+            if method == "POST" and url.endswith("/git/commits"):
+                return Response(201, {"sha": "new-commit"})
+            if method == "PATCH" and url.endswith("/git/refs/heads/main"):
+                return Response(200, {"object": {"sha": "new-commit"}})
+            self.fail(f"Unexpected request: {method} {url}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            files = {}
+            for relative_path in REQUIRED_GENERATED_PATHS:
+                local_path = Path(directory, relative_path)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_text(relative_path, encoding="utf-8")
+                files[relative_path] = local_path
+
+            publisher.publish_generated_outputs(
+                "owner/repo", "test-token", files, requester
+            )
+
+        self.assertEqual(
+            ["GET", "GET"] + ["POST"] * 12 + ["PATCH"],
+            [method for method, *_ in calls],
+        )
+        tree_payload = calls[-3][2]
+        self.assertEqual("base-tree", tree_payload["base_tree"])
+        self.assertEqual(REQUIRED_GENERATED_PATHS, [entry["path"] for entry in tree_payload["tree"]])
+        self.assertEqual(
+            {"message": "Update PL Dashboard data", "tree": "new-tree", "parents": ["expected-head"]},
+            calls[-2][2],
+        )
+        self.assertEqual({"sha": "new-commit", "force": False}, calls[-1][2])
+        self.assertEqual("token test-token", calls[-1][3]["Authorization"])
+
+    def test_atomic_local_publish_leaves_the_ref_unchanged_when_a_blob_fails(self):
+        publisher = importlib.import_module("website.github_atomic_publish")
+        calls = []
+
+        class Response:
+            def __init__(self, status_code, payload):
+                self.status_code = status_code
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        def requester(method, url, *, headers, json, timeout):
+            calls.append((method, url))
+            if method == "GET" and url.endswith("/git/ref/heads/main"):
+                return Response(200, {"object": {"sha": "expected-head"}})
+            if method == "GET" and url.endswith("/git/commits/expected-head"):
+                return Response(200, {"tree": {"sha": "base-tree"}})
+            if method == "POST" and url.endswith("/git/blobs"):
+                return Response(500, {})
+            self.fail(f"Unexpected request: {method} {url}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            files = {}
+            for relative_path in REQUIRED_GENERATED_PATHS:
+                local_path = Path(directory, relative_path)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_text(relative_path, encoding="utf-8")
+                files[relative_path] = local_path
+
+            with self.assertRaisesRegex(RuntimeError, "create blob failed: HTTP 500"):
+                publisher.publish_generated_outputs(
+                    "owner/repo", "test-token", files, requester
+                )
+
+        self.assertNotIn("PATCH", [method for method, _ in calls])
 
     def test_upload_detector_rejects_direct_and_indirect_bypasses(self):
         rejected = [
