@@ -1238,6 +1238,48 @@ def _wc_shared_trainer(model, rows):
     return updated
 
 
+def _wc_score_int(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _wc_canonical_score(pick=None, raw_score=None):
+    if isinstance(pick, dict):
+        home = _wc_score_int(pick.get("home_score"))
+        away = _wc_score_int(pick.get("away_score"))
+        if home is not None and away is not None:
+            return f"{home}-{away}"
+    if not isinstance(raw_score, str) or raw_score.count("-") != 1:
+        return None
+    home, away = raw_score.split("-", 1)
+    home = _wc_score_int(home.strip())
+    away = _wc_score_int(away.strip())
+    return f"{home}-{away}" if home is not None and away is not None else None
+
+
+def _wc_valid_histogram(values, expected_total=None):
+    if not isinstance(values, dict):
+        return None
+    histogram = {}
+    for score, count in values.items():
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return None
+        canonical = _wc_canonical_score(raw_score=score)
+        if not canonical:
+            return None
+        histogram[canonical] = histogram.get(canonical, 0) + count
+    if expected_total is not None and sum(histogram.values()) != expected_total:
+        return None
+    return histogram
+
+
 def _wc_score_histogram(store, total):
     histograms = {"baseline": {}, "v4": {}}
     legacy_rows = 0
@@ -1249,9 +1291,9 @@ def _wc_score_histogram(store, total):
         picks = snapshot.get("picks") or {}
         for strategy in histograms:
             pick = picks.get(strategy)
-            if not isinstance(pick, dict) or not isinstance(pick.get("home_score"), int) or not isinstance(pick.get("away_score"), int):
+            score = _wc_canonical_score(pick=pick)
+            if not score:
                 return {"baseline": {}, "v4": {}}, {"baseline": False, "v4": False}
-            score = f"{pick['home_score']}-{pick['away_score']}"
             histograms[strategy][score] = histograms[strategy].get(score, 0) + 1
     complete = legacy_rows == total
     return histograms, {"baseline": complete, "v4": complete}
@@ -1265,8 +1307,9 @@ def _wc_histogram_state(comparison, store, total):
     complete = {}
     for strategy in ("baseline", "v4"):
         values = persisted.get(strategy)
-        if persisted_complete.get(strategy) is True and isinstance(values, dict):
-            histograms[strategy] = {str(score): int(count) for score, count in values.items() if isinstance(count, int) and count >= 0}
+        validated = _wc_valid_histogram(values, total) if persisted_complete.get(strategy) is True else None
+        if validated is not None:
+            histograms[strategy] = validated
             complete[strategy] = True
         else:
             histograms[strategy] = reconstructed[strategy]
@@ -1294,12 +1337,14 @@ def _wc_archive_comparison(previous, snapshots, store):
     models = comparison.setdefault("models", {})
     if not isinstance(models, dict):
         models = comparison["models"] = {}
-    exact_histograms, histogram_complete = _wc_histogram_state(comparison, store, total)
+    exact_histograms, exact_complete = _wc_histogram_state(comparison, store, total)
     histograms = copy.deepcopy(comparison.get("score_histograms") if isinstance(comparison.get("score_histograms"), dict) else {})
     lifecycle_histograms = copy.deepcopy(comparison.get("lifecycle_score_histograms") if isinstance(comparison.get("lifecycle_score_histograms"), dict) else {})
+    histogram_complete = copy.deepcopy(comparison.get("score_histograms_complete") if isinstance(comparison.get("score_histograms_complete"), dict) else {})
     for strategy in ("baseline", "v4"):
         histograms[strategy] = exact_histograms[strategy]
-        lifecycle_histograms.setdefault(strategy, {})
+        histogram_complete[strategy] = exact_complete[strategy]
+        lifecycle_histograms[strategy] = _wc_valid_histogram(lifecycle_histograms.get(strategy)) or {}
 
     for snapshot in snapshots:
         total += 1
@@ -1310,7 +1355,7 @@ def _wc_archive_comparison(previous, snapshots, store):
             box["points"] = int(box.get("points", 0) or 0) + int(evaluation.get("points", 0) or 0)
             pick = (snapshot.get("picks") or {}).get(name) or {}
             box["draw_picks"] = int(box.get("draw_picks", 0) or 0) + int(pick.get("winner") == "draw")
-            score = evaluation.get("score")
+            score = _wc_canonical_score(pick=pick, raw_score=evaluation.get("score"))
             if score:
                 if histogram_complete[name]:
                     histograms[name][score] = histograms[name].get(score, 0) + 1

@@ -521,6 +521,44 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(1, comparison["lifecycle_score_histograms"]["baseline"]["0-0"])
         self.assertEqual(1, comparison["lifecycle_score_histograms"]["v4"]["0-0"])
 
+    def test_wc_reconstructs_stale_complete_histogram_and_preserves_completeness_metadata(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        store = {"matches": {
+            "1": {"legacy": True, "checked": True, "picks": {"baseline": {"winner": "draw", "home_score": 1, "away_score": 1}, "v4": {"winner": "draw", "home_score": 1, "away_score": 1}}},
+            "999": {"match_id": 999, "round": 19, "lock_verified": True, "checked": True, "active_strategy_at_lock": "v4", "picks": {"baseline": {"winner": "draw", "home_score": 1, "away_score": 1}, "v4": {"winner": "draw", "home_score": 1, "away_score": 1}}, "evaluations": {"baseline": {"winner_correct": True, "exact": False, "points": 1, "score": "01-01"}, "v4": {"winner_correct": True, "exact": True, "points": 3, "score": "01-01"}}},
+        }}
+        previous = {"total_evaluated": 1, "model_comparison": {
+            "total": 1,
+            "baseline": {"winner_correct": 0, "exact_correct": 0, "points": 0, "draw_picks": 0, "unique_scores": 1, "top_scores": []},
+            "challenger": {"winner_correct": 0, "exact_correct": 0, "points": 0, "draw_picks": 0, "unique_scores": 1, "top_scores": []},
+            "score_histograms": {"baseline": {"01-01": 1, "bad-key": 0}, "v4": {"01-01": 1, "bad-key": 0}},
+            "score_histograms_complete": {"baseline": True, "v4": True, "custom_strategy": {"keep": True}},
+        }}
+        merged = namespace["_wc_merge_verified_archive"](previous, {"model_comparison": {"total": 1}, "model_status": {}}, store)
+        comparison = merged["model_comparison"]
+        self.assertEqual({"1-1": 2}, comparison["score_histograms"]["baseline"])
+        self.assertEqual({"1-1": 2}, comparison["score_histograms"]["v4"])
+        self.assertTrue(comparison["score_histograms_complete"]["baseline"])
+        self.assertEqual({"keep": True}, comparison["score_histograms_complete"]["custom_strategy"])
+
+    def test_wc_canonicalizes_opaque_lifecycle_score_keys_from_picks(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        store = {"matches": {
+            "999": {"match_id": 999, "round": 19, "lock_verified": True, "checked": True, "active_strategy_at_lock": "v4", "picks": {"baseline": {"winner": "draw", "home_score": 1, "away_score": 1}, "v4": {"winner": "draw", "home_score": 1, "away_score": 1}}, "evaluations": {"baseline": {"winner_correct": True, "exact": False, "points": 1, "score": "01-01"}, "v4": {"winner_correct": True, "exact": True, "points": 3, "score": "01-01"}}},
+        }}
+        previous = {"total_evaluated": 65, "model_comparison": {"total": 65, "baseline": {"unique_scores": 11}, "challenger": {"unique_scores": 11}}}
+        merged = namespace["_wc_merge_verified_archive"](previous, {"model_comparison": {"total": 1}, "model_status": {}}, store)
+        self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["baseline"])
+        self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["v4"])
+
 
 if __name__ == "__main__":
     unittest.main()
