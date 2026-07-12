@@ -269,6 +269,7 @@ def _workflow_contract_reasons(workflow):
     except AssertionError as error:
         return [str(error)]
     reasons.extend(_git_global_option_reasons(workflow))
+    reasons.extend(_workflow_index_integrity_reasons(workflow))
     if _count_executable_git_commands(workflow, "add") != 1:
         reasons.append("workflow must have exactly one git add")
     if _git_add_paths(publish_step) != REQUIRED_GENERATED_PATHS:
@@ -523,6 +524,67 @@ def _git_global_option_reasons(workflow):
         for tokens in _normalized_shell_segments(_extract_run_script(step)):
             if len(tokens) > 1 and tokens[0].lower() == "git" and tokens[1].startswith("-"):
                 reasons.append(f"{step_name}: git global option before verb")
+    return reasons
+
+
+def _workflow_normalized_commands(workflow):
+    for step_name, step in _extract_workflow_steps(workflow):
+        for tokens in _normalized_shell_segments(_extract_run_script(step)):
+            yield step_name, tokens
+
+
+def _workflow_index_integrity_reasons(workflow):
+    commands = list(_workflow_normalized_commands(workflow))
+    executable = [
+        (index, step_name, tokens)
+        for index, (step_name, tokens) in enumerate(commands)
+        if tokens and tokens[0].lower() not in {"echo", "printf"}
+    ]
+    add_commands = [
+        record for record in executable if record[2][:2] == ["git", "add"]
+    ]
+    commit_commands = [
+        record for record in executable if record[2][:2] == ["git", "commit"]
+    ]
+    expected_add = ["git", "add", *REQUIRED_GENERATED_PATHS]
+    expected_commit = ["git", "commit", "-m", "Auto-update dashboard data"]
+    reasons = []
+
+    if len(add_commands) != 1 or add_commands[0][2] != expected_add:
+        reasons.append("workflow git add command is not the sole exact approved add")
+    if len(commit_commands) != 1 or commit_commands[0][2] != expected_commit:
+        reasons.append("workflow commit command is not the sole exact pathless commit")
+
+    index_mutating_verbs = {
+        "restore",
+        "reset",
+        "rm",
+        "update-index",
+        "read-tree",
+        "checkout",
+        "checkout-index",
+    }
+    for _, step_name, tokens in executable:
+        if len(tokens) > 1 and tokens[0].lower() == "git" and tokens[1].lower() in index_mutating_verbs:
+            reasons.append(f"{step_name}: executable git index mutation")
+        if tokens[:2] == ["git", "apply"] and "--cached" in tokens:
+            reasons.append(f"{step_name}: cached git apply mutates the index")
+
+    if len(add_commands) == 1 and len(commit_commands) == 1:
+        add_index = add_commands[0][0]
+        commit_index = commit_commands[0][0]
+        if add_index >= commit_index:
+            reasons.append("workflow commit must occur after git add")
+        else:
+            for step_name, tokens in commands[add_index + 1 : commit_index]:
+                if tokens[0].lower() in {"echo", "printf"}:
+                    continue
+                if tokens != ["git", "diff", "--staged", "--quiet"]:
+                    reasons.append(f"{step_name}: unexpected command between add and commit")
+                    break
+        for index, step_name, tokens in executable:
+            if tokens[:2] in (["git", "pull"], ["git", "push"]) and index <= commit_index:
+                reasons.append(f"{step_name}: pull or push must follow commit")
     return reasons
 
 
@@ -1082,6 +1144,66 @@ class PublishContractTests(unittest.TestCase):
                         )
                     ),
                 )
+
+    def test_publish_preserves_index_and_uses_exact_pathless_commit(self):
+        add_command = "git add " + " ".join(REQUIRED_GENERATED_PATHS)
+        commit_command = 'git commit -m "Auto-update dashboard data"'
+
+        def fixture(middle, commit=commit_command, before_add=""):
+            return f"""
+steps:
+  - name: Commit and push if changed
+    run: |
+      {before_add}
+      {add_command}
+      {middle}
+      {commit}
+"""
+
+        self.assertEqual([], _workflow_index_integrity_reasons(fixture("")))
+        self.assertEqual(
+            [],
+            _workflow_index_integrity_reasons(
+                fixture(
+                    """if git diff --staged --quiet; then
+        echo \"No changes to deploy\"
+      else"""
+                )
+            ),
+        )
+
+        index_mutations = [
+            "git restore --staged index.html",
+            "git reset HEAD index.html",
+            "git rm --cached index.html",
+            "git update-index --assume-unchanged index.html",
+            "git read-tree HEAD",
+            "git checkout -- index.html",
+            "git checkout-index --all",
+            add_command,
+        ]
+        for mutation in index_mutations:
+            with self.subTest(mutation=mutation):
+                self.assertTrue(_workflow_index_integrity_reasons(fixture(mutation)))
+                self.assertTrue(
+                    _workflow_index_integrity_reasons(fixture("", before_add=mutation))
+                )
+
+        self.assertTrue(
+            _workflow_index_integrity_reasons(
+                fixture("", commit='git commit --only -m "Auto-update dashboard data"')
+            )
+        )
+        self.assertTrue(
+            _workflow_index_integrity_reasons(
+                fixture("", commit='git commit -m "Auto-update dashboard data" index.html')
+            )
+        )
+        self.assertTrue(
+            _workflow_index_integrity_reasons(
+                fixture("", before_add=commit_command)
+            )
+        )
 
     def test_workflow_has_one_commit_and_preserves_atomic_push_retry(self):
         steps = _extract_workflow_steps(self.workflow)
