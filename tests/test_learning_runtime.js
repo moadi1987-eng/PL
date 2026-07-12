@@ -35,13 +35,16 @@ const history = {
   wc: { model_status: { status: 'promote', active_strategy: 'v4', candidate_strategy: 'baseline' } },
 };
 const context = {
-  D: { league: 'laliga' },
-  EMBEDDED_MODELS: models,
-  LEARNING_HISTORY: history,
-  defaultWeights: () => defaultWeightValues,
-  defaultCalibration: () => defaultCalibrationValues,
 };
 vm.createContext(context);
+vm.runInContext(
+  'var D={league:"laliga"};' +
+  'var EMBEDDED_MODELS=' + JSON.stringify(models) + ';' +
+  'var LEARNING_HISTORY=' + JSON.stringify(history) + ';' +
+  'function defaultWeights(){return ' + JSON.stringify(defaultWeightValues) + ';}' +
+  'function defaultCalibration(){return ' + JSON.stringify(defaultCalibrationValues) + ';}',
+  context,
+);
 vm.runInContext(source, context);
 
 function assertLeague(league, strength, goalMult, strategy, status) {
@@ -64,16 +67,11 @@ assert.strictEqual(context.activeCalibration().goal_mult, 1);
 assert.strictEqual(context.scoreModelChoice().strategy, 'baseline');
 
 context.D.league = 'pl';
-context.EMBEDDED_MODELS.pl = {
-  factors: ['not', 'weights'], calibration: ['not', 'calibration'],
-};
+vm.runInContext('EMBEDDED_MODELS.pl={factors:["not","weights"],calibration:["not","calibration"]};', context);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), defaultCalibrationValues);
 
-context.EMBEDDED_MODELS.laliga = {
-  factors: { form: 0.21, strength: 'bad', position: NaN, home_adv: Infinity, ignored: 99 },
-  calibration: { goal_mult: 1.1, home_goal_bias: null, away_goal_bias: 'bad', draw_bias: Infinity, ignored: 99 },
-};
+vm.runInContext('EMBEDDED_MODELS.laliga={factors:{form:.21,strength:"bad",position:NaN,home_adv:Infinity,ignored:99},calibration:{goal_mult:1.1,home_goal_bias:null,away_goal_bias:"bad",draw_bias:Infinity,ignored:99}};', context);
 context.D.league = 'laliga';
 const sanitizedWeights = context.activeWeights();
 const sanitizedCalibration = context.activeCalibration();
@@ -136,6 +134,13 @@ nullRootForgedModel.calibration = { goal_mult: 1.16 };
 context.EMBEDDED_MODELS = { pl: nullRootForgedModel };
 assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), defaultCalibrationValues);
+const fullyForgedPrototype = Object.create(null, Object.getOwnPropertyDescriptors(Object.prototype));
+const fullyForgedModel = Object.create(fullyForgedPrototype);
+fullyForgedModel.factors = { strength: 0.95 };
+fullyForgedModel.calibration = { goal_mult: 1.15 };
+context.EMBEDDED_MODELS = { pl: fullyForgedModel };
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), defaultCalibrationValues);
 const nullModelMap = Object.create(null);
 const nullModel = Object.create(null);
 nullModel.factors = { strength: 0.51 };
@@ -146,19 +151,25 @@ assert.strictEqual(context.activeWeights().strength, 0.51);
 assert.strictEqual(context.activeCalibration().goal_mult, 1.05);
 const hostPlainModel = { factors: { strength: 0.41 }, calibration: { goal_mult: 1.04 } };
 context.EMBEDDED_MODELS = { pl: hostPlainModel };
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeWeights())), defaultWeightValues);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(context.activeCalibration())), defaultCalibrationValues);
+vm.runInContext('EMBEDDED_MODELS={pl:{factors:{strength:.41},calibration:{goal_mult:1.04}}};', context);
 assert.strictEqual(context.activeWeights().strength, 0.41);
 assert.strictEqual(context.activeCalibration().goal_mult, 1.04);
 
 const template = fs.readFileSync('website/pl_mobile_template.html', 'utf8');
 const statusSource = template.slice(template.indexOf('function aiStatusText'), template.indexOf('function aiTrendChart'));
 const renderContext = {
-  D: { league: 'laliga' },
-  EMBEDDED_MODELS: { laliga: { active_strategy: 'baseline', factors: defaultWeightValues, meta: { trained_matches: 0 } } },
-  LEARNING_HISTORY: { laliga: { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4' } } },
-  defaultWeights: () => defaultWeightValues,
-  defaultCalibration: () => defaultCalibrationValues,
 };
 vm.createContext(renderContext);
+vm.runInContext(
+  'var D={league:"laliga"};' +
+  'var EMBEDDED_MODELS={laliga:{active_strategy:"baseline",factors:' + JSON.stringify(defaultWeightValues) + ',meta:{trained_matches:0}}};' +
+  'var LEARNING_HISTORY={laliga:{model_status:{status:"collecting",active_strategy:"baseline",candidate_strategy:"v4"}}};' +
+  'function defaultWeights(){return ' + JSON.stringify(defaultWeightValues) + ';}' +
+  'function defaultCalibration(){return ' + JSON.stringify(defaultCalibrationValues) + ';}',
+  renderContext,
+);
 vm.runInContext(source, renderContext);
 vm.runInContext(statusSource, renderContext);
 assert.strictEqual(renderContext.aiStatusNumber(null), null);

@@ -8,14 +8,9 @@ function learningRuntimeCopy(value){
   return out;
 }
 function learningRuntimePlainObject(value){
-  if(!value||Object.prototype.toString.call(value)!=="[object Object]")return false;
+  if(!value||typeof value!=="object")return false;
   var prototype=Object.getPrototypeOf(value);
-  if(prototype===null)return true;
-  if(Object.getPrototypeOf(prototype)!==null)return false;
-  var expected=Object.getOwnPropertyNames(Object.prototype),actual=Object.getOwnPropertyNames(prototype);
-  if(actual.length!==expected.length)return false;
-  for(var i=0;i<expected.length;i++)if(actual.indexOf(expected[i])<0)return false;
-  return true;
+  return prototype===null||prototype===Object.prototype;
 }
 function learningRuntimeFinite(value){
   return typeof value==="number"&&isFinite(value);
