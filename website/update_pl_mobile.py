@@ -4,7 +4,7 @@ Automatically uploads to GitHub Pages if GITHUB_TOKEN is set.
 
 Usage:  python update_pl_mobile.py
 """
-import json, requests, os, base64, re, unicodedata, math
+import copy, json, requests, os, base64, re, unicodedata, math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
@@ -24,6 +24,12 @@ INDEX_OUT = os.path.abspath(os.path.join(ROOT, "index.html"))
 TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
+try:
+    from league_learning import atomic_save_json, merge_learning_history, run_persistent_competition
+    from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
+except ImportError:
+    from .league_learning import atomic_save_json, merge_learning_history, run_persistent_competition
+    from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -343,6 +349,10 @@ WC_CALIBRATION_DEFAULTS = {
     "zero_zero_penalty": 0.62,
 }
 LEARNING_HISTORY_FILE = os.path.join(ROOT, "learning_history.json")
+PL_PREDICTIONS_FILE = os.path.join(ROOT, "ai_predictions.json")
+PL_WEIGHTS_FILE = os.path.join(ROOT, "ai_weights.json")
+LL_PREDICTIONS_FILE = os.path.join(ROOT, "ai_predictions_laliga.json")
+LL_WEIGHTS_FILE = os.path.join(ROOT, "ai_weights_laliga.json")
 WC_PREDICTIONS_FILE = os.path.join(ROOT, "ai_predictions_wc.json")
 WC_WEIGHTS_FILE = os.path.join(ROOT, "ai_weights_wc.json")
 WC_PREDICTION_LOCK_HOURS = 36
@@ -1181,147 +1191,117 @@ def _wc_update_model(model, checked_predictions):
     return {"version": WC_MODEL_VERSION, "factors": new_weights, "calibration": calibration, "meta": meta}
 
 
+def _wc_default_model():
+    model = _normalize_wc_model({"factors": AI_WEIGHT_DEFAULTS, "calibration": WC_CALIBRATION_DEFAULTS})
+    model.update({"league": "wc", "active_strategy": "v4", "candidate_strategy": "baseline", "promotion_history": []})
+    return model
+
+
+def _wc_shared_snapshot(teams_obj, fixtures, match, model):
+    home = _wc_team(teams_obj, match.get("h"))
+    away = _wc_team(teams_obj, match.get("a"))
+    if home.get("ph") or away.get("ph"):
+        return {}
+    raw = _wc_predict_snapshot(teams_obj, fixtures, match, model)
+    if not raw:
+        return {}
+    v4 = _wc_v4_score_pick(raw)
+    baseline = copy.deepcopy(raw.get("base_v3_prediction") or {
+        "winner": raw.get("winner"), "home_score": raw.get("home_score"), "away_score": raw.get("away_score"),
+    })
+    snapshot = copy.deepcopy(raw)
+    snapshot.update({
+        "features": copy.deepcopy(raw.get("input_snapshot") or {}),
+        "factor_edges": {
+            key: 1.0 if side == "home" else -1.0 if side == "away" else 0.0
+            for key, side in (raw.get("signals") or {}).items()
+        },
+        "missing": copy.deepcopy((raw.get("input_snapshot") or {}).get("missing") or {}),
+        "probabilities": {"home": raw.get("home_win_pct", 0), "draw": raw.get("draw_pct", 0), "away": raw.get("away_win_pct", 0)},
+        "expected_home_goals": raw.get("expected_home_goals", 0),
+        "expected_away_goals": raw.get("expected_away_goals", 0),
+        "picks": {
+            "baseline": baseline,
+            "v4": {"winner": v4.get("winner"), "home_score": v4.get("home_score"), "away_score": v4.get("away_score"), "reason": v4.get("reason")},
+        },
+    })
+    return snapshot
+
+
+def _wc_shared_trainer(model, rows):
+    updated = _wc_update_model(model, rows)
+    updated["league"] = "wc"
+    updated["active_strategy"] = model.get("active_strategy", "v4")
+    updated["candidate_strategy"] = model.get("candidate_strategy", "baseline")
+    updated["promotion_history"] = copy.deepcopy(model.get("promotion_history", []))
+    return updated
+
+
 def run_wc_learning(wc_payload, history):
     if not wc_payload:
         return history
-    wc = json.loads(wc_payload)
+    try:
+        wc = json.loads(wc_payload)
+    except (TypeError, ValueError):
+        return history
     teams_obj = wc.get("teams", {})
     fixtures = wc.get("fix", [])
-    pred_store = _load_json_file(WC_PREDICTIONS_FILE, {"version": 1, "matches": {}})
-    if isinstance(pred_store.get("matches"), list):
-        pred_store["matches"] = {str(p.get("match_id")): p for p in pred_store["matches"]}
-    pred_store.setdefault("version", 1)
-    pred_store.setdefault("matches", {})
-    model = _normalize_wc_model(_load_json_file(WC_WEIGHTS_FILE, dict(AI_WEIGHT_DEFAULTS)))
+    previous = copy.deepcopy((history or {}).get("wc", {}))
+    wc_history, counts, _ = run_persistent_competition(
+        league="wc",
+        fixtures=fixtures,
+        teams=teams_obj,
+        prediction_path=WC_PREDICTIONS_FILE,
+        model_path=WC_WEIGHTS_FILE,
+        history=previous,
+        now=datetime.now(timezone.utc),
+        snapshot_builder=lambda match, model: _wc_shared_snapshot(teams_obj, fixtures, match, model),
+        model_trainer=_wc_shared_trainer,
+        default_model=_wc_default_model(),
+    )
+    if previous.get("gw_results"):
+        for key in ("gw_results", "overall_accuracy", "total_evaluated", "model_comparison"):
+            if key in previous:
+                wc_history[key] = copy.deepcopy(previous[key])
+    wc_history["refreshed_predictions"] = 0
+    history = merge_learning_history(history, "wc", wc_history)
+    atomic_save_json(LEARNING_HISTORY_FILE, history)
+    print(f"World Cup ML: {counts['locked']} new locked predictions, 0 refreshed, {counts['checked']} checked, {counts['trained']} trained, accuracy {history['wc'].get('overall_accuracy', 0)}%")
+    return history
 
+
+def _compact_pl_learning_fixtures(fixtures):
+    return [{
+        "id": fixture.get("id"), "e": fixture.get("event"),
+        "h": fixture.get("team_h"), "a": fixture.get("team_a"),
+        "ko": fixture.get("kickoff_time", ""), "fin": fixture.get("finished") is True,
+        "st": fixture.get("started") is True,
+        "hs": fixture.get("team_h_score"), "as": fixture.get("team_a_score"),
+    } for fixture in fixtures if fixture.get("id") is not None]
+
+
+def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
     now = datetime.now(timezone.utc)
-    new_locked = 0
-    refreshed = 0
-    for match in fixtures:
-        mid = str(match.get("id"))
-        if not mid:
-            continue
-        existing = pred_store["matches"].get(mid)
-        if existing:
-            if (
-                not existing.get("checked")
-                and not match.get("fin")
-                and not match.get("st")
-                and int(_num(existing.get("model_version"), 0)) < WC_MODEL_VERSION
-            ):
-                pred = _wc_predict_snapshot(teams_obj, fixtures, match, model)
-                if pred:
-                    pred["created_at"] = existing.get("created_at") or pred.get("created_at")
-                    pred["upgraded_from_model"] = existing.get("model_version")
-                    pred["upgraded_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    pred_store["matches"][mid] = pred
-                    refreshed += 1
-            continue
-        if match.get("fin") or match.get("st"):
-            continue
-        home = _wc_team(teams_obj, match.get("h"))
-        away = _wc_team(teams_obj, match.get("a"))
-        if home.get("ph") or away.get("ph"):
-            continue
-        ko = _dt_utc(match.get("ko"))
-        if ko and (ko - now).total_seconds() > WC_PREDICTION_LOCK_HOURS * 3600:
-            continue
-        if ko and (now - ko).total_seconds() > 600:
-            continue
-        pred = _wc_predict_snapshot(teams_obj, fixtures, match, model)
-        if pred:
-            pred_store["matches"][mid] = pred
-            new_locked += 1
-
-    fixtures_by_id = {str(f.get("id")): f for f in fixtures}
-    checked = []
-    train_batch = []
-    for mid, pred in pred_store["matches"].items():
-        f = fixtures_by_id.get(mid)
-        if not f or not f.get("fin") or f.get("hs") is None:
-            continue
-        was_trained = bool(pred.get("model_trained"))
-        actual_winner = _wc_winner(f.get("hs"), f.get("as"))
-        pred["checked"] = True
-        pred["actual_home_score"] = f.get("hs")
-        pred["actual_away_score"] = f.get("as")
-        pred["actual_winner"] = actual_winner
-        pred["winner_correct"] = pred.get("winner") == actual_winner
-        pred["score_correct"] = pred.get("home_score") == f.get("hs") and pred.get("away_score") == f.get("as")
-        probs = {
-            "home": _num(pred.get("home_win_pct")) / 100,
-            "draw": _num(pred.get("draw_pct")) / 100,
-            "away": _num(pred.get("away_win_pct")) / 100,
-        }
-        pred["brier_score"] = round(sum((probs[k] - (1.0 if k == actual_winner else 0.0)) ** 2 for k in probs), 4)
-        pred["goal_error"] = round(
-            (_num(pred.get("expected_home_goals")) + _num(pred.get("expected_away_goals"))) -
-            (_num(f.get("hs")) + _num(f.get("as"))),
-            3,
-        )
-        rule = _wc_phase_rule(f)
-        pred["points"] = rule["exact"] if pred["score_correct"] else rule["result"] if pred["winner_correct"] else 0
-        pred["phase"] = rule["key"]
-        v4_pick = _wc_v4_score_pick(pred)
-        pred["v4_shadow"] = {
-            "model_version": WC_MODEL_VERSION,
-            "winner": v4_pick.get("winner"),
-            "home_score": v4_pick.get("home_score"),
-            "away_score": v4_pick.get("away_score"),
-            "reason": v4_pick.get("reason"),
-            "winner_correct": v4_pick.get("winner") == actual_winner,
-            "score_correct": v4_pick.get("home_score") == f.get("hs") and v4_pick.get("away_score") == f.get("as"),
-            "points": _wc_pick_points(rule, v4_pick.get("winner"), v4_pick.get("home_score"), v4_pick.get("away_score"), actual_winner, f.get("hs"), f.get("as")),
-        }
-        checked.append(pred)
-        if not was_trained:
-            train_batch.append(pred)
-
-    if train_batch:
-        model = _wc_update_model(model, train_batch)
-        trained_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for pred in train_batch:
-            pred["model_trained"] = True
-            pred["trained_version"] = WC_MODEL_VERSION
-            pred["trained_at"] = trained_at
-
-    by_day = {}
-    for pred in checked:
-        day = str(pred.get("day") or 0)
-        row = by_day.setdefault(day, {"gw": int(pred.get("day") or 0), "total": 0, "correct_winner": 0, "correct_score": 0, "points": 0})
-        row["total"] += 1
-        row["correct_winner"] += 1 if pred.get("winner_correct") else 0
-        row["correct_score"] += 1 if pred.get("score_correct") else 0
-        row["points"] += int(pred.get("points") or 0)
-    rows = []
-    for row in by_day.values():
-        row["accuracy_pct"] = round(row["correct_winner"] / max(row["total"], 1) * 100, 1)
-        row["score_acc_pct"] = round(row["correct_score"] / max(row["total"], 1) * 100, 1)
-        rows.append(row)
-    rows.sort(key=lambda r: r["gw"])
-    total = sum(r["total"] for r in rows)
-    correct = sum(r["correct_winner"] for r in rows)
-    model_comparison = _wc_compare_summary(checked)
-    wc_hist = {
-        "gw_results": rows,
-        "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
-        "total_evaluated": total,
-        "current_weights": model["factors"],
-        "calibration": model["calibration"],
-        "model_meta": model.get("meta", {}),
-        "model_comparison": model_comparison,
-        "trained_this_build": len(train_batch),
-        "refreshed_predictions": refreshed,
-        "snapshots_locked": len(pred_store["matches"]),
-    }
-    history["wc"] = wc_hist
-    pred_store["version"] = WC_MODEL_VERSION
-    pred_store["model_comparison"] = model_comparison
-    pred_store["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _save_json_file(WC_PREDICTIONS_FILE, pred_store)
-    _save_json_file(WC_WEIGHTS_FILE, model)
-    _save_json_file(LEARNING_HISTORY_FILE, history)
-    print(f"World Cup ML: {new_locked} new locked predictions, {refreshed} refreshed, {total} checked, {len(train_batch)} trained, accuracy {wc_hist['overall_accuracy']}%")
+    compact_pl = _compact_pl_learning_fixtures(pl_fixtures)
+    pl_history, _, _ = run_persistent_competition(
+        league="pl", fixtures=compact_pl, teams=pl_teams,
+        prediction_path=PL_PREDICTIONS_FILE, model_path=PL_WEIGHTS_FILE,
+        history=(history or {}).get("pl", {}), now=now,
+        snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_pl, pl_teams, model, "pl"),
+        model_trainer=train_factor_model, default_model=default_model_state("pl"),
+        legacy_candidate_builder=legacy_v4_pick,
+    )
+    history = merge_learning_history(history, "pl", pl_history)
+    compact_ll = ll_fixtures if isinstance(ll_fixtures, list) else []
+    ll_history, _, _ = run_persistent_competition(
+        league="laliga", fixtures=compact_ll, teams=ll_teams if isinstance(ll_teams, dict) else {},
+        prediction_path=LL_PREDICTIONS_FILE, model_path=LL_WEIGHTS_FILE,
+        history=history.get("laliga", {}), now=now,
+        snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_ll, ll_teams, model, "laliga"),
+        model_trainer=train_factor_model, default_model=default_model_state("laliga"),
+    )
+    history = merge_learning_history(history, "laliga", ll_history)
+    atomic_save_json(LEARNING_HISTORY_FILE, history)
     return history
 
 
@@ -1955,10 +1935,8 @@ html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if 
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
 
 # ── ML Learning Engine ────────────────────────────────────────────────────
+learning_history = _load_json_file(LEARNING_HISTORY_FILE, {})
 try:
-    import sys as _sys_ml; _sys_ml.path.insert(0, HERE)
-    from ml_engine import run_pl_learning, run_ll_learning
-
     # Compute standings (for position factor in weight updates)
     _pts = {}
     for _f in fx:
@@ -1973,14 +1951,15 @@ try:
         sorted(_pts.items(), key=lambda x: (-x[1]["pts"], -x[1]["gd"]))
     )}
     teams_ml = {tid: {**t, "position": _pos.get(tid, 10)} for tid, t in teams.items()}
-    learning_history = run_pl_learning(fx, teams_ml)
-    learning_history = run_ll_learning(
+    learning_history = run_league_learning(
+        fx,
+        teams_ml,
         globals().get("ll_fixtures", []),
-        _load_json_file(os.path.join(ROOT, "ai_predictions_laliga.json"), {}),
+        globals().get("ll_teams", {}),
+        learning_history,
     )
     print("ML learning complete")
 except Exception as _ml_err:
-    learning_history = {"pl": {"gw_results": []}, "laliga": {"gw_results": []}}
     print(f"ML learning skipped: {_ml_err}")
 
 try:

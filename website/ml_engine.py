@@ -1,12 +1,9 @@
 """
-ML Learning Engine — PL & La Liga
-Runs inside GitHub Actions after every build.
+Historical PL and La Liga evaluation helpers.
 
-Flow:
-  1. Load ai_predictions.json (stored predictions by GW)
-  2. Compare with actual results from FPL / ESPN
-  3. Update ai_weights.json using factor-accuracy gradient
-  4. Save learning_history.json for the dashboard chart
+Current competition state is owned by league_learning.run_persistent_competition.
+This module remains import-compatible for historical reports and deliberately
+does not write prediction, model, or learning-history files.
 """
 import json
 import os
@@ -34,8 +31,7 @@ def _load(path, default):
         return default
 
 def _save(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, separators=(",", ":"))
+    return None
 
 def _winner(hs, as_):
     if hs is None or as_ is None:

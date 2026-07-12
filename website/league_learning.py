@@ -402,3 +402,94 @@ def evolve_competition_state(
         "trained_this_build": counts["trained"],
     }
     return store, model, history, counts
+
+
+def _persistent_model(raw_model, default_model, league):
+    default = copy.deepcopy(default_model) if isinstance(default_model, dict) else {}
+    raw = raw_model if isinstance(raw_model, dict) else {}
+    model = copy.deepcopy(default)
+
+    if "factors" in raw or "calibration" in raw or "meta" in raw:
+        for key, value in raw.items():
+            if key in {"factors", "calibration", "meta"}:
+                continue
+            model[key] = copy.deepcopy(value)
+        for key in ("factors", "calibration", "meta"):
+            default_value = model.get(key)
+            raw_value = raw.get(key)
+            if isinstance(default_value, dict):
+                merged = copy.deepcopy(default_value)
+                if isinstance(raw_value, dict):
+                    merged.update(copy.deepcopy(raw_value))
+                model[key] = merged
+            elif isinstance(raw_value, dict):
+                model[key] = copy.deepcopy(raw_value)
+    elif isinstance(model.get("factors"), dict):
+        model["factors"].update({
+            key: copy.deepcopy(value)
+            for key, value in raw.items()
+            if key in model["factors"]
+        })
+
+    model["league"] = league
+    model.setdefault("active_strategy", "baseline")
+    model.setdefault(
+        "candidate_strategy",
+        "v4" if model["active_strategy"] == "baseline" else "baseline",
+    )
+    model.setdefault("promotion_history", [])
+
+    if league in {"pl", "laliga"}:
+        try:
+            from .league_predictor import normalize_model_state
+        except ImportError:
+            from league_predictor import normalize_model_state
+        normalized = normalize_model_state(model, league, model["active_strategy"])
+        normalized["promotion_history"] = copy.deepcopy(model["promotion_history"])
+        return normalized
+    return model
+
+
+def merge_learning_history(history, league, league_history):
+    merged = copy.deepcopy(history) if isinstance(history, dict) else {}
+    existing = merged.get(league)
+    combined = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+    incoming = copy.deepcopy(league_history) if isinstance(league_history, dict) else {}
+
+    for key, value in incoming.items():
+        if key == "gw_results" and not value and combined.get(key):
+            continue
+        if (
+            key == "model_comparison"
+            and isinstance(value, dict)
+            and not value.get("total")
+            and isinstance(combined.get(key), dict)
+            and combined[key].get("total")
+        ):
+            continue
+        combined[key] = value
+    merged[league] = combined
+    return merged
+
+
+def run_persistent_competition(
+    *, league, fixtures, teams, prediction_path, model_path, history, now,
+    snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
+):
+    raw_store, _ = load_json_state(prediction_path, {})
+    store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
+    raw_model, model_valid = load_json_state(model_path, default_model)
+    model = _persistent_model(raw_model if model_valid else {}, default_model, league)
+
+    store, model, league_history, counts = evolve_competition_state(
+        league=league,
+        fixtures=fixtures if isinstance(fixtures, list) else [],
+        store=store,
+        model=model,
+        snapshot_builder=snapshot_builder,
+        model_trainer=model_trainer,
+        now=now,
+    )
+    atomic_save_json(prediction_path, store)
+    atomic_save_json(model_path, model)
+    return league_history, counts, model
