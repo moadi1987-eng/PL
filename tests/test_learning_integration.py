@@ -560,5 +560,53 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["v4"])
 
 
+class LearningEmbeddingTests(unittest.TestCase):
+    def test_learning_runtime_embedding_is_compact_safe_and_complete(self):
+        from website.learning_embed import embed_learning_runtime
+
+        template = "/*__LEARNING_HISTORY__*/\n/*__LEARNING_RUNTIME__*/"
+        runtime = "function activeWeights(){return EMBEDDED_MODELS.laliga.factors;}"
+        rendered = embed_learning_runtime(
+            template,
+            {"laliga": {"factors": {"strength": 0.24}, "note": "</script><tag>\u2028\u2029"}},
+            {"laliga": {"total_evaluated": 0, "note": "</script><tag>\u2028\u2029"}},
+            runtime,
+        )
+
+        self.assertIn("var EMBEDDED_MODELS=", rendered)
+        self.assertIn('"strength":0.24', rendered)
+        self.assertNotIn("/*__LEARNING_HISTORY__*/", rendered)
+        self.assertNotIn("/*__LEARNING_RUNTIME__*/", rendered)
+        self.assertNotIn("</script", rendered.lower())
+        self.assertNotIn("<tag>", rendered)
+        self.assertIn("\\u003c/script\\u003e\\u003ctag\\u003e\\u2028\\u2029", rendered)
+        self.assertEqual(1, rendered.count("function activeWeights"))
+        self.assertLess(rendered.index('"laliga"'), rendered.index("function activeWeights"))
+
+    def test_learning_runtime_embedding_rejects_missing_or_duplicate_markers(self):
+        from website.learning_embed import embed_learning_runtime
+
+        for template in (
+            "/*__LEARNING_HISTORY__*/",
+            "/*__LEARNING_RUNTIME__*/",
+            "/*__LEARNING_HISTORY__*/ /*__LEARNING_HISTORY__*/ /*__LEARNING_RUNTIME__*/",
+            "/*__LEARNING_HISTORY__*/ /*__LEARNING_RUNTIME__*/ /*__LEARNING_RUNTIME__*/",
+        ):
+            with self.assertRaises(ValueError):
+                embed_learning_runtime(template, {}, {}, "function activeWeights(){}")
+
+    def test_template_uses_shared_runtime_and_verified_lifecycle_status(self):
+        root = Path(__file__).parents[1]
+        template = (root / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+
+        self.assertEqual(1, template.count("/*__LEARNING_RUNTIME__*/"))
+        self.assertNotIn("function activeWeights(){", template)
+        self.assertNotIn("function activeCalibration(){", template)
+        self.assertNotIn("function scoreModelChoice(){", template)
+        self.assertIn("verified_lifecycle_samples", template)
+        self.assertIn("activeWeights()", template)
+        self.assertNotIn("((lh.pl||{}).current_weights||{})", template)
+
+
 if __name__ == "__main__":
     unittest.main()

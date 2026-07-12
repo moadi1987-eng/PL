@@ -230,10 +230,9 @@ body.wc .htot .hl,body.wc .htot .hp{color:#f7c948}
 /*__GUESSES_LL__*/
 /*__GUESSES_WC__*/
 /*__SERVER__*/
-/*__WEIGHTS__*/
-/*__WEIGHTS_WC__*/
 /*__BUILD_TIME__*/
 /*__LEARNING_HISTORY__*/
+/*__LEARNING_RUNTIME__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
 var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,ct3:null,ct4:null,cn:5,league:"pl",gwl:"GW",arch:false,plSeason:""};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]},wc:{tm:{},gw:[],fx:[],archive:false}};
@@ -1062,22 +1061,6 @@ function _poisson(lam,k){if(lam<=0)return k===0?1:0;var f=1;for(var i=2;i<=k;i++
 function _poissonMatch(lH,lA){var hw=0,dr=0,aw=0,best=[0,0],bp=0;for(var h=0;h<=5;h++)for(var a=0;a<=5;a++){var p=_poisson(lH,h)*_poisson(lA,a);if(h>a)hw+=p;else if(h===a)dr+=p;else aw+=p;if(p>bp){bp=p;best=[h,a]}}var t=hw+dr+aw||1;return{hw:Math.round(hw/t*1000)/10,dr:Math.round(dr/t*1000)/10,aw:Math.round(aw/t*1000)/10,bs:best}}
 function defaultWeights(){return{form:.15,strength:.15,position:.12,home_adv:.08,streak:.12,h2h:.08,home_away_split:.08,goals_trend:.06,upset:.06,clean_sheet:.05,draw_tendency:.05}}
 function defaultCalibration(){return{goal_mult:1,home_goal_bias:0,away_goal_bias:0,draw_bias:1,zero_zero_penalty:.62}}
-function activeWeights(){
-  var d=defaultWeights();
-  if(D.league==="wc"&&typeof EMBEDDED_WEIGHTS_WC!=="undefined"){
-    if(EMBEDDED_WEIGHTS_WC.factors)return EMBEDDED_WEIGHTS_WC.factors;
-    return EMBEDDED_WEIGHTS_WC;
-  }
-  if(typeof EMBEDDED_WEIGHTS!=="undefined")return EMBEDDED_WEIGHTS;
-  return d
-}
-function activeCalibration(){
-  var c=defaultCalibration();
-  if(D.league==="wc"&&typeof EMBEDDED_WEIGHTS_WC!=="undefined"&&EMBEDDED_WEIGHTS_WC.calibration){
-    Object.keys(c).forEach(function(k){if(EMBEDDED_WEIGHTS_WC.calibration[k]!=null)c[k]=+EMBEDDED_WEIGHTS_WC.calibration[k]});
-  }
-  return c
-}
 function pickOutcome(hp,dp,ap,neutral){var v=neutral?{home:hp,draw:dp*1.35,away:ap}:{home:hp*1.25,draw:dp*1.8,away:ap*.85};return v.home>=v.away&&v.home>=v.draw?"home":v.away>=v.home&&v.away>=v.draw?"away":"draw"}
 function alignScore(h,a,w){h=Math.max(0,Math.round(h));a=Math.max(0,Math.round(a));if(w==="draw"){var s=Math.max(0,Math.round((h+a)/2));return[s,s]}if(w==="home"&&h<=a)h=a+1;if(w==="away"&&a<=h)a=h+1;return[h,a]}
 function scoreForWinner(lH,lA,w,ctx){
@@ -1150,20 +1133,6 @@ function scoreV4Pick(lH,lA,prob,ctx){
   else if(total<2.25){fg=1;dg=0;reason="tight-win"}
   return rec==="home"?{rec:rec,h:fg,a:dg,reason:reason}:{rec:rec,h:dg,a:fg,reason:reason}
 }
-function scoreModelChoice(){
-  var out={useV4:true,reason:"v4 active"};
-  try{
-    var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{},cmp=((lh[D.league]||{}).model_comparison)||null;
-    if(D.league!=="wc"&&cmp&&cmp.delta){
-      var pts=+cmp.delta.points||0,exact=+cmp.delta.exact_accuracy||0,winner=+cmp.delta.winner_accuracy||0;
-      if(pts<0&&exact<=0&&winner<=0){
-        out.useV4=false;
-        out.reason="baseline kept: v4 backtest "+pts+" pts, "+exact+"% exact";
-      }
-    }
-  }catch(e){}
-  return out
-}
 function upsetRadar(hid,aid,ctx){
   ctx=ctx||{};var hp=+ctx.hp||0,ap=+ctx.ap||0,dp=+ctx.dp||0,side=hp<=ap?"home":"away",fav=side==="home"?"away":"home",gap=Math.abs(hp-ap);
   var u=side==="home"?{id:hid,s:ctx.hs,tr:ctx.hTrGf,con:ctx.hCon,cs:ctx.hCs,m:ctx.hMot}:{id:aid,s:ctx.as,tr:ctx.aTrGf,con:ctx.aCon,cs:ctx.aCs,m:ctx.aMot};
@@ -1207,7 +1176,7 @@ function pred(hid,aid,gw,match){var hs=tS(hid,5,gw,match),as=tS(aid,5,gw,match),
   var hAll=allMatches(hid,gw,match),aAll=allMatches(aid,gw,match);
   var hWI=neutral?wcIntel(hid,gw,match):null,aWI=neutral?wcIntel(aid,gw,match):null,hMot=neutral?wcMotivation(hid,gw,match):null,aMot=neutral?wcMotivation(aid,gw,match):null;
   var W=activeWeights();
-  var C=neutral?activeCalibration():defaultCalibration();
+  var C=activeCalibration();
   var tSize=Math.max(D.st.length,20),midPos=Math.ceil(tSize/2);
   var hP=(tSize+1-(pm[hid]||midPos))/tSize*100,aP=(tSize+1-(pm[aid]||midPos))/tSize*100;
   var hRat=(ht.sah||1e3)/Math.max(at.sda||1e3,1),aRat=(at.saa||1e3)/Math.max(ht.sdh||1e3,1);
@@ -1853,6 +1822,29 @@ function aiModelComparison(cmp){
   h+='</div><div class="aisrc"><div><b>Score diversity</b><span>v3: '+b.unique_scores+' scorelines · '+topScores(b.top_scores)+'</span></div><div><b>v4 mix</b><span>v4: '+v.unique_scores+' scorelines · '+topScores(v.top_scores)+' · draw picks '+v.draw_picks+'</span></div></div>';
   return h;
 }
+function aiStatusText(value){return String(value==null?"":value).replace(/[&<>"']/g,function(ch){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]})}
+function aiStatusNumber(value){var n=Number(value);return isFinite(n)?n:null}
+function aiStatusMetric(box,key,suffix){var n=aiStatusNumber((box||{})[key]);return n===null?"-":n+(suffix||"")}
+function aiModelStatus(lgData,modelCmp){
+  var status=(lgData&&lgData.model_status)||{},state=learningModelState(D.league),choice=scoreModelChoice();
+  var active=choice.strategy||"baseline",candidate=choice.candidateStrategy||(active==="v4"?"baseline":"v4");
+  var models=(modelCmp&&modelCmp.models)||{};
+  if(!Object.keys(models).length&&modelCmp)models={baseline:modelCmp.baseline||{},v4:modelCmp.challenger||{}};
+  var activeBox=models[active]||{},candidateBox=models[candidate]||{};
+  var verified=aiStatusNumber(status.verified_lifecycle_samples);
+  if(verified===null&&D.league!=="wc")verified=aiStatusNumber(modelCmp&&modelCmp.total);
+  if(verified===null)verified=0;
+  var phase=choice.status||"collecting",label=phase==="promote"?"Promoted":phase==="winner_guard"?"Held: direction guard":phase==="points_guard"?"Held: points guard":"Collecting "+Math.min(verified,30)+"/30";
+  var meta=(lgData&&lgData.model_meta)||state.meta||{},trained=meta.last_trained_at||"not trained";
+  var complete=aiStatusNumber(lgData&&lgData.data_completeness_pct),completeLabel=complete===null?"n/a":Math.max(0,Math.min(100,complete)).toFixed(1)+"%";
+  var completeNote=complete===null?"Trusted inputs unavailable":complete<100?"Some trusted inputs unavailable":"All tracked inputs available";
+  return '<div class="sec" style="margin-bottom:.25rem">Model Status</div><div class="ainote"><b>'+aiStatusText(label)+'</b> · active '+aiStatusText(active)+' · candidate '+aiStatusText(candidate)+' · verified '+verified+'/30 · trained '+aiStatusText(trained)+'</div>'+
+    '<div class="aimetrics">'+
+      '<div class="aimetric"><span>Active '+aiStatusText(active)+'</span><b>'+aiStatusMetric(activeBox,"points"," pts")+'</b><em>'+aiStatusMetric(activeBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(activeBox,"exact_accuracy","%")+' exact</em></div>'+
+      '<div class="aimetric"><span>Candidate '+aiStatusText(candidate)+'</span><b>'+aiStatusMetric(candidateBox,"points"," pts")+'</b><em>'+aiStatusMetric(candidateBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(candidateBox,"exact_accuracy","%")+' exact</em></div>'+
+      '<div class="aimetric"><span>Data complete</span><b>'+completeLabel+'</b><em>'+completeNote+'</em></div>'+
+    '</div>';
+}
 function aiTrendChart(rows,gwLbl,lgCol){
   var rs=normAIRows(rows);
   if(!rs.length)return '';
@@ -1882,9 +1874,8 @@ function rAI(){
   var rows=normAIRows(lgData.gw_results||[]);
   if(!rows.length)rows=normAIRows(localLearningRows());
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
-  var hasOwnWeights=!!(lgData.current_weights&&Object.keys(lgData.current_weights).length);
-  var wts=hasOwnWeights?lgData.current_weights:((lh.pl||{}).current_weights||{});
-  var cal=isWC?(lgData.calibration||activeCalibration()):null,meta=(lgData.model_meta||{});
+  var wts=activeWeights(),hasOwnWeights=Object.keys(wts).length>0;
+  var cal=activeCalibration(),meta=(lgData.model_meta||{});
   var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';
@@ -1902,6 +1893,7 @@ function rAI(){
   var mainAcc=focus?focus.accuracy_pct:acc,focusName=focus?(focus.gw===D.sel?'Selected ':'Latest ')+gwLbl+focus.gw:'Overall';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
   h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+' '+focusName+' hit rate</div><div class="ainum" style="color:'+lgCol+'">'+mainAcc+'%</div><div class="aimeta">'+(focus?focus.correct_winner+'/'+focus.total+' games on this '+gwLbl.toLowerCase()+' · ':'')+'overall '+acc+'% ('+overall.correct_winner+'/'+tot+') · exact '+overall.score_acc_pct+'%</div></div>'+tSpan+'</div></div>';
+  h+=aiModelStatus(lgData,modelCmp);
   h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, ESPN roster availability, manual absence overrides, points in the group, goal difference, and qualification pressure.</span></div>'+
     '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson baseline, checks upset and draw value, then tests v4 against the learned history and uses it only when the backtest is better.</span></div>'+
     '<div><b>Learning state</b><span>'+(isWC?'Predictions are saved as pre-match snapshots. After the match, only newly checked snapshots train the model, so the same match is not learned repeatedly.':'After matches finish, the build recalculates accuracy, factor weights, and compares v4 against the previous expected-points score model.')+'</span></div></div>';

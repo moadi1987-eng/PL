@@ -27,9 +27,11 @@ from datetime import datetime, timedelta, timezone
 try:
     from league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
+    from learning_embed import embed_learning_runtime
 except ImportError:
     from .league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
+    from .learning_embed import embed_learning_runtime
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -2179,26 +2181,15 @@ except Exception as _wc_ml_err:
     learning_history.setdefault("wc", {"gw_results": []})
     print(f"World Cup ML skipped: {_wc_ml_err}")
 
-_lh_json = json.dumps(learning_history, separators=(",", ":"))
-html = html.replace("/*__LEARNING_HISTORY__*/", "var LEARNING_HISTORY=" + _lh_json + ";")
-
-weights_file = os.path.join(ROOT, "ai_weights.json")
-if os.path.exists(weights_file):
-    with open(weights_file, "r") as wf:
-        weights_json = wf.read().strip()
-    html = html.replace("/*__WEIGHTS__*/", "var EMBEDDED_WEIGHTS=" + weights_json + ";")
-    print(f"AI weights embedded")
-else:
-    html = html.replace("/*__WEIGHTS__*/", "")
-
-weights_wc_file = os.path.join(ROOT, "ai_weights_wc.json")
-if os.path.exists(weights_wc_file):
-    with open(weights_wc_file, "r", encoding="utf-8") as wf:
-        weights_wc_json = wf.read().strip()
-    html = html.replace("/*__WEIGHTS_WC__*/", "var EMBEDDED_WEIGHTS_WC=" + weights_wc_json + ";")
-    print("World Cup AI weights embedded")
-else:
-    html = html.replace("/*__WEIGHTS_WC__*/", "")
+with open(os.path.join(HERE, "learning_runtime.js"), "r", encoding="utf-8") as _runtime_file:
+    learning_runtime_source = _runtime_file.read()
+embedded_models = {
+    "pl": _load_json_file(PL_WEIGHTS_FILE, {}),
+    "laliga": _load_json_file(LL_WEIGHTS_FILE, {}),
+    "wc": _load_json_file(WC_WEIGHTS_FILE, {}),
+}
+html = embed_learning_runtime(html, embedded_models, learning_history, learning_runtime_source)
+print("Per-league AI learning state embedded")
 
 with open(OUT, "w", encoding="utf-8") as f:
     f.write(html)
