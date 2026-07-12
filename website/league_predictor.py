@@ -225,11 +225,23 @@ def _score_winner(home_score, away_score):
 
 def _reweight_score_grid(grid, poisson_outcomes, target_outcomes):
     adjusted = {}
-    for (home_score, away_score), probability in grid.items():
-        winner = _score_winner(home_score, away_score)
-        source = _number(poisson_outcomes.get(winner), 0.0)
+    canonical = {"home": (1, 0), "draw": (0, 0), "away": (0, 1)}
+    for winner in ("home", "draw", "away"):
+        scores = sorted(score for score in grid if _score_winner(*score) == winner)
         target = max(_number(target_outcomes.get(winner), 0.0), 0.0)
-        adjusted[(home_score, away_score)] = probability * target / source if source > 0 else 0.0
+        if not scores:
+            if target:
+                adjusted[canonical[winner]] = target
+            continue
+        source = _number(poisson_outcomes.get(winner), 0.0)
+        values = {score: max(_number(grid[score], 0.0), 0.0) for score in scores}
+        if source > 0 and sum(values.values()) > 0:
+            for score, probability in values.items():
+                adjusted[score] = probability * target / source
+        else:
+            share = target / len(scores)
+            for score in scores:
+                adjusted[score] = share
     return adjusted
 
 

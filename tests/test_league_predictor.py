@@ -189,6 +189,19 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertEqual(1, trained["meta"]["last_batch_size"])
         self.assertNotEqual("", trained["meta"]["last_trained_at"])
 
+    def test_reweight_grid_assigns_positive_targets_when_source_mass_is_zero(self):
+        adjusted = predictor._reweight_score_grid(
+            {(1, 0): 0.0, (0, 0): 1.0},
+            {"home": 0.0, "draw": 1.0, "away": 0.0},
+            {"home": 0.2, "draw": 0.3, "away": 0.5},
+        )
+        self.assertAlmostEqual(1.0, sum(adjusted.values()), places=12)
+        self.assertAlmostEqual(0.2, sum(value for (home, away), value in adjusted.items() if home > away), places=12)
+        self.assertAlmostEqual(0.3, sum(value for (home, away), value in adjusted.items() if home == away), places=12)
+        self.assertAlmostEqual(0.5, sum(value for (home, away), value in adjusted.items() if home < away), places=12)
+        self.assertEqual(0.5, adjusted[(0, 1)])
+        self.assertTrue(all(math.isfinite(value) and value >= 0 for value in adjusted.values()))
+
 
 if __name__ == "__main__":
     unittest.main()
