@@ -76,23 +76,65 @@ def _guard_contains_publish_and_not_ci(node):
 
 def _upload_bypass_reasons(source):
     tree = ast.parse(source)
-    functions = {
-        node.name: node
-        for node in ast.walk(tree)
-        if _is_function(node)
-    }
+    functions = {}
+    classes = {}
+
+    def collect(node, scope=()):
+        for child in ast.iter_child_nodes(node):
+            if _is_function(child):
+                qualified = ".".join(scope + (child.name,))
+                functions[qualified] = child
+                collect(child, scope + (child.name,))
+            elif isinstance(child, ast.ClassDef):
+                qualified = ".".join(scope + (child.name,))
+                classes[qualified] = child
+                collect(child, scope + (child.name,))
+            else:
+                collect(child, scope)
+
+    collect(tree)
+
+    def resolve_bare(name, scope):
+        for end in range(len(scope), -1, -1):
+            qualified = ".".join(scope[:end] + (name,))
+            if qualified in functions:
+                return {qualified}
+        return set()
+
+    def resolve_class(name, scope):
+        for end in range(len(scope), -1, -1):
+            qualified = ".".join(scope[:end] + (name,))
+            if qualified in classes:
+                return {qualified}
+        return set()
+
+    def resolve_call_targets(call, scope):
+        if isinstance(call.func, ast.Name):
+            return resolve_bare(call.func.id, scope)
+        if not isinstance(call.func, ast.Attribute):
+            return set()
+        method = call.func.attr
+        targets = {name for name in functions if name.endswith("." + method)}
+        value = call.func.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            targets.update(
+                f"{class_name}.{method}" for class_name in resolve_class(value.func.id, scope)
+            )
+        return targets
+
     direct_sinks = {}
     calls = {}
-    for name, function in functions.items():
-        direct_sinks[name] = False
-        calls[name] = set()
+    for qualified, function in functions.items():
+        scope = tuple(qualified.split("."))
+        direct_sinks[qualified] = False
+        calls[qualified] = set()
         for node in _runtime_descendants(function):
             if not isinstance(node, ast.Call):
                 continue
             if _is_upload_sink(node):
-                direct_sinks[name] = True
-            elif isinstance(node.func, ast.Name) and node.func.id in functions:
-                calls[name].add(node.func.id)
+                direct_sinks[qualified] = True
+            else:
+                calls[qualified].update(resolve_call_targets(node, scope))
 
     reachable_cache = {}
 
@@ -109,28 +151,23 @@ def _upload_bypass_reasons(source):
 
     reasons = []
 
-    def scan(node, guarded, location="module"):
+    def scan(node, guarded, scope=()):
         if _is_function(node) or isinstance(node, (ast.ClassDef, ast.Lambda)):
             return
         if isinstance(node, ast.If):
             body_guarded = guarded or _guard_contains_publish_and_not_ci(node.test)
             for child in node.body:
-                scan(child, body_guarded, location)
+                scan(child, body_guarded, scope)
             for child in node.orelse:
-                scan(child, guarded, location)
+                scan(child, guarded, scope)
             return
         if isinstance(node, ast.Call):
             if _is_upload_sink(node) and not guarded:
                 reasons.append(f"unguarded upload sink at line {node.lineno}")
-            elif (
-                isinstance(node.func, ast.Name)
-                and node.func.id in functions
-                and reaches_upload(node.func.id)
-                and not guarded
-            ):
-                reasons.append(f"unguarded upload helper {node.func.id} at line {node.lineno}")
+            elif any(reaches_upload(target) for target in resolve_call_targets(node, scope)) and not guarded:
+                reasons.append(f"unguarded upload helper at line {node.lineno}")
         for child in ast.iter_child_nodes(node):
-            scan(child, guarded, location)
+            scan(child, guarded, scope)
 
     scan(tree, False)
     return reasons
@@ -240,9 +277,9 @@ def _git_add_paths(step):
     if len(commands) != 1:
         return None
     arguments = commands[0]
-    if "--" in arguments:
-        arguments = arguments[arguments.index("--") + 1 :]
-    return {argument for argument in arguments if not argument.startswith("-")}
+    if not arguments or any(argument.startswith("-") for argument in arguments):
+        return None
+    return arguments
 
 
 def _count_executable_git_commands(workflow, verb):
@@ -290,6 +327,40 @@ def _forbidden_build_env(step):
     return found
 
 
+def _forbidden_persistent_env(script):
+    found = set()
+    target_pattern = re.compile(r"\$(?:\{)?(?:GITHUB_ENV|GITHUB_OUTPUT)(?:\})?", re.IGNORECASE)
+    assignment_pattern = re.compile(
+        r"\b(GITHUB_TOKEN|GH_TOKEN|PUBLISH_TO_GITHUB)\s*=", re.IGNORECASE
+    )
+
+    for command in _shell_commands(script):
+        if not target_pattern.search(command):
+            continue
+        if not re.search(r">>?|\btee\b|\bcat\b", command):
+            continue
+        found.update(match.group(1).upper() for match in assignment_pattern.finditer(command))
+
+    lines = script.splitlines()
+    for index, line in enumerate(lines):
+        if not target_pattern.search(line) or "<<" not in line:
+            continue
+        delimiter_match = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
+        if not delimiter_match:
+            continue
+        delimiter = delimiter_match.group(1)
+        body = []
+        for body_line in lines[index + 1 :]:
+            if body_line.strip() == delimiter:
+                break
+            body.append(body_line)
+        found.update(
+            match.group(1).upper()
+            for match in assignment_pattern.finditer("\n".join(body))
+        )
+    return found
+
+
 def _forbidden_workflow_env(workflow):
     found = set()
     lines = workflow.splitlines()
@@ -315,6 +386,7 @@ def _forbidden_workflow_env(workflow):
 
     for _, step in _extract_workflow_steps(workflow):
         found.update(_forbidden_build_env(step))
+        found.update(_forbidden_persistent_env(_extract_run_script(step)))
     return found
 
 
@@ -427,6 +499,17 @@ def _has_rebase_push_retry(step):
     if initial_args != ["origin", "main"] or retry_args != ["origin", "main"]:
         return False
     return push_target(initial_args) == push_target(retry_args)
+
+
+def _has_global_rebase_push_retry(workflow):
+    steps = _extract_workflow_steps(workflow)
+    try:
+        publish_step = _unique_workflow_step(steps, "Commit and push if changed")
+    except AssertionError:
+        return False
+    if _count_executable_git_commands(workflow, "push") != 2:
+        return False
+    return _has_rebase_push_retry(publish_step)
 
 
 def _alternate_upload_paths(workflow):
@@ -551,6 +634,23 @@ class PublishContractTests(unittest.TestCase):
                 "    inner()\n"
                 "outer()"
             ),
+            (
+                "class Uploader:\n"
+                "    def upload(self):\n"
+                "        requests.put('/file')\n"
+                "Uploader().upload()"
+            ),
+            (
+                "def first():\n"
+                "    def upload():\n"
+                "        requests.put('/first')\n"
+                "    upload()\n"
+                "def second():\n"
+                "    def upload():\n"
+                "        return None\n"
+                "    upload()\n"
+                "first()"
+            ),
         ]
         for snippet in rejected:
             with self.subTest(snippet=snippet):
@@ -575,6 +675,14 @@ class PublishContractTests(unittest.TestCase):
             ),
             "session.request('GET', '/safe')",
             "requests.Session().request(method='GET', url='/safe')",
+            (
+                "class Uploader:\n"
+                "    def upload(self):\n"
+                "        requests.put('/file')\n"
+                "if PUBLISH_TO_GITHUB and not IS_CI:\n"
+                "    Uploader().upload()"
+            ),
+            "def outer():\n    def never_called():\n        requests.put('/file')",
         ]
         for snippet in accepted:
             with self.subTest(snippet=snippet):
@@ -653,7 +761,7 @@ class PublishContractTests(unittest.TestCase):
         )
 
     def test_workflow_stages_every_generated_file_once(self):
-        required = {
+        required = [
             "index.html",
             "website/pl_mobile.html",
             "live.json",
@@ -664,7 +772,7 @@ class PublishContractTests(unittest.TestCase):
             "ai_weights_laliga.json",
             "ai_predictions_wc.json",
             "ai_weights_wc.json",
-        }
+        ]
         steps = _extract_workflow_steps(self.workflow)
         self.assertEqual(1, _count_executable_git_commands(self.workflow, "add"))
         self.assertEqual(
@@ -686,6 +794,28 @@ class PublishContractTests(unittest.TestCase):
             ),
         )
 
+        bad_adds = [
+            "git add -A " + " ".join(required),
+            "git add " + " ".join(required + ["index.html"]),
+            "git add " + " ".join(required + ["README.md"]),
+            "git add " + " ".join(required[:-1] + [":(exclude)ai_weights_wc.json"]),
+            "git add -- " + " ".join(required),
+        ]
+        for command in bad_adds:
+            with self.subTest(command=command):
+                fixture = f"""
+      - name: Commit and push if changed
+        run: {command}
+"""
+                self.assertNotEqual(
+                    required,
+                    _git_add_paths(
+                        _unique_workflow_step(
+                            _extract_workflow_steps(fixture), "Commit and push if changed"
+                        )
+                    ),
+                )
+
     def test_workflow_has_one_commit_and_preserves_atomic_push_retry(self):
         steps = _extract_workflow_steps(self.workflow)
         self.assertEqual(1, _count_executable_git_commands(self.workflow, "commit"))
@@ -693,6 +823,13 @@ class PublishContractTests(unittest.TestCase):
         self.assertTrue(
             _has_rebase_push_retry(_unique_workflow_step(steps, "Commit and push if changed"))
         )
+        self.assertTrue(_has_global_rebase_push_retry(self.workflow))
+
+        hidden_other_push = self.workflow + """
+      - name: Hidden duplicate publish
+        run: git push origin main
+"""
+        self.assertFalse(_has_global_rebase_push_retry(hidden_other_push))
 
         echo_push_fixture = """
       - name: Commit and push if changed
@@ -878,6 +1015,37 @@ jobs:
           python build.py
 """
         self.assertEqual(set(), _forbidden_workflow_env(safe_fixture))
+
+    def test_github_env_persistence_is_rejected_globally(self):
+        persistence_fixture = """
+jobs:
+  update:
+    steps:
+      - name: Earlier step
+        run: echo "GITHUB_TOKEN=secret" >> "$GITHUB_ENV"
+      - name: Current step
+        run: |
+          printf 'GH_TOKEN=secret\\n' >> ${GITHUB_OUTPUT}
+          cat >> "$GITHUB_ENV" <<'EOF'
+          PUBLISH_TO_GITHUB=1
+          EOF
+"""
+        self.assertEqual(
+            {"GITHUB_TOKEN", "GH_TOKEN", "PUBLISH_TO_GITHUB"},
+            _forbidden_workflow_env(persistence_fixture),
+        )
+
+        safe_persistence_fixture = """
+jobs:
+  update:
+    steps:
+      - name: Safe text
+        run: |
+          # echo GITHUB_TOKEN=secret >> "$GITHUB_ENV"
+          echo GITHUB_TOKEN=quoted
+          printf 'GH_TOKEN=quoted'
+"""
+        self.assertEqual(set(), _forbidden_workflow_env(safe_persistence_fixture))
 
     def test_workflow_has_no_alternate_upload_path(self):
         self.assertEqual([], _alternate_upload_paths(self.workflow))
