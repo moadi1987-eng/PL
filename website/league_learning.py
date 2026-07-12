@@ -257,7 +257,9 @@ def load_json_state(path, default):
         if not isinstance(value, dict):
             return copy.deepcopy(default), False
         return value, True
-    except (OSError, UnicodeError, ValueError, TypeError):
+    except FileNotFoundError:
+        return copy.deepcopy(default), False
+    except (UnicodeError, json.JSONDecodeError, TypeError):
         return copy.deepcopy(default), False
 
 

@@ -405,12 +405,13 @@ def _normalize_wc_model(raw):
 
 def _load_json_file(path, default):
     try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return default
+        with open(path, "r", encoding="utf-8") as f:
+            value = json.load(f)
+        return value
+    except FileNotFoundError:
+        return default
+    except (UnicodeError, json.JSONDecodeError, TypeError):
+        return default
 
 
 def _save_json_file(path, data):
@@ -1237,6 +1238,114 @@ def _wc_shared_trainer(model, rows):
     return updated
 
 
+def _wc_archive_box(source):
+    source = source if isinstance(source, dict) else {}
+    return {
+        "winner_correct": int(source.get("winner_correct", source.get("winner", 0)) or 0),
+        "exact_correct": int(source.get("exact_correct", source.get("exact", 0)) or 0),
+        "points": int(source.get("points", 0) or 0),
+        "unique_scores": int(source.get("unique_scores", 0) or 0),
+        "top_scores": copy.deepcopy(source.get("top_scores", [])),
+    }
+
+
+def _wc_archive_comparison(previous, snapshots):
+    previous = previous if isinstance(previous, dict) else {}
+    prior = previous.get("model_comparison") if isinstance(previous.get("model_comparison"), dict) else {}
+    old_models = prior.get("models") if isinstance(prior.get("models"), dict) else {}
+    baseline = _wc_archive_box(prior.get("baseline") or old_models.get("baseline"))
+    challenger = _wc_archive_box(prior.get("challenger") or old_models.get("v4"))
+    total = int(prior.get("total", previous.get("total_evaluated", 0)) or 0)
+
+    for snapshot in snapshots:
+        total += 1
+        for name, box in (("baseline", baseline), ("v4", challenger)):
+            evaluation = (snapshot.get("evaluations") or {}).get(name) or {}
+            box["winner_correct"] += int(bool(evaluation.get("winner_correct")))
+            box["exact_correct"] += int(bool(evaluation.get("exact")))
+            box["points"] += int(evaluation.get("points", 0) or 0)
+            score = evaluation.get("score")
+            if score:
+                scores = {item.get("score"): int(item.get("count", 0) or 0) for item in box["top_scores"] if isinstance(item, dict) and item.get("score")}
+                if score not in scores:
+                    box["unique_scores"] += 1
+                scores[score] = scores.get(score, 0) + 1
+                box["top_scores"] = [
+                    {"score": key, "count": value}
+                    for key, value in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:6]
+                ]
+
+    for box in (baseline, challenger):
+        box["winner_accuracy"] = round(box["winner_correct"] / max(total, 1) * 100, 1)
+        box["exact_accuracy"] = round(box["exact_correct"] / max(total, 1) * 100, 1)
+    return {
+        "total": total,
+        "baseline_model": prior.get("baseline_model", "v3 expected-points"),
+        "challenger_model": prior.get("challenger_model", "v4 scoreline"),
+        "baseline": baseline,
+        "challenger": challenger,
+        "models": {"baseline": copy.deepcopy(baseline), "v4": copy.deepcopy(challenger)},
+        "delta": {
+            "winner_accuracy": round(challenger["winner_accuracy"] - baseline["winner_accuracy"], 1),
+            "exact_accuracy": round(challenger["exact_accuracy"] - baseline["exact_accuracy"], 1),
+            "points": challenger["points"] - baseline["points"],
+            "unique_scores": challenger["unique_scores"] - baseline["unique_scores"],
+        },
+    }
+
+
+def _wc_merge_verified_archive(previous, lifecycle_history):
+    previous = previous if isinstance(previous, dict) else {}
+    merged = copy.deepcopy(lifecycle_history)
+    store = _load_json_file(WC_PREDICTIONS_FILE, {"matches": {}})
+    matches = store.get("matches", {}) if isinstance(store, dict) else {}
+    seen = {str(match_id) for match_id in previous.get("merged_lifecycle_match_ids", [])}
+    new_snapshots = []
+    for match_id, snapshot in matches.items() if isinstance(matches, dict) else ():
+        if not isinstance(snapshot, dict) or str(match_id) in seen:
+            continue
+        if snapshot.get("lock_verified") is True and snapshot.get("checked") is True and {"baseline", "v4"}.issubset((snapshot.get("evaluations") or {})):
+            new_snapshots.append(snapshot)
+            seen.add(str(match_id))
+
+    rows = {int(row.get("gw", 0) or 0): copy.deepcopy(row) for row in previous.get("gw_results", []) if isinstance(row, dict)}
+    for snapshot in new_snapshots:
+        round_id = int(snapshot.get("round", 0) or 0)
+        row = rows.setdefault(round_id, {"gw": round_id, "total": 0, "correct_winner": 0, "correct_score": 0, "exact_score": 0, "points": 0})
+        evaluation = (snapshot.get("evaluations") or {}).get(snapshot.get("active_strategy_at_lock", "v4"), {})
+        row["total"] += 1
+        row["correct_winner"] += int(bool(evaluation.get("winner_correct")))
+        row["correct_score"] += int(bool(evaluation.get("exact")))
+        row["exact_score"] = int(row.get("exact_score", row["correct_score"]) or 0) + int(bool(evaluation.get("exact")))
+        row["points"] += int(evaluation.get("points", 0) or 0)
+
+    gw_results = []
+    for row in sorted(rows.values(), key=lambda item: item["gw"]):
+        row.setdefault("total", 0)
+        row.setdefault("correct_winner", 0)
+        row.setdefault("correct_score", 0)
+        row.setdefault("exact_score", row["correct_score"])
+        row.setdefault("points", 0)
+        row["accuracy_pct"] = round(row["correct_winner"] / max(row["total"], 1) * 100, 1)
+        row["score_acc_pct"] = round(row["correct_score"] / max(row["total"], 1) * 100, 1)
+        gw_results.append(row)
+    total = sum(row["total"] for row in gw_results)
+    correct = sum(row["correct_winner"] for row in gw_results)
+    verified_samples = int((lifecycle_history.get("model_comparison") or {}).get("total", 0) or 0)
+    status = copy.deepcopy(lifecycle_history.get("model_status", {}))
+    status["verified_lifecycle_samples"] = verified_samples
+    status["display_archive_samples"] = total
+    merged.update({
+        "gw_results": gw_results,
+        "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
+        "total_evaluated": total,
+        "model_comparison": _wc_archive_comparison(previous, new_snapshots),
+        "model_status": status,
+        "merged_lifecycle_match_ids": sorted(seen),
+    })
+    return merged
+
+
 def run_wc_learning(wc_payload, history):
     if not wc_payload:
         return history
@@ -1259,10 +1368,7 @@ def run_wc_learning(wc_payload, history):
         model_trainer=_wc_shared_trainer,
         default_model=_wc_default_model(),
     )
-    if previous.get("gw_results"):
-        for key in ("gw_results", "overall_accuracy", "total_evaluated", "model_comparison"):
-            if key in previous:
-                wc_history[key] = copy.deepcopy(previous[key])
+    wc_history = _wc_merge_verified_archive(previous, wc_history)
     wc_history["refreshed_predictions"] = 0
     history = merge_learning_history(history, "wc", wc_history)
     atomic_save_json(LEARNING_HISTORY_FILE, history)

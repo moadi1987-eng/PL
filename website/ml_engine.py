@@ -442,6 +442,7 @@ def run_pl_learning(all_pl_fixtures, teams_map):
     teams_map: dict of team_id → team stats dict
     Returns updated history dict.
     """
+    raise RuntimeError("run_pl_learning is deprecated; use league_learning.run_persistent_competition")
     history     = _load(HISTORY_PATH, {"pl": {"gw_results": []}, "laliga": {"gw_results": []}})
     weights     = _load(WEIGHTS_PATH, dict(DEFAULT_WEIGHTS))
     predictions = _load(PREDICTIONS_PATH, {})
@@ -509,6 +510,7 @@ def run_ll_learning(ll_fixtures, ll_predictions_by_gw=None):
     ll_fixtures: list of ESPN compact fixtures
     ll_predictions_by_gw: dict of gw → [prediction dicts]
     """
+    raise RuntimeError("run_ll_learning is deprecated; use league_learning.run_persistent_competition")
     history  = _load(HISTORY_PATH, {"pl": {"gw_results": []}, "laliga": {"gw_results": []}})
     raw_predictions = ll_predictions_by_gw if ll_predictions_by_gw is not None else _load(LL_PREDICTIONS_PATH, {})
     normalized_predictions = {}
