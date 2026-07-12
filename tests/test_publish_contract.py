@@ -34,10 +34,8 @@ def _is_upload_sink(node):
         return True
     if node.func.attr != "request":
         return False
-    return isinstance(node.func.value, ast.Name) and node.func.value.id == "requests" and (
-        _request_method(node) is None
-        or _request_method(node).upper() in UPLOAD_METHODS
-    )
+    method = _request_method(node)
+    return method is None or method.upper() in UPLOAD_METHODS
 
 
 def _is_function(node):
@@ -258,12 +256,26 @@ def _forbidden_build_env(step):
             key_match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", env_line)
             if key_match and key_match.group(1) in FORBIDDEN_BUILD_ENV:
                 found.add(key_match.group(1))
-    run_script = _extract_run_script(step)
-    for match in re.finditer(
-        r"(?<![A-Za-z0-9_$])(GITHUB_TOKEN|GH_TOKEN|PUBLISH_TO_GITHUB)\s*=",
-        run_script,
-    ):
-        found.add(match.group(1))
+
+    def assignment_name(token):
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", token)
+        return match.group(1) if match else None
+
+    for tokens in _shell_invocations(_extract_run_script(step)):
+        if not tokens or tokens[0] in {"echo", "printf"}:
+            continue
+        if tokens[0] == "export":
+            assignment_tokens = tokens[1:]
+        elif tokens[0] == "env":
+            assignment_tokens = tokens[1:]
+        else:
+            assignment_tokens = tokens
+        for token in assignment_tokens:
+            name = assignment_name(token)
+            if name is None:
+                break
+            if name in FORBIDDEN_BUILD_ENV:
+                found.add(name)
     return found
 
 
@@ -307,6 +319,24 @@ def _has_rebase_push_retry(step):
 
 def _alternate_upload_paths(workflow):
     findings = []
+
+    def has_upload_method(tokens):
+        lowered = [token.lower() for token in tokens]
+        for index, token in enumerate(lowered):
+            if token in {"--request", "--method", "-x"} and index + 1 < len(lowered):
+                if lowered[index + 1] in {method.lower() for method in UPLOAD_METHODS}:
+                    return True
+            for prefix in ("--request=", "--method="):
+                if token.startswith(prefix) and token[len(prefix) :] in {
+                    method.lower() for method in UPLOAD_METHODS
+                }:
+                    return True
+            if token.startswith("-x") and token[2:] in {
+                method.lower() for method in UPLOAD_METHODS
+            }:
+                return True
+        return False
+
     for step_name, step in _extract_workflow_steps(workflow).items():
         for line in step.splitlines():
             uses_match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
@@ -314,20 +344,13 @@ def _alternate_upload_paths(workflow):
                 findings.append(f"{step_name}: alternate action")
         for tokens in _shell_invocations(_extract_run_script(step)):
             lowered = [token.lower() for token in tokens]
-            joined = " ".join(lowered)
-            method_upload = any(
-                lowered[index + 1] in {method.lower() for method in UPLOAD_METHODS}
-                for index, token in enumerate(lowered[:-1])
-                if token in {"-x", "--method"}
-            )
-            github_contents = "contents/" in joined or "api.github.com" in joined
-            if "gh" in lowered and "api" in lowered and (method_upload or github_contents):
+            method_upload = has_upload_method(tokens)
+            if lowered and lowered[0] in {"echo", "printf"}:
+                continue
+            if "gh" in lowered and "api" in lowered:
                 findings.append(f"{step_name}: gh api upload")
             if lowered and lowered[0] == "curl" and (
-                method_upload
-                or github_contents
-                or "--upload-file" in lowered
-                or "-t" in lowered
+                method_upload or "--upload-file" in lowered or "-t" in lowered
             ):
                 findings.append(f"{step_name}: curl upload")
     return findings
@@ -354,12 +377,22 @@ class PublishContractTests(unittest.TestCase):
             "requests.delete('/contents/file')",
             "requests.request('PUT', '/contents/file')",
             "requests.request(method='DELETE', url='/contents/file')",
+            "session.request('PUT', '/file')",
+            "requests.Session().request(method='PATCH', url='/file')",
             "session_alias.patch('/contents/file')",
             "requests.Session().put('/contents/file')",
             "def upload():\n    requests.put('/contents/file')\nupload()",
+            "def upload():\n    session.request('PUT', '/file')\nupload()",
             (
                 "def inner():\n"
                 "    requests.request(method='POST', url='/contents/file')\n"
+                "def outer():\n"
+                "    inner()\n"
+                "outer()"
+            ),
+            (
+                "def inner():\n"
+                "    requests.Session().request(method='PATCH', url='/file')\n"
                 "def outer():\n"
                 "    inner()\n"
                 "outer()"
@@ -386,6 +419,8 @@ class PublishContractTests(unittest.TestCase):
                 "if PUBLISH_TO_GITHUB and not IS_CI:\n"
                 "    outer()"
             ),
+            "session.request('GET', '/safe')",
+            "requests.Session().request(method='GET', url='/safe')",
         ]
         for snippet in accepted:
             with self.subTest(snippet=snippet):
@@ -426,6 +461,28 @@ class PublishContractTests(unittest.TestCase):
         self.assertEqual(
             {"PUBLISH_TO_GITHUB"},
             _forbidden_build_env(_extract_workflow_steps(publish_fixture)["Build dashboard"]),
+        )
+
+        safe_text_fixture = """
+      - name: Build dashboard
+        run: |
+          # GITHUB_TOKEN=secret
+          echo GITHUB_TOKEN=secret
+          printf 'GH_TOKEN=secret'
+          python build.py
+"""
+        self.assertEqual(
+            set(),
+            _forbidden_build_env(_extract_workflow_steps(safe_text_fixture)["Build dashboard"]),
+        )
+
+        env_command_fixture = """
+      - name: Build dashboard
+        run: env PUBLISH_TO_GITHUB=1 python build.py
+"""
+        self.assertEqual(
+            {"PUBLISH_TO_GITHUB"},
+            _forbidden_build_env(_extract_workflow_steps(env_command_fixture)["Build dashboard"]),
         )
 
     def test_workflow_stages_every_generated_file_once(self):
@@ -483,6 +540,30 @@ class PublishContractTests(unittest.TestCase):
           curl -X POST https://api.github.com/repos/x/contents/live.json
 """
         self.assertTrue(_alternate_upload_paths(fixture))
+
+        method_fixture = """
+      - name: Upload methods
+        run: |
+          gh api --method=PUT remote/endpoint
+          gh api --method post remote/endpoint
+          curl --request=PATCH remote/endpoint
+          curl --request delete remote/endpoint
+          curl --method=PUT remote/endpoint
+          curl --method post remote/endpoint
+          curl -XPUT remote/endpoint
+          curl -x patch remote/endpoint
+          curl -X DELETE remote/endpoint
+"""
+        self.assertGreaterEqual(len(_alternate_upload_paths(method_fixture)), 9)
+
+        safe_text_fixture = """
+      - name: Safe text
+        run: |
+          # gh api --method=PUT remote/endpoint
+          echo curl -XPUT remote/endpoint
+          printf 'gh api --method=POST remote/endpoint'
+"""
+        self.assertEqual([], _alternate_upload_paths(safe_text_fixture))
 
 if __name__ == "__main__":
     unittest.main()
