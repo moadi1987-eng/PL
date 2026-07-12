@@ -255,6 +255,9 @@ REQUIRED_GENERATED_PATHS = [
 
 
 def _workflow_contract_reasons(workflow):
+    layout_reasons = _workflow_step_layout_reasons(workflow)
+    if layout_reasons:
+        return layout_reasons
     wrapper_reasons = _wrapper_bypass_reasons(workflow)
     if wrapper_reasons:
         return wrapper_reasons
@@ -323,23 +326,13 @@ def _extract_workflow_steps(workflow):
                 if next_indent == indent:
                     end = next_start
                     break
-            name = None
-            for name_line in lines[start:end]:
-                name_match = re.match(
-                    r"^(?P<indent>[ \t]*)(?:-\s+)?name:\s*(?P<value>.*?)\s*$",
-                    name_line,
-                )
-                if not name_match:
-                    continue
-                name_indent = len(name_match.group("indent"))
-                if name_indent not in {indent, indent + 2}:
-                    continue
-                name = name_match.group("value").strip().strip("'\"")
-                break
+            block = "\n".join(lines[start:end])
+            name_fields = _top_level_step_fields(block).get("name", [])
+            name = name_fields[0]["value"].strip().strip("'\"") if name_fields else None
             if name is None:
                 name = f"<unnamed-step-{unnamed_index}>"
                 unnamed_index += 1
-            entries.append((start, name, "\n".join(lines[start:end])))
+            entries.append((start, name, block))
 
     entries.sort(key=lambda entry: entry[0])
     return [(name, block) for _, name, block in entries]
@@ -352,22 +345,71 @@ def _unique_workflow_step(steps, name):
     return matches[0]
 
 
-def _extract_run_script(step):
+def _top_level_step_fields(step):
     lines = step.splitlines()
+    first_index = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first_index is None:
+        return {}
+    item_match = re.match(r"^(?P<indent>[ \t]*)-\s+", lines[first_index])
+    if not item_match:
+        return {}
+    item_indent = len(item_match.group("indent"))
+    field_indent = item_indent + 2
+    fields = {name: [] for name in ("name", "run", "uses", "env")}
+
     for index, line in enumerate(lines):
-        match = re.match(r"^(?P<indent>[ \t]*)(?:-\s+)?run:\s*(?P<value>.*)$", line)
-        if not match:
-            continue
-        value = match.group("value").strip()
-        if value not in {"|", ">", "|-", ">-", "|+", ">+"}:
-            return value
-        run_indent = len(match.group("indent"))
-        script = []
-        for body_line in lines[index + 1 :]:
-            if body_line.strip() and len(body_line) - len(body_line.lstrip(" \t")) <= run_indent:
-                break
-            script.append(body_line.lstrip())
-        return "\n".join(script)
+        match = None
+        line_indent = None
+        if index == first_index:
+            match = re.match(
+                r"^[ \t]*-\s+(?P<key>name|run|uses|env):\s*(?P<value>.*?)\s*$",
+                line,
+            )
+            line_indent = item_indent
+        else:
+            match = re.match(
+                r"^(?P<indent>[ \t]+)(?P<key>name|run|uses|env):\s*(?P<value>.*?)\s*$",
+                line,
+            )
+            if match:
+                line_indent = len(match.group("indent"))
+                if line_indent != field_indent:
+                    match = None
+        if match:
+            fields[match.group("key")].append(
+                {
+                    "line": index,
+                    "indent": line_indent,
+                    "value": match.group("value"),
+                }
+            )
+    return fields
+
+
+def _workflow_step_layout_reasons(workflow):
+    reasons = []
+    for step_name, step in _extract_workflow_steps(workflow):
+        fields = _top_level_step_fields(step)
+        if len(fields.get("run", [])) > 1:
+            reasons.append(f"{step_name}: duplicate top-level run field")
+    return reasons
+
+
+def _extract_run_script(step):
+    fields = _top_level_step_fields(step).get("run", [])
+    if len(fields) != 1:
+        return ""
+    field = fields[0]
+    lines = step.splitlines()
+    value = field["value"].strip()
+    if value not in {"|", ">", "|-", ">-", "|+", ">+"}:
+        return value
+    script = []
+    for body_line in lines[field["line"] + 1 :]:
+        if body_line.strip() and len(body_line) - len(body_line.lstrip(" \t")) <= field["indent"]:
+            break
+        script.append(body_line.lstrip())
+    return "\n".join(script)
     return ""
 
 
@@ -476,15 +518,20 @@ def _count_executable_git_commands(workflow, verb):
 def _forbidden_build_env(step):
     found = set()
     lines = step.splitlines()
-    for index, line in enumerate(lines):
-        env_match = re.match(r"^(?P<indent>[ \t]*)env:\s*$", line)
-        if not env_match:
+    for field in _top_level_step_fields(step).get("env", []):
+        value = field["value"].strip()
+        if value.startswith("{") and value.endswith("}"):
+            keys = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:", value)
+            found.update(key for key in keys if key in FORBIDDEN_BUILD_ENV)
             continue
-        env_indent = len(env_match.group("indent"))
-        for env_line in lines[index + 1 :]:
+        env_indent = field["indent"]
+        for env_line in lines[field["line"] + 1 :]:
             if env_line.strip() and len(env_line) - len(env_line.lstrip(" \t")) <= env_indent:
                 break
-            key_match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", env_line)
+            key_indent = len(env_line) - len(env_line.lstrip(" \t"))
+            if key_indent != env_indent + 2:
+                continue
+            key_match = re.match(r"^[ \t]*([A-Za-z_][A-Za-z0-9_]*)\s*:", env_line)
             if key_match and key_match.group(1) in FORBIDDEN_BUILD_ENV:
                 found.add(key_match.group(1))
 
@@ -553,11 +600,34 @@ def _forbidden_persistent_env(script):
     return found
 
 
+def _inside_steps_scope(lines, index):
+    current_line = lines[index]
+    current_indent = len(current_line) - len(current_line.lstrip(" \t"))
+    for previous_index in range(index - 1, -1, -1):
+        previous = lines[previous_index]
+        steps_match = re.match(r"^(?P<indent>[ \t]*)steps:\s*$", previous)
+        if not steps_match:
+            continue
+        steps_indent = len(steps_match.group("indent"))
+        if steps_indent >= current_indent:
+            continue
+        if all(
+            not between.strip()
+            or len(between) - len(between.lstrip(" \t")) > steps_indent
+            for between in lines[previous_index + 1 : index]
+        ):
+            return True
+        return False
+    return False
+
+
 def _forbidden_workflow_env(workflow):
     found = set()
     lines = workflow.splitlines()
     for index, line in enumerate(lines):
         if line.lstrip().startswith("#"):
+            continue
+        if _inside_steps_scope(lines, index):
             continue
         inline = re.match(r"^(?P<indent>[ \t]*)env:\s*\{(?P<body>.*)\}\s*$", line)
         if inline:
@@ -741,9 +811,9 @@ def _alternate_upload_paths(workflow):
     }
 
     for step_name, step in _extract_workflow_steps(workflow):
-        for line in step.splitlines():
-            uses_match = re.match(r"^\s*(?:-\s+)?uses:\s*([^\s#]+)", line)
-            if uses_match and "upload" in uses_match.group(1).lower():
+        for field in _top_level_step_fields(step).get("uses", []):
+            uses_value = field["value"].split("#", 1)[0].strip()
+            if uses_value and "upload" in uses_value.lower():
                 findings.append(f"{step_name}: alternate action")
         for tokens in _normalized_shell_segments(_extract_run_script(step)):
             lowered = [token.lower() for token in tokens]
@@ -1368,6 +1438,53 @@ steps:
         )
         self.assertEqual([], _wrapper_bypass_reasons(named_later_fixture))
         self.assertEqual(set(), _forbidden_workflow_env(named_later_fixture))
+
+    def test_step_fields_are_scoped_to_the_top_level(self):
+        malicious_fixture = """
+steps:
+  - name: Real publish content
+    env:
+      run: echo fake
+    run: |
+      git push origin main
+      curl -X PUT remote/endpoint
+"""
+        step = _unique_workflow_step(
+            _extract_workflow_steps(malicious_fixture), "Real publish content"
+        )
+        self.assertIn("git push origin main", _extract_run_script(step))
+        self.assertEqual(1, _count_executable_git_commands(malicious_fixture, "push"))
+        self.assertTrue(_alternate_upload_paths(malicious_fixture))
+
+        safe_nested_fixture = """
+steps:
+  - name: Safe nested data
+    env:
+      run: curl -X PUT fake/endpoint
+      uses: actions/upload-artifact@v4
+    with:
+      run: bash -c "git push origin main"
+      env:
+        GITHUB_TOKEN: nested fake
+    run: echo safe
+"""
+        safe_step = _unique_workflow_step(
+            _extract_workflow_steps(safe_nested_fixture), "Safe nested data"
+        )
+        self.assertEqual("echo safe", _extract_run_script(safe_step))
+        self.assertEqual([], _alternate_upload_paths(safe_nested_fixture))
+        self.assertEqual(0, _count_executable_git_commands(safe_nested_fixture, "push"))
+        self.assertEqual(set(), _forbidden_workflow_env(safe_nested_fixture))
+
+    def test_duplicate_top_level_run_fields_reject_the_workflow_contract(self):
+        duplicate_fixture = """
+steps:
+  - name: Duplicate run
+    run: echo first
+    run: echo second
+"""
+        self.assertTrue(_workflow_step_layout_reasons(duplicate_fixture))
+        self.assertTrue(_workflow_contract_reasons(duplicate_fixture))
 
     def test_shell_assignments_are_normalized_before_command_scans(self):
         wrapper_fixture = """
