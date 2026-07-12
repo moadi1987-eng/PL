@@ -1238,60 +1238,115 @@ def _wc_shared_trainer(model, rows):
     return updated
 
 
-def _wc_archive_box(source):
-    source = source if isinstance(source, dict) else {}
-    return {
-        "winner_correct": int(source.get("winner_correct", source.get("winner", 0)) or 0),
-        "exact_correct": int(source.get("exact_correct", source.get("exact", 0)) or 0),
-        "points": int(source.get("points", 0) or 0),
-        "unique_scores": int(source.get("unique_scores", 0) or 0),
-        "top_scores": copy.deepcopy(source.get("top_scores", [])),
-    }
+def _wc_score_histogram(store, total):
+    histograms = {"baseline": {}, "v4": {}}
+    legacy_rows = 0
+    matches = store.get("matches", {}) if isinstance(store, dict) else {}
+    for snapshot in matches.values() if isinstance(matches, dict) else ():
+        if not isinstance(snapshot, dict) or not snapshot.get("legacy") or not snapshot.get("checked"):
+            continue
+        legacy_rows += 1
+        picks = snapshot.get("picks") or {}
+        for strategy in histograms:
+            pick = picks.get(strategy)
+            if not isinstance(pick, dict) or not isinstance(pick.get("home_score"), int) or not isinstance(pick.get("away_score"), int):
+                return {"baseline": {}, "v4": {}}, {"baseline": False, "v4": False}
+            score = f"{pick['home_score']}-{pick['away_score']}"
+            histograms[strategy][score] = histograms[strategy].get(score, 0) + 1
+    complete = legacy_rows == total
+    return histograms, {"baseline": complete, "v4": complete}
 
 
-def _wc_archive_comparison(previous, snapshots):
+def _wc_histogram_state(comparison, store, total):
+    persisted = comparison.get("score_histograms") if isinstance(comparison.get("score_histograms"), dict) else {}
+    persisted_complete = comparison.get("score_histograms_complete") if isinstance(comparison.get("score_histograms_complete"), dict) else {}
+    reconstructed, reconstructed_complete = _wc_score_histogram(store, total)
+    histograms = {}
+    complete = {}
+    for strategy in ("baseline", "v4"):
+        values = persisted.get(strategy)
+        if persisted_complete.get(strategy) is True and isinstance(values, dict):
+            histograms[strategy] = {str(score): int(count) for score, count in values.items() if isinstance(count, int) and count >= 0}
+            complete[strategy] = True
+        else:
+            histograms[strategy] = reconstructed[strategy]
+            complete[strategy] = reconstructed_complete[strategy]
+    return histograms, complete
+
+
+def _wc_archive_box(comparison, name):
+    source = comparison.get(name) if isinstance(comparison.get(name), dict) else {}
+    source.setdefault("winner_correct", int(source.get("winner", 0) or 0))
+    source.setdefault("exact_correct", int(source.get("exact", 0) or 0))
+    source.setdefault("points", 0)
+    source.setdefault("draw_picks", 0)
+    source.setdefault("unique_scores", 0)
+    source.setdefault("top_scores", [])
+    return source
+
+
+def _wc_archive_comparison(previous, snapshots, store):
     previous = previous if isinstance(previous, dict) else {}
-    prior = previous.get("model_comparison") if isinstance(previous.get("model_comparison"), dict) else {}
-    old_models = prior.get("models") if isinstance(prior.get("models"), dict) else {}
-    baseline = _wc_archive_box(prior.get("baseline") or old_models.get("baseline"))
-    challenger = _wc_archive_box(prior.get("challenger") or old_models.get("v4"))
-    total = int(prior.get("total", previous.get("total_evaluated", 0)) or 0)
+    comparison = copy.deepcopy(previous.get("model_comparison") if isinstance(previous.get("model_comparison"), dict) else {})
+    total = int(comparison.get("total", previous.get("total_evaluated", 0)) or 0)
+    baseline = _wc_archive_box(comparison, "baseline")
+    challenger = _wc_archive_box(comparison, "challenger")
+    models = comparison.setdefault("models", {})
+    if not isinstance(models, dict):
+        models = comparison["models"] = {}
+    exact_histograms, histogram_complete = _wc_histogram_state(comparison, store, total)
+    histograms = copy.deepcopy(comparison.get("score_histograms") if isinstance(comparison.get("score_histograms"), dict) else {})
+    lifecycle_histograms = copy.deepcopy(comparison.get("lifecycle_score_histograms") if isinstance(comparison.get("lifecycle_score_histograms"), dict) else {})
+    for strategy in ("baseline", "v4"):
+        histograms[strategy] = exact_histograms[strategy]
+        lifecycle_histograms.setdefault(strategy, {})
 
     for snapshot in snapshots:
         total += 1
         for name, box in (("baseline", baseline), ("v4", challenger)):
             evaluation = (snapshot.get("evaluations") or {}).get(name) or {}
-            box["winner_correct"] += int(bool(evaluation.get("winner_correct")))
-            box["exact_correct"] += int(bool(evaluation.get("exact")))
-            box["points"] += int(evaluation.get("points", 0) or 0)
+            box["winner_correct"] = int(box.get("winner_correct", box.get("winner", 0)) or 0) + int(bool(evaluation.get("winner_correct")))
+            box["exact_correct"] = int(box.get("exact_correct", box.get("exact", 0)) or 0) + int(bool(evaluation.get("exact")))
+            box["points"] = int(box.get("points", 0) or 0) + int(evaluation.get("points", 0) or 0)
+            pick = (snapshot.get("picks") or {}).get(name) or {}
+            box["draw_picks"] = int(box.get("draw_picks", 0) or 0) + int(pick.get("winner") == "draw")
             score = evaluation.get("score")
             if score:
-                scores = {item.get("score"): int(item.get("count", 0) or 0) for item in box["top_scores"] if isinstance(item, dict) and item.get("score")}
-                if score not in scores:
-                    box["unique_scores"] += 1
-                scores[score] = scores.get(score, 0) + 1
-                box["top_scores"] = [
-                    {"score": key, "count": value}
-                    for key, value in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:6]
-                ]
+                if histogram_complete[name]:
+                    histograms[name][score] = histograms[name].get(score, 0) + 1
+                else:
+                    lifecycle_histograms[name][score] = lifecycle_histograms[name].get(score, 0) + 1
 
-    for box in (baseline, challenger):
+    for name, box in (("baseline", baseline), ("v4", challenger)):
+        if histogram_complete[name]:
+            box["unique_scores"] = len(histograms[name])
+            box["top_scores"] = [
+                {"score": score, "count": count}
+                for score, count in sorted(histograms[name].items(), key=lambda item: (-item[1], item[0]))[:6]
+            ]
         box["winner_accuracy"] = round(box["winner_correct"] / max(total, 1) * 100, 1)
         box["exact_accuracy"] = round(box["exact_correct"] / max(total, 1) * 100, 1)
-    return {
-        "total": total,
-        "baseline_model": prior.get("baseline_model", "v3 expected-points"),
-        "challenger_model": prior.get("challenger_model", "v4 scoreline"),
-        "baseline": baseline,
-        "challenger": challenger,
-        "models": {"baseline": copy.deepcopy(baseline), "v4": copy.deepcopy(challenger)},
-        "delta": {
-            "winner_accuracy": round(challenger["winner_accuracy"] - baseline["winner_accuracy"], 1),
-            "exact_accuracy": round(challenger["exact_accuracy"] - baseline["exact_accuracy"], 1),
-            "points": challenger["points"] - baseline["points"],
-            "unique_scores": challenger["unique_scores"] - baseline["unique_scores"],
-        },
-    }
+        model_box = models.setdefault(name, {})
+        if isinstance(model_box, dict):
+            for key in ("winner_correct", "exact_correct", "points", "draw_picks", "unique_scores", "top_scores", "winner_accuracy", "exact_accuracy"):
+                model_box[key] = copy.deepcopy(box[key])
+    delta = comparison.setdefault("delta", {})
+    if not isinstance(delta, dict):
+        delta = comparison["delta"] = {}
+    delta.update({
+        "winner_accuracy": round(challenger["winner_accuracy"] - baseline["winner_accuracy"], 1),
+        "exact_accuracy": round(challenger["exact_accuracy"] - baseline["exact_accuracy"], 1),
+        "points": challenger["points"] - baseline["points"],
+        "unique_scores": challenger.get("unique_scores", 0) - baseline.get("unique_scores", 0),
+        "draw_picks": challenger.get("draw_picks", 0) - baseline.get("draw_picks", 0),
+    })
+    comparison["total"] = total
+    comparison["baseline"] = baseline
+    comparison["challenger"] = challenger
+    comparison["score_histograms"] = histograms
+    comparison["score_histograms_complete"] = histogram_complete
+    comparison["lifecycle_score_histograms"] = lifecycle_histograms
+    return comparison
 
 
 def _wc_merge_verified_archive(previous, lifecycle_history, store):
@@ -1338,7 +1393,7 @@ def _wc_merge_verified_archive(previous, lifecycle_history, store):
         "gw_results": gw_results,
         "overall_accuracy": round(correct / max(total, 1) * 100, 1) if total else 0,
         "total_evaluated": total,
-        "model_comparison": _wc_archive_comparison(previous, new_snapshots),
+        "model_comparison": _wc_archive_comparison(previous, new_snapshots, store),
         "model_status": status,
         "merged_lifecycle_match_ids": sorted(seen),
     })

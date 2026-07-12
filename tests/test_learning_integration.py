@@ -429,6 +429,98 @@ class PersistentCompetitionTests(unittest.TestCase):
             namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
         self.assertEqual([], saves)
 
+    def test_wc_comparison_preserves_full_schema_and_hidden_legacy_score_histogram(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        score_counts = {"2-1": 20, "1-2": 15, "0-2": 10, "2-0": 8, "1-3": 5, "3-1": 4, "0-0": 3}
+        store = {"matches": {}}
+        match_id = 1
+        for score, count in score_counts.items():
+            home, away = (int(part) for part in score.split("-"))
+            winner = "home" if home > away else "away" if away > home else "draw"
+            for _ in range(count):
+                store["matches"][str(match_id)] = {
+                    "match_id": match_id, "legacy": True, "lock_verified": False, "checked": True,
+                    "picks": {
+                        "baseline": {"winner": winner, "home_score": home, "away_score": away},
+                        "v4": {"winner": winner, "home_score": home, "away_score": away},
+                    },
+                }
+                match_id += 1
+        store["matches"]["999"] = {
+            "match_id": 999, "round": 19, "lock_verified": True, "checked": True,
+            "active_strategy_at_lock": "v4",
+            "picks": {
+                "baseline": {"winner": "draw", "home_score": 0, "away_score": 0},
+                "v4": {"winner": "draw", "home_score": 0, "away_score": 0},
+            },
+            "evaluations": {
+                "baseline": {"winner_correct": True, "exact": False, "points": 1, "score": "0-0"},
+                "v4": {"winner_correct": True, "exact": True, "points": 3, "score": "0-0"},
+            },
+        }
+        top_scores = [{"score": score, "count": count} for score, count in list(score_counts.items())[:6]]
+        previous = {"total_evaluated": 65, "gw_results": [{"gw": 18, "total": 65, "correct_winner": 42, "correct_score": 14, "exact_score": 14, "points": 72}], "model_comparison": {
+            "total": 65, "custom_top": {"keep": True}, "baseline_model": "v3 expected-points", "challenger_model": "v4 scoreline",
+            "baseline": {"winner_correct": 40, "exact_correct": 4, "points": 50, "draw_picks": 5, "unique_scores": 7, "top_scores": top_scores, "custom_box": "baseline"},
+            "challenger": {"winner_correct": 42, "exact_correct": 14, "points": 72, "draw_picks": 7, "unique_scores": 7, "top_scores": top_scores, "custom_box": "v4"},
+            "models": {"baseline": {"custom_model": "baseline"}, "v4": {"custom_model": "v4"}},
+            "delta": {"winner_accuracy": 3.1, "exact_accuracy": 15.3, "points": 22, "unique_scores": 0, "draw_picks": 2, "custom_delta": "keep"},
+            "score_histograms": {"custom": {"keep": 1}},
+        }}
+        lifecycle_history = {"gw_results": [], "model_comparison": {"total": 1}, "model_status": {}}
+
+        merged = namespace["_wc_merge_verified_archive"](previous, lifecycle_history, store)
+        rerun = namespace["_wc_merge_verified_archive"](merged, lifecycle_history, store)
+        comparison = merged["model_comparison"]
+
+        self.assertEqual({"keep": True}, comparison["custom_top"])
+        self.assertEqual("baseline", comparison["baseline"]["custom_box"])
+        self.assertEqual("v4", comparison["challenger"]["custom_box"])
+        self.assertEqual("baseline", comparison["models"]["baseline"]["custom_model"])
+        self.assertEqual("v4", comparison["models"]["v4"]["custom_model"])
+        self.assertEqual("keep", comparison["delta"]["custom_delta"])
+        self.assertEqual({"keep": 1}, comparison["score_histograms"]["custom"])
+        self.assertEqual(6, comparison["baseline"]["draw_picks"])
+        self.assertEqual(8, comparison["challenger"]["draw_picks"])
+        self.assertEqual(2, comparison["delta"]["draw_picks"])
+        self.assertEqual(7, comparison["baseline"]["unique_scores"])
+        self.assertEqual(7, comparison["challenger"]["unique_scores"])
+        self.assertEqual(4, comparison["score_histograms"]["baseline"]["0-0"])
+        self.assertEqual(4, comparison["score_histograms"]["v4"]["0-0"])
+        self.assertEqual(66, comparison["total"])
+        self.assertEqual(comparison, rerun["model_comparison"])
+
+    def test_wc_opaque_archive_tracks_lifecycle_scores_without_guessing_uniqueness(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        store = {"matches": {
+            "999": {
+                "match_id": 999, "round": 19, "lock_verified": True, "checked": True,
+                "active_strategy_at_lock": "v4",
+                "picks": {"baseline": {"winner": "draw", "home_score": 0, "away_score": 0}, "v4": {"winner": "draw", "home_score": 0, "away_score": 0}},
+                "evaluations": {"baseline": {"winner_correct": True, "exact": False, "points": 1, "score": "0-0"}, "v4": {"winner_correct": True, "exact": True, "points": 3, "score": "0-0"}},
+            },
+        }}
+        previous = {"total_evaluated": 65, "model_comparison": {
+            "total": 65,
+            "baseline": {"winner_correct": 40, "exact_correct": 4, "points": 50, "draw_picks": 5, "unique_scores": 11, "top_scores": []},
+            "challenger": {"winner_correct": 42, "exact_correct": 14, "points": 72, "draw_picks": 7, "unique_scores": 11, "top_scores": []},
+        }}
+        merged = namespace["_wc_merge_verified_archive"](previous, {"model_comparison": {"total": 1}, "model_status": {}}, store)
+        comparison = merged["model_comparison"]
+        self.assertEqual(11, comparison["baseline"]["unique_scores"])
+        self.assertEqual(11, comparison["challenger"]["unique_scores"])
+        self.assertFalse(comparison["score_histograms_complete"]["baseline"])
+        self.assertEqual(1, comparison["lifecycle_score_histograms"]["baseline"]["0-0"])
+        self.assertEqual(1, comparison["lifecycle_score_histograms"]["v4"]["0-0"])
+
 
 if __name__ == "__main__":
     unittest.main()
