@@ -1,5 +1,6 @@
 import ast
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -7,6 +8,329 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 UPDATE_SOURCE = ROOT / "website" / "update_pl_mobile.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "update-dashboard.yml"
+UPLOAD_METHODS = frozenset({"PUT", "POST", "PATCH", "DELETE"})
+FORBIDDEN_BUILD_ENV = frozenset({"GITHUB_TOKEN", "GH_TOKEN", "PUBLISH_TO_GITHUB"})
+
+
+def _constant_string(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _request_method(call):
+    if call.args:
+        return _constant_string(call.args[0])
+    for keyword in call.keywords:
+        if keyword.arg == "method":
+            return _constant_string(keyword.value)
+    return None
+
+
+def _is_upload_sink(node):
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    if node.func.attr.upper() in UPLOAD_METHODS:
+        return True
+    if node.func.attr != "request":
+        return False
+    return isinstance(node.func.value, ast.Name) and node.func.value.id == "requests" and (
+        _request_method(node) is None
+        or _request_method(node).upper() in UPLOAD_METHODS
+    )
+
+
+def _is_function(node):
+    return isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+
+
+def _runtime_descendants(node):
+    for child in ast.iter_child_nodes(node):
+        if _is_function(child) or isinstance(child, (ast.ClassDef, ast.Lambda)):
+            continue
+        yield child
+        yield from _runtime_descendants(child)
+
+
+def _guard_contains_publish_and_not_ci(node):
+    terms = []
+
+    def flatten(value):
+        if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.And):
+            for item in value.values:
+                flatten(item)
+        else:
+            terms.append(value)
+
+    flatten(node)
+    has_publish = any(
+        isinstance(term, ast.Name) and term.id == "PUBLISH_TO_GITHUB" for term in terms
+    )
+    has_not_ci = any(
+        isinstance(term, ast.UnaryOp)
+        and isinstance(term.op, ast.Not)
+        and isinstance(term.operand, ast.Name)
+        and term.operand.id == "IS_CI"
+        for term in terms
+    )
+    return has_publish and has_not_ci
+
+
+def _upload_bypass_reasons(source):
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if _is_function(node)
+    }
+    direct_sinks = {}
+    calls = {}
+    for name, function in functions.items():
+        direct_sinks[name] = False
+        calls[name] = set()
+        for node in _runtime_descendants(function):
+            if not isinstance(node, ast.Call):
+                continue
+            if _is_upload_sink(node):
+                direct_sinks[name] = True
+            elif isinstance(node.func, ast.Name) and node.func.id in functions:
+                calls[name].add(node.func.id)
+
+    reachable_cache = {}
+
+    def reaches_upload(name, active=()):
+        if name in reachable_cache:
+            return reachable_cache[name]
+        if name in active:
+            return False
+        result = direct_sinks[name] or any(
+            reaches_upload(child, active + (name,)) for child in calls[name]
+        )
+        reachable_cache[name] = result
+        return result
+
+    reasons = []
+
+    def scan(node, guarded, location="module"):
+        if _is_function(node) or isinstance(node, (ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.If):
+            body_guarded = guarded or _guard_contains_publish_and_not_ci(node.test)
+            for child in node.body:
+                scan(child, body_guarded, location)
+            for child in node.orelse:
+                scan(child, guarded, location)
+            return
+        if isinstance(node, ast.Call):
+            if _is_upload_sink(node) and not guarded:
+                reasons.append(f"unguarded upload sink at line {node.lineno}")
+            elif (
+                isinstance(node.func, ast.Name)
+                and node.func.id in functions
+                and reaches_upload(node.func.id)
+                and not guarded
+            ):
+                reasons.append(f"unguarded upload helper {node.func.id} at line {node.lineno}")
+        for child in ast.iter_child_nodes(node):
+            scan(child, guarded, location)
+
+    scan(tree, False)
+    return reasons
+
+
+def _extract_workflow_steps(workflow):
+    lines = workflow.splitlines()
+    headers = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^(?P<indent>[ \t]*)-\s+name:\s*(?P<name>.+?)\s*$", line)
+        if match:
+            name = match.group("name").strip().strip("'\"")
+            headers.append((index, len(match.group("indent")), name))
+    steps = {}
+    for position, (start, indent, name) in enumerate(headers):
+        end = len(lines)
+        for next_start, next_indent, _ in headers[position + 1 :]:
+            if next_indent == indent:
+                end = next_start
+                break
+        steps[name] = "\n".join(lines[start:end])
+    return steps
+
+
+def _extract_run_script(step):
+    lines = step.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^(?P<indent>[ \t]*)run:\s*(?P<value>.*)$", line)
+        if not match:
+            continue
+        value = match.group("value").strip()
+        if value not in {"|", ">", "|-", ">-", "|+", ">+"}:
+            return value
+        run_indent = len(match.group("indent"))
+        script = []
+        for body_line in lines[index + 1 :]:
+            if body_line.strip() and len(body_line) - len(body_line.lstrip(" \t")) <= run_indent:
+                break
+            script.append(body_line.lstrip())
+        return "\n".join(script)
+    return ""
+
+
+def _shell_commands(script):
+    commands = []
+    pending = ""
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if pending:
+            stripped = pending + " " + stripped
+        if stripped.endswith("\\"):
+            pending = stripped[:-1].rstrip()
+        else:
+            commands.append(stripped)
+            pending = ""
+    if pending:
+        commands.append(pending)
+    return commands
+
+
+def _shell_invocations(script):
+    controls = {";", "&&", "||", "(", ")", "|"}
+    for command in _shell_commands(script):
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
+        current = []
+        for token in tokens:
+            if token in controls:
+                if current:
+                    yield current
+                current = []
+            else:
+                current.append(token)
+        if current:
+            yield current
+
+
+def _executable_git_commands(script, verb):
+    for tokens in _shell_invocations(script):
+        for index in range(len(tokens) - 1):
+            if tokens[index : index + 2] != ["git", verb]:
+                continue
+            prefix = tokens[:index]
+            if prefix and prefix[-1] in {"echo", "printf"}:
+                continue
+            yield tokens[index + 2 :]
+            break
+
+
+def _git_add_paths(step):
+    commands = list(_executable_git_commands(_extract_run_script(step), "add"))
+    if len(commands) != 1:
+        return None
+    arguments = commands[0]
+    if "--" in arguments:
+        arguments = arguments[arguments.index("--") + 1 :]
+    return {argument for argument in arguments if not argument.startswith("-")}
+
+
+def _count_executable_git_commands(workflow, verb):
+    return sum(
+        1
+        for step in _extract_workflow_steps(workflow).values()
+        for _ in _executable_git_commands(_extract_run_script(step), verb)
+    )
+
+
+def _forbidden_build_env(step):
+    found = set()
+    lines = step.splitlines()
+    for index, line in enumerate(lines):
+        env_match = re.match(r"^(?P<indent>[ \t]*)env:\s*$", line)
+        if not env_match:
+            continue
+        env_indent = len(env_match.group("indent"))
+        for env_line in lines[index + 1 :]:
+            if env_line.strip() and len(env_line) - len(env_line.lstrip(" \t")) <= env_indent:
+                break
+            key_match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", env_line)
+            if key_match and key_match.group(1) in FORBIDDEN_BUILD_ENV:
+                found.add(key_match.group(1))
+    run_script = _extract_run_script(step)
+    for match in re.finditer(
+        r"(?<![A-Za-z0-9_$])(GITHUB_TOKEN|GH_TOKEN|PUBLISH_TO_GITHUB)\s*=",
+        run_script,
+    ):
+        found.add(match.group(1))
+    return found
+
+
+def _has_concurrency_group(workflow):
+    lines = workflow.splitlines()
+    for index, line in enumerate(lines):
+        header = re.match(r"^(?P<indent>[ \t]*)concurrency:\s*$", line)
+        if not header:
+            continue
+        indent = len(header.group("indent"))
+        body = []
+        for body_line in lines[index + 1 :]:
+            if body_line.strip() and len(body_line) - len(body_line.lstrip(" \t")) <= indent:
+                break
+            body.append(body_line)
+        body_text = "\n".join(body)
+        return bool(
+            re.search(r"(?m)^\s*group:\s*update-dashboard\s*$", body_text)
+            and re.search(r"(?m)^\s*cancel-in-progress:\s*true\s*$", body_text)
+        )
+    return False
+
+
+def _has_rebase_push_retry(step):
+    pulls = []
+    pushes = []
+    script = _extract_run_script(step)
+    for tokens in _shell_invocations(script):
+        if len(tokens) >= 2 and tokens[0:2] == ["git", "pull"]:
+            pulls.append(tokens[2:])
+        if len(tokens) >= 2 and tokens[0:2] == ["git", "push"]:
+            pushes.append(tokens[2:])
+    pull_ok = [
+        args
+        for args in pulls
+        if {"--rebase", "--autostash", "origin", "main"}.issubset(args)
+    ]
+    push_ok = [args for args in pushes if {"origin", "main"}.issubset(args)]
+    return len(pull_ok) >= 2 and len(push_ok) >= 2
+
+
+def _alternate_upload_paths(workflow):
+    findings = []
+    for step_name, step in _extract_workflow_steps(workflow).items():
+        for line in step.splitlines():
+            uses_match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
+            if uses_match and "upload" in uses_match.group(1).lower():
+                findings.append(f"{step_name}: alternate action")
+        for tokens in _shell_invocations(_extract_run_script(step)):
+            lowered = [token.lower() for token in tokens]
+            joined = " ".join(lowered)
+            method_upload = any(
+                lowered[index + 1] in {method.lower() for method in UPLOAD_METHODS}
+                for index, token in enumerate(lowered[:-1])
+                if token in {"-x", "--method"}
+            )
+            github_contents = "contents/" in joined or "api.github.com" in joined
+            if "gh" in lowered and "api" in lowered and (method_upload or github_contents):
+                findings.append(f"{step_name}: gh api upload")
+            if lowered and lowered[0] == "curl" and (
+                method_upload
+                or github_contents
+                or "--upload-file" in lowered
+                or "-t" in lowered
+            ):
+                findings.append(f"{step_name}: curl upload")
+    return findings
 
 
 class PublishContractTests(unittest.TestCase):
@@ -21,52 +345,91 @@ class PublishContractTests(unittest.TestCase):
             self.source,
         )
         self.assertIn("if PUBLISH_TO_GITHUB and not IS_CI:", self.source)
+        self.assertEqual([], _upload_bypass_reasons(self.source))
 
-        tree = ast.parse(self.source)
-        upload_calls = []
-        guarded_calls = []
+    def test_upload_detector_rejects_direct_and_indirect_bypasses(self):
+        rejected = [
+            "requests.put('/contents/file')",
+            "requests.post('/contents/file')",
+            "requests.delete('/contents/file')",
+            "requests.request('PUT', '/contents/file')",
+            "requests.request(method='DELETE', url='/contents/file')",
+            "session_alias.patch('/contents/file')",
+            "requests.Session().put('/contents/file')",
+            "def upload():\n    requests.put('/contents/file')\nupload()",
+            (
+                "def inner():\n"
+                "    requests.request(method='POST', url='/contents/file')\n"
+                "def outer():\n"
+                "    inner()\n"
+                "outer()"
+            ),
+        ]
+        for snippet in rejected:
+            with self.subTest(snippet=snippet):
+                self.assertTrue(_upload_bypass_reasons(snippet))
 
-        def walk(node, guards=()):
-            if isinstance(node, list):
-                for child in node:
-                    walk(child, guards)
-                return
-            if isinstance(node, ast.If):
-                condition = ast.unparse(node.test).replace("(", "").replace(")", "")
-                walk(node.body, guards + (condition,))
-                for child in node.orelse:
-                    walk(child, guards)
-                return
-            if isinstance(node, ast.Call):
-                function = node.func
-                is_put = (
-                    isinstance(function, ast.Attribute)
-                    and function.attr == "put"
-                    and isinstance(function.value, ast.Name)
-                    and function.value.id == "requests"
-                )
-                if is_put:
-                    upload_calls.append(node)
-                    if "PUBLISH_TO_GITHUB and not IS_CI" in guards:
-                        guarded_calls.append(node)
-            for child in ast.iter_child_nodes(node):
-                walk(child, guards)
-
-        walk(tree)
-        self.assertGreater(len(upload_calls), 0)
-        self.assertEqual(
-            len(upload_calls),
-            len(guarded_calls),
-            "every Contents API upload call must be under the local-only guard",
-        )
+    def test_upload_detector_accepts_exact_guard_at_executable_root(self):
+        accepted = [
+            "if PUBLISH_TO_GITHUB and not IS_CI:\n    requests.put('/contents/file')",
+            (
+                "def upload():\n"
+                "    requests.Session().put('/contents/file')\n"
+                "if PUBLISH_TO_GITHUB and not IS_CI:\n"
+                "    upload()"
+            ),
+            (
+                "def inner():\n"
+                "    requests.request('PATCH', '/contents/file')\n"
+                "def outer():\n"
+                "    inner()\n"
+                "if PUBLISH_TO_GITHUB and not IS_CI:\n"
+                "    outer()"
+            ),
+        ]
+        for snippet in accepted:
+            with self.subTest(snippet=snippet):
+                self.assertEqual([], _upload_bypass_reasons(snippet))
 
     def test_build_step_does_not_receive_a_github_token_or_publish_flag(self):
-        build_step = self._step_named("Build dashboard")
-        self.assertNotRegex(build_step, r"(?im)^\s*GITHUB_TOKEN\s*:")
-        self.assertNotRegex(build_step, r"(?im)^\s*PUBLISH_TO_GITHUB\s*:")
+        steps = _extract_workflow_steps(self.workflow)
+        self.assertEqual(set(), _forbidden_build_env(steps["Build dashboard"]))
+
+        inline_fixture = """
+      - name: Build dashboard
+        run: GITHUB_TOKEN=secret python build.py
+        env:
+          SAFE: value
+"""
+        self.assertEqual(
+            {"GITHUB_TOKEN"},
+            _forbidden_build_env(_extract_workflow_steps(inline_fixture)["Build dashboard"]),
+        )
+
+        export_fixture = """
+      - name: Build dashboard
+        run: |
+          export GH_TOKEN=secret
+          python build.py
+"""
+        self.assertEqual(
+            {"GH_TOKEN"},
+            _forbidden_build_env(_extract_workflow_steps(export_fixture)["Build dashboard"]),
+        )
+
+        publish_fixture = """
+      - name: Build dashboard
+        env:
+          PUBLISH_TO_GITHUB: '1'
+        run: python build.py
+"""
+        self.assertEqual(
+            {"PUBLISH_TO_GITHUB"},
+            _forbidden_build_env(_extract_workflow_steps(publish_fixture)["Build dashboard"]),
+        )
 
     def test_workflow_stages_every_generated_file_once(self):
-        required = [
+        required = {
             "index.html",
             "website/pl_mobile.html",
             "live.json",
@@ -77,41 +440,49 @@ class PublishContractTests(unittest.TestCase):
             "ai_weights_laliga.json",
             "ai_predictions_wc.json",
             "ai_weights_wc.json",
-        ]
-        add_commands = re.findall(
-            r"(?m)^\s*git add\b(?:[^\n\\]|\\\s*\n\s*)*",
-            self.workflow,
+        }
+        steps = _extract_workflow_steps(self.workflow)
+        self.assertEqual(1, _count_executable_git_commands(self.workflow, "add"))
+        self.assertEqual(required, _git_add_paths(steps["Commit and push if changed"]))
+
+        substring_fixture = """
+      - name: Commit and push if changed
+        run: |
+          git add index.html website/pl_mobile.html.bak live.json
+"""
+        self.assertNotEqual(
+            required,
+            _git_add_paths(
+                _extract_workflow_steps(substring_fixture)["Commit and push if changed"]
+            ),
         )
-        self.assertEqual(1, len(add_commands), "workflow must have one coherent git add")
-        staged = re.sub(r"\\\s*\n\s*", " ", add_commands[0])
-        for name in required:
-            self.assertIn(name, staged)
 
     def test_workflow_has_one_commit_and_preserves_atomic_push_retry(self):
-        self.assertEqual(1, len(re.findall(r"(?m)^\s*git commit\b", self.workflow)))
-        self.assertIn("group: update-dashboard", self.workflow)
-        self.assertIn("cancel-in-progress: true", self.workflow)
-        self.assertGreaterEqual(
-            self.workflow.count("git pull --rebase --autostash origin main"), 2
-        )
-        self.assertRegex(
-            self.workflow,
-            r"git push origin main\s*\|\|\s*\(git pull --rebase --autostash origin main",
-        )
+        steps = _extract_workflow_steps(self.workflow)
+        self.assertEqual(1, _count_executable_git_commands(self.workflow, "commit"))
+        self.assertTrue(_has_concurrency_group(self.workflow))
+        self.assertTrue(_has_rebase_push_retry(steps["Commit and push if changed"]))
+
+        comment_fixture = """
+      - name: Commit and push if changed
+        run: |
+          # git commit -m fake
+          echo git commit -m fake
+          git commit -m real
+"""
+        self.assertEqual(1, _count_executable_git_commands(comment_fixture, "commit"))
 
     def test_workflow_has_no_alternate_upload_path(self):
-        self.assertNotIn("api.github.com/repos", self.workflow)
-        self.assertNotRegex(self.workflow, r"(?im)^\s*uses:\s*actions/upload-artifact@")
-        self.assertNotRegex(self.workflow, r"(?im)^\s*(?:gh\s+api|curl\b).*contents/")
-
-    def _step_named(self, name):
-        match = re.search(
-            rf"(?ms)^\s*- name:\s*{re.escape(name)}\s*$\n(?P<body>.*?)(?=^\s*- name:|\Z)",
-            self.workflow,
-        )
-        self.assertIsNotNone(match, f"workflow step not found: {name}")
-        return match.group("body")
-
+        self.assertEqual([], _alternate_upload_paths(self.workflow))
+        fixture = """
+      - name: Upload
+        uses: actions/upload-artifact@v4
+      - name: API upload
+        run: |
+          gh api --method PUT repos/x/contents/live.json
+          curl -X POST https://api.github.com/repos/x/contents/live.json
+"""
+        self.assertTrue(_alternate_upload_paths(fixture))
 
 if __name__ == "__main__":
     unittest.main()
