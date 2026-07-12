@@ -1823,20 +1823,24 @@ function aiModelComparison(cmp){
   return h;
 }
 function aiStatusText(value){return String(value==null?"":value).replace(/[&<>"']/g,function(ch){return{"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]})}
-function aiStatusNumber(value){var n=Number(value);return isFinite(n)?n:null}
+function aiStatusNumber(value){return typeof value==="number"&&isFinite(value)?value:null}
 function aiStatusMetric(box,key,suffix){var n=aiStatusNumber((box||{})[key]);return n===null?"-":n+(suffix||"")}
+function aiVerifiedSamples(status,lgData,league){
+  var verified=aiStatusNumber((status||{}).verified_lifecycle_samples);
+  if(verified===null&&league!=="wc")verified=aiStatusNumber(lgData&&lgData.model_comparison&&lgData.model_comparison.total);
+  return Math.max(0,Math.floor(verified===null?0:verified));
+}
 function aiModelStatus(lgData,modelCmp){
   var status=(lgData&&lgData.model_status)||{},state=learningModelState(D.league),choice=scoreModelChoice();
   var active=choice.strategy||"baseline",candidate=choice.candidateStrategy||(active==="v4"?"baseline":"v4");
   var models=(modelCmp&&modelCmp.models)||{};
   if(!Object.keys(models).length&&modelCmp)models={baseline:modelCmp.baseline||{},v4:modelCmp.challenger||{}};
   var activeBox=models[active]||{},candidateBox=models[candidate]||{};
-  var verified=aiStatusNumber(status.verified_lifecycle_samples);
-  if(verified===null&&D.league!=="wc")verified=aiStatusNumber(modelCmp&&modelCmp.total);
-  if(verified===null)verified=0;
+  var verified=aiVerifiedSamples(status,lgData,D.league);
   var phase=choice.status||"collecting",label=phase==="promote"?"Promoted":phase==="winner_guard"?"Held: direction guard":phase==="points_guard"?"Held: points guard":"Collecting "+Math.min(verified,30)+"/30";
   var meta=(lgData&&lgData.model_meta)||state.meta||{},trained=meta.last_trained_at||"not trained";
-  var complete=aiStatusNumber(lgData&&lgData.data_completeness_pct),completeLabel=complete===null?"n/a":Math.max(0,Math.min(100,complete)).toFixed(1)+"%";
+  var complete=aiStatusNumber(lgData&&lgData.data_completeness_pct);if(verified===0)complete=null;
+  var completeLabel=complete===null?"n/a":Math.max(0,Math.min(100,complete)).toFixed(1)+"%";
   var completeNote=complete===null?"Trusted inputs unavailable":complete<100?"Some trusted inputs unavailable":"All tracked inputs available";
   return '<div class="sec" style="margin-bottom:.25rem">Model Status</div><div class="ainote"><b>'+aiStatusText(label)+'</b> · active '+aiStatusText(active)+' · candidate '+aiStatusText(candidate)+' · verified '+verified+'/30 · trained '+aiStatusText(trained)+'</div>'+
     '<div class="aimetrics">'+
@@ -1874,9 +1878,10 @@ function rAI(){
   var rows=normAIRows(lgData.gw_results||[]);
   if(!rows.length)rows=normAIRows(localLearningRows());
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
-  var wts=activeWeights(),hasOwnWeights=Object.keys(wts).length>0;
-  var cal=activeCalibration(),meta=(lgData.model_meta||{});
+  var wts=activeWeights(),cal=activeCalibration(),modelState=learningModelState(lgKey),meta=(lgData.model_meta||modelState.meta||{});
   var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
+  var trainedMatches=aiStatusNumber(meta.trained_matches),verifiedSamples=aiVerifiedSamples(lgData.model_status,lgData,lgKey);
+  var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0;
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';
   var lgName=isPL?'Premier League':isWC?'World Cup':'La Liga';

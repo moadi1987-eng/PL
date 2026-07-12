@@ -7,26 +7,36 @@ function learningRuntimeCopy(value){
   });
   return out;
 }
+function learningRuntimePlainObject(value){
+  return !!value&&Object.prototype.toString.call(value)==="[object Object]";
+}
+function learningRuntimeFinite(value){
+  return typeof value==="number"&&isFinite(value);
+}
+function learningRuntimeValues(state,key,defaultFactory,direct){
+  var defaults=typeof defaultFactory==="function"&&learningRuntimePlainObject(defaultFactory())?defaultFactory():{};
+  var source=learningRuntimePlainObject(state&&state[key])?state[key]:(direct&&learningRuntimePlainObject(state)?state:{}),out={};
+  Object.keys(defaults).forEach(function(name){
+    var value=learningRuntimeFinite(source[name])?source[name]:defaults[name];
+    if(learningRuntimeFinite(value))out[name]=value;
+  });
+  return out;
+}
 function learningRuntimeLeague(){
   return typeof D!=="undefined"&&D&&typeof D.league==="string"?D.league:"";
 }
 function learningModelState(league){
-  var models=typeof EMBEDDED_MODELS!=="undefined"&&EMBEDDED_MODELS&&typeof EMBEDDED_MODELS==="object"?EMBEDDED_MODELS:{};
+  var models=typeof EMBEDDED_MODELS!=="undefined"&&learningRuntimePlainObject(EMBEDDED_MODELS)?EMBEDDED_MODELS:{};
   var state=models[league];
-  return state&&typeof state==="object"?learningRuntimeCopy(state):{};
+  return learningRuntimePlainObject(state)?learningRuntimeCopy(state):{};
 }
 function activeWeights(){
   var state=learningModelState(learningRuntimeLeague());
-  if(state.factors&&typeof state.factors==="object")return learningRuntimeCopy(state.factors);
-  var defaults=typeof defaultWeights==="function"?defaultWeights():{},direct={};
-  Object.keys(defaults).forEach(function(key){if(state[key]!=null)direct[key]=state[key];});
-  if(Object.keys(direct).length)return learningRuntimeCopy(direct);
-  return Object.keys(state).length?{}:learningRuntimeCopy(defaults);
+  return learningRuntimeValues(state,"factors",defaultWeights,true);
 }
 function activeCalibration(){
   var state=learningModelState(learningRuntimeLeague());
-  if(state.calibration&&typeof state.calibration==="object")return learningRuntimeCopy(state.calibration);
-  return Object.keys(state).length?{}:(typeof defaultCalibration==="function"?learningRuntimeCopy(defaultCalibration()):{});
+  return learningRuntimeValues(state,"calibration",defaultCalibration,false);
 }
 function scoreModelChoice(){
   var league=learningRuntimeLeague(),state=learningModelState(league);

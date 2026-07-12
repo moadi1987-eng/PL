@@ -604,6 +604,10 @@ class LearningEmbeddingTests(unittest.TestCase):
         self.assertNotIn("function activeCalibration(){", template)
         self.assertNotIn("function scoreModelChoice(){", template)
         self.assertIn("verified_lifecycle_samples", template)
+        self.assertIn("if(verified===0)complete=null", template)
+        self.assertIn("trainedMatches", template)
+        self.assertIn("var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0", template)
+        self.assertIn("Base factor weights are shown until this league has enough completed learned rows.", template)
         self.assertIn("activeWeights()", template)
         self.assertNotIn("((lh.pl||{}).current_weights||{})", template)
 
