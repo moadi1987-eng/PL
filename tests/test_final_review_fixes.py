@@ -206,16 +206,23 @@ class FinalReviewLifecycleTests(unittest.TestCase):
                 pending_path = Path(str(model_path) + ".pending")
                 store = {"league": league, "generation_id": generation, "matches": {}}
                 model = {"league": league, "generation_id": generation}
+                history_entry = {"generation_id": generation}
+                counts = {}
+                if league == "wc":
+                    store["matches"] = {"77": "corrupt"}
+                    model["factors"] = "corrupt"
+                    history_entry["gw_results"] = ["corrupt"]
+                    counts["trained"] = "corrupt"
                 prediction_path.write_text(json.dumps(store), encoding="utf-8")
                 model_path.write_text(json.dumps(model), encoding="utf-8")
                 pending_path.write_text(json.dumps({
                     "version": 2,
                     "league": league,
-                    "generation_id": "mismatch" if league == "wc" else generation,
+                    "generation_id": generation,
                     "store": store,
                     "model": model,
-                    "history_entry": {"generation_id": generation},
-                    "counts": {},
+                    "history_entry": history_entry,
+                    "counts": counts,
                 }), encoding="utf-8")
                 configurations.append({
                     "league": league,
@@ -232,6 +239,87 @@ class FinalReviewLifecycleTests(unittest.TestCase):
                 )
 
             self.assertEqual(before, {path: path.read_bytes() for path in tracked_paths})
+
+    def test_structurally_invalid_loaded_roles_abort_before_training_replay_or_save(self):
+        for role in ("prediction", "model", "history", "pending"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                prediction_path = root / "predictions.json"
+                model_path = root / "weights.json"
+                history_path = root / "history.json"
+                pending_path = Path(str(model_path) + ".pending")
+                fixture = self.fixture()
+                run_persistent_competition(
+                    league="pl", fixtures=[fixture], teams={},
+                    prediction_path=str(prediction_path), model_path=str(model_path),
+                    history_path=str(history_path), history={}, now=self.now,
+                    snapshot_builder=self.snapshot_builder,
+                    model_trainer=lambda model, rows: model,
+                    default_model=default_model_state("pl"),
+                )
+
+                if role == "prediction":
+                    prediction = json.loads(prediction_path.read_text(encoding="utf-8"))
+                    prediction["matches"] = {"77": "corrupt"}
+                    prediction_path.write_text(json.dumps(prediction), encoding="utf-8")
+                elif role == "model":
+                    model = json.loads(model_path.read_text(encoding="utf-8"))
+                    model.update({
+                        "active_strategy": "corrupt",
+                        "factors": {"strength": "corrupt"},
+                        "calibration": [],
+                        "meta": "corrupt",
+                    })
+                    model_path.write_text(json.dumps(model), encoding="utf-8")
+                elif role == "history":
+                    history = json.loads(history_path.read_text(encoding="utf-8"))
+                    history["pl"]["gw_results"] = ["corrupt"]
+                    history_path.write_text(json.dumps(history), encoding="utf-8")
+                else:
+                    generation = "pending-generation"
+                    store = json.loads(prediction_path.read_text(encoding="utf-8"))
+                    model = json.loads(model_path.read_text(encoding="utf-8"))
+                    history_entry = json.loads(history_path.read_text(encoding="utf-8"))["pl"]
+                    store.update({"generation_id": generation, "matches": {"77": "corrupt"}})
+                    model.update({"generation_id": generation, "factors": "corrupt"})
+                    history_entry.update({"generation_id": generation, "gw_results": ["corrupt"]})
+                    pending_path.write_text(json.dumps({
+                        "version": 2,
+                        "league": "pl",
+                        "generation_id": generation,
+                        "store": store,
+                        "model": model,
+                        "history_entry": history_entry,
+                        "counts": {"trained": "corrupt"},
+                    }), encoding="utf-8")
+
+                tracked_paths = [prediction_path, model_path, history_path]
+                if pending_path.exists():
+                    tracked_paths.append(pending_path)
+                before = {path: path.read_bytes() for path in tracked_paths}
+                trainer_calls = []
+
+                def trainer(model, rows):
+                    trainer_calls.append(copy.deepcopy(rows))
+                    return model
+
+                with patch.object(learning, "atomic_save_json", wraps=learning.atomic_save_json) as save, patch.object(
+                    learning, "_write_persistent_bundle", wraps=learning._write_persistent_bundle,
+                ) as replay:
+                    with self.assertRaises(learning.StateConsistencyError):
+                        run_persistent_competition(
+                            league="pl",
+                            fixtures=[self.fixture(finished=True)],
+                            teams={}, prediction_path=str(prediction_path), model_path=str(model_path),
+                            history_path=str(history_path), history={}, now=self.now + timedelta(days=1),
+                            snapshot_builder=self.snapshot_builder, model_trainer=trainer,
+                            default_model=default_model_state("pl"),
+                        )
+
+                self.assertEqual([], trainer_calls)
+                save.assert_not_called()
+                replay.assert_not_called()
+                self.assertEqual(before, {path: path.read_bytes() for path in tracked_paths})
 
     def test_cross_competition_recovery_precedes_new_training_and_preserves_both(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -489,6 +577,140 @@ class FinalReviewLifecycleTests(unittest.TestCase):
 
 
 class FinalReviewStateLoadingTests(unittest.TestCase):
+    @staticmethod
+    def _valid_current_store():
+        pick = {"winner": "home", "home_score": 1, "away_score": 0}
+        return {
+            "version": 1,
+            "lifecycle_version": 1,
+            "league": "pl",
+            "matches": {
+                "77": {
+                    "match_id": 77,
+                    "source_fixture_id": 77,
+                    "match_key": "pl:2025-26:77",
+                    "league": "pl",
+                    "season": "2025-26",
+                    "round": 4,
+                    "lifecycle_version": 1,
+                    "locked": True,
+                    "lock_verified": True,
+                    "checked": False,
+                    "model_trained": False,
+                    "picks": {"baseline": pick, "v4": copy.deepcopy(pick)},
+                    "custom_snapshot_field": {"keep": True},
+                },
+            },
+            "custom_store_field": {"keep": True},
+        }
+
+    def test_prediction_role_rejects_invalid_flags_picks_results_evaluations_identities_and_duplicates(self):
+        invalid_stores = []
+        invalid = self._valid_current_store()
+        invalid["matches"]["77"]["checked"] = "yes"
+        invalid_stores.append(("flag", invalid))
+        invalid = self._valid_current_store()
+        invalid["matches"]["77"]["picks"]["v4"] = []
+        invalid_stores.append(("pick", invalid))
+        invalid = self._valid_current_store()
+        invalid["matches"]["77"].update({
+            "checked": True,
+            "actual_home_score": "two",
+            "actual_away_score": 1,
+            "actual_winner": "home",
+            "rule": competition_rule("pl", {"e": 4}),
+            "evaluations": {},
+        })
+        invalid_stores.append(("result", invalid))
+        invalid = self._valid_current_store()
+        invalid["matches"]["77"]["evaluations"] = []
+        invalid_stores.append(("evaluations", invalid))
+        invalid = self._valid_current_store()
+        invalid["matches"]["77"]["match_key"] = "pl:2025-26:other"
+        invalid_stores.append(("identity", invalid))
+        invalid = self._valid_current_store()
+        duplicate = copy.deepcopy(invalid["matches"]["77"])
+        duplicate["match_id"] = 88
+        invalid["matches"]["88"] = duplicate
+        invalid_stores.append(("duplicate", invalid))
+
+        for name, store in invalid_stores:
+            with self.subTest(name=name):
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "pl")
+
+    def test_model_role_rejects_each_malformed_present_field(self):
+        invalid_fields = (
+            {"active_strategy": "corrupt"},
+            {"candidate_strategy": 4},
+            {"factors": []},
+            {"factors": {"strength": "corrupt"}},
+            {"calibration": []},
+            {"calibration": {"goal_mult": 99}},
+            {"meta": []},
+            {"meta": {"trained_matches": -1}},
+            {"applied_ledger_version": "1"},
+            {"applied_ledger_version": 1, "applied_match_keys": ["pl:2025-26:77", "pl:2025-26:77"]},
+            {"promotion_history": ["corrupt"]},
+            {"generation_id": ""},
+        )
+        for fields in invalid_fields:
+            with self.subTest(fields=fields):
+                model = default_model_state("pl")
+                model.update(copy.deepcopy(fields))
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_model_state(model, "pl")
+
+    def test_history_role_rejects_malformed_league_rows_comparisons_generation_and_counts(self):
+        invalid_histories = (
+            {"pl": "corrupt"},
+            {"pl": {"generation_id": 3}},
+            {"pl": {"gw_results": "corrupt"}},
+            {"pl": {"gw_results": ["corrupt"]}},
+            {"pl": {"gw_results": [{"gw": 1, "total": 1, "correct_winner": 2}]}},
+            {"pl": {"model_comparison": []}},
+            {"pl": {"model_comparison": {"total": -1}}},
+            {"pl": {"model_status": "corrupt"}},
+            {"pl": {"counts": {"trained": "corrupt"}}},
+        )
+        for history in invalid_histories:
+            with self.subTest(history=history):
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_global_history(history)
+
+    def test_compatible_legacy_roles_validate_and_preserve_unknown_fields(self):
+        legacy_store = {
+            "version": 4,
+            "matches": [{
+                "match_id": 760,
+                "winner": "away",
+                "home_score": 0,
+                "away_score": 2,
+                "checked": True,
+                "actual_home_score": 0,
+                "actual_away_score": 2,
+                "custom_snapshot_field": {"keep": True},
+            }],
+            "custom_store_field": {"keep": True},
+        }
+        learning.validate_prediction_store(legacy_store, "wc")
+        normalized = learning.normalize_prediction_store(legacy_store, "wc")
+        self.assertEqual({"keep": True}, normalized["matches"]["760"]["custom_snapshot_field"])
+        self.assertEqual({"keep": True}, normalized["custom_store_field"])
+
+        legacy_model = {"strength": 0.2, "form": 0.1, "custom_model_field": {"keep": True}}
+        learning.validate_model_state(legacy_model, "pl")
+        legacy_history = {
+            "wc": {
+                "gw_results": [{"gw": 18}],
+                "model_comparison": {"total": 65, "custom_comparison_field": {"keep": True}},
+                "custom_history_field": {"keep": True},
+            },
+            "other": {"keep": True},
+        }
+        learning.validate_global_history(legacy_history)
+        self.assertEqual({"keep": True}, legacy_history["other"])
+
     def test_missing_state_initializes_but_existing_invalid_state_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

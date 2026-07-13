@@ -362,8 +362,445 @@ def _legacy_active_strategy(snapshot):
     return "v4" if "v4" in picks else None
 
 
+_FACTOR_KEYS = {
+    "form", "strength", "position", "home_adv", "streak", "h2h",
+    "home_away_split", "goals_trend", "upset", "clean_sheet", "draw_tendency",
+}
+_CALIBRATION_BOUNDS = {
+    "goal_mult": (0.82, 1.22),
+    "home_goal_bias": (-1.5, 1.5),
+    "away_goal_bias": (-1.5, 1.5),
+    "draw_bias": (0.25, 2.0),
+    "zero_zero_penalty": (0.0, 1.0),
+}
+_COUNT_KEYS = {"locked", "checked", "trained", "skipped", "promoted"}
+_STRATEGIES = {"baseline", "v4"}
+
+
+def _state_error(message):
+    raise StateConsistencyError(message)
+
+
+def _nonempty_string(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _identity_value(value):
+    return not isinstance(value, bool) and isinstance(value, (int, str)) and bool(str(value).strip())
+
+
+def _nonnegative_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _validate_generation(packet, label):
+    if "generation_id" in packet and not _nonempty_string(packet["generation_id"]):
+        _state_error(f"invalid {label} generation")
+
+
+def _validate_factors(factors, label="model factors"):
+    if not isinstance(factors, dict):
+        _state_error(f"invalid {label}")
+    for key, value in factors.items():
+        if not _nonempty_string(key) or not _finite_number(value) or not 0 <= value <= 1:
+            _state_error(f"invalid {label}")
+
+
+def _validate_calibration(calibration, label="model calibration"):
+    if not isinstance(calibration, dict):
+        _state_error(f"invalid {label}")
+    for key, (low, high) in _CALIBRATION_BOUNDS.items():
+        if key in calibration and (
+            not _finite_number(calibration[key]) or not low <= calibration[key] <= high
+        ):
+            _state_error(f"invalid {label}")
+
+
+def _validate_meta(meta, label="model metadata"):
+    if not isinstance(meta, dict):
+        _state_error(f"invalid {label}")
+    for key in ("trained_matches", "last_batch_size"):
+        if key in meta and not _nonnegative_int(meta[key]):
+            _state_error(f"invalid {label}")
+    if "last_trained_at" in meta and not isinstance(meta["last_trained_at"], str):
+        _state_error(f"invalid {label}")
+    for key in ("avg_pred_goals", "avg_actual_goals"):
+        if key in meta and (not _finite_number(meta[key]) or meta[key] < 0):
+            _state_error(f"invalid {label}")
+    for key in ("pred_draw_rate", "actual_draw_rate", "pred_zero_zero_rate", "actual_zero_zero_rate"):
+        if key in meta and (not _finite_number(meta[key]) or not 0 <= meta[key] <= 1):
+            _state_error(f"invalid {label}")
+
+
+def _validate_top_scores(rows, label):
+    if not isinstance(rows, list):
+        _state_error(f"invalid {label}")
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not _nonempty_string(row.get("score"))
+            or not _nonnegative_int(row.get("count"))
+        ):
+            _state_error(f"invalid {label}")
+
+
+def _validate_metric_box(box, label):
+    if not isinstance(box, dict):
+        _state_error(f"invalid {label}")
+    for key in (
+        "winner_correct", "exact_correct", "points", "draw_picks", "unique_scores",
+        "sample_size", "brier_sample_size",
+    ):
+        if key in box and not _nonnegative_int(box[key]):
+            _state_error(f"invalid {label}")
+    for key in ("winner_accuracy", "exact_accuracy", "draw_pick_rate", "scoreline_concentration", "completeness_pct", "brier_completeness_pct"):
+        if key in box and (not _finite_number(box[key]) or not 0 <= box[key] <= 100):
+            _state_error(f"invalid {label}")
+    for key in ("goal_mae", "outcome_brier"):
+        if key in box and box[key] is not None and (not _finite_number(box[key]) or box[key] < 0):
+            _state_error(f"invalid {label}")
+    if "top_scores" in box:
+        _validate_top_scores(box["top_scores"], f"{label} top scores")
+
+
+def _validate_comparison(comparison, label="model comparison"):
+    if not isinstance(comparison, dict):
+        _state_error(f"invalid {label}")
+    for key in ("total", "sample_size"):
+        if key in comparison and not _nonnegative_int(comparison[key]):
+            _state_error(f"invalid {label}")
+    for key in ("active_strategy", "candidate_strategy"):
+        if key in comparison and comparison[key] not in _STRATEGIES:
+            _state_error(f"invalid {label}")
+    if "models" in comparison:
+        if not isinstance(comparison["models"], dict):
+            _state_error(f"invalid {label}")
+        for strategy, box in comparison["models"].items():
+            if strategy not in _STRATEGIES:
+                _state_error(f"invalid {label}")
+            _validate_metric_box(box, f"{label} {strategy}")
+    for key in ("baseline", "challenger"):
+        if key in comparison:
+            _validate_metric_box(comparison[key], f"{label} {key}")
+    for key in ("score_histograms", "lifecycle_score_histograms"):
+        if key in comparison:
+            if not isinstance(comparison[key], dict):
+                _state_error(f"invalid {label}")
+            for histogram in comparison[key].values():
+                if not isinstance(histogram, dict) or any(
+                    not _nonempty_string(score) or not _nonnegative_int(count)
+                    for score, count in histogram.items()
+                ):
+                    _state_error(f"invalid {label}")
+    if "score_histograms_complete" in comparison and (
+        not isinstance(comparison["score_histograms_complete"], dict)
+        or any(not isinstance(value, bool) for value in comparison["score_histograms_complete"].values())
+    ):
+        _state_error(f"invalid {label}")
+
+
+def _validate_model_status(status, label="model status"):
+    if not isinstance(status, dict):
+        _state_error(f"invalid {label}")
+    if "promote" in status and not isinstance(status["promote"], bool):
+        _state_error(f"invalid {label}")
+    if "status" in status and not _nonempty_string(status["status"]):
+        _state_error(f"invalid {label}")
+    for key in ("next_active_strategy", "active_strategy", "candidate_strategy"):
+        if key in status and status[key] not in _STRATEGIES:
+            _state_error(f"invalid {label}")
+    for key in ("verified_lifecycle_samples", "display_archive_samples"):
+        if key in status and not _nonnegative_int(status[key]):
+            _state_error(f"invalid {label}")
+
+
+def _validate_counts(counts, label="learning counts"):
+    if not isinstance(counts, dict):
+        _state_error(f"invalid {label}")
+    for key in _COUNT_KEYS:
+        if key in counts and not _nonnegative_int(counts[key]):
+            _state_error(f"invalid {label}")
+
+
+def _validate_evaluations(evaluations, picks):
+    if not isinstance(evaluations, dict):
+        _state_error("invalid snapshot evaluations")
+    for strategy, evaluation in evaluations.items():
+        if not _nonempty_string(strategy) or not isinstance(evaluation, dict):
+            _state_error("invalid snapshot evaluations")
+        if isinstance(picks, dict) and strategy not in picks:
+            _state_error("evaluation is absent from snapshot picks")
+        if "winner" in evaluation and evaluation["winner"] not in {"home", "away", "draw"}:
+            _state_error("invalid snapshot evaluation winner")
+        for key in ("winner_correct", "exact"):
+            if key in evaluation and not isinstance(evaluation[key], bool):
+                _state_error("invalid snapshot evaluations")
+        if "points" in evaluation and (
+            not _finite_number(evaluation["points"]) or evaluation["points"] < 0
+        ):
+            _state_error("invalid snapshot evaluations")
+        if "score" in evaluation and not _nonempty_string(evaluation["score"]):
+            _state_error("invalid snapshot evaluations")
+
+
+def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
+    if not isinstance(snapshot, dict):
+        _state_error("invalid prediction snapshot")
+    for key in ("locked", "legacy", "lock_verified", "checked", "model_trained"):
+        if key in snapshot and not isinstance(snapshot[key], bool):
+            _state_error("invalid lifecycle flag")
+    if "lifecycle_version" in snapshot and snapshot["lifecycle_version"] != STORE_VERSION:
+        _state_error("unsupported snapshot lifecycle version")
+    if "league" in snapshot and snapshot["league"] != league:
+        _state_error("snapshot league mismatch")
+    if "season" in snapshot and not _nonempty_string(snapshot["season"]):
+        _state_error("invalid snapshot season")
+    for key in ("match_id", "source_fixture_id"):
+        if key in snapshot and not _identity_value(snapshot[key]):
+            _state_error("invalid snapshot source identity")
+    for key in ("round", "day"):
+        if key in snapshot and not _nonnegative_int(snapshot[key]):
+            _state_error("invalid snapshot round")
+    try:
+        season, source_fixture_id, expected_key = _snapshot_identity(snapshot, league, fallback_id)
+    except (TypeError, ValueError) as error:
+        raise StateConsistencyError("invalid snapshot identity") from error
+    if not _identity_value(source_fixture_id) or not _nonempty_string(str(season)):
+        _state_error("invalid snapshot identity")
+    if "match_key" in snapshot and snapshot["match_key"] != expected_key:
+        _state_error("snapshot match key mismatch")
+
+    legacy = snapshot.get("legacy") is True or not (
+        lifecycle_store or snapshot.get("lifecycle_version") == STORE_VERSION
+    )
+    picks = snapshot.get("picks")
+    if "picks" in snapshot:
+        if not isinstance(picks, dict) or not picks:
+            _state_error("invalid snapshot picks")
+        for strategy, pick in picks.items():
+            if not _nonempty_string(strategy) or not _valid_pick(pick):
+                _state_error("invalid snapshot picks")
+        if not legacy and not _STRATEGIES.issubset(picks):
+            _state_error("incomplete lifecycle snapshot picks")
+    for key in ("base_v3_prediction", "v4_shadow"):
+        if key in snapshot and not _valid_pick(snapshot[key]):
+            _state_error("invalid legacy snapshot pick")
+    legacy_pick_fields = ("winner", "home_score", "away_score")
+    if any(key in snapshot for key in legacy_pick_fields) and not _valid_pick({
+        key: snapshot.get(key) for key in legacy_pick_fields
+    }):
+        _state_error("invalid legacy snapshot pick")
+    if "active_strategy_at_lock" in snapshot and (
+        snapshot["active_strategy_at_lock"] not in _STRATEGIES
+        or isinstance(picks, dict) and snapshot["active_strategy_at_lock"] not in picks
+    ):
+        _state_error("invalid snapshot strategy")
+
+    actual_present = any(key in snapshot for key in ("actual_home_score", "actual_away_score", "actual_winner"))
+    if actual_present:
+        home_score = snapshot.get("actual_home_score")
+        away_score = snapshot.get("actual_away_score")
+        if not _valid_score(home_score) or not _valid_score(away_score):
+            _state_error("invalid snapshot result")
+        actual_winner = _winner(home_score, away_score)
+        if snapshot.get("actual_winner", actual_winner) != actual_winner:
+            _state_error("inconsistent snapshot result")
+    if "evaluations" in snapshot:
+        _validate_evaluations(snapshot["evaluations"], picks)
+    for key in ("rule", "phase_rule"):
+        if key in snapshot:
+            try:
+                _normalized_rule(snapshot[key])
+            except ValueError as error:
+                raise StateConsistencyError("invalid snapshot rule") from error
+    for key in ("probabilities", "evaluation_probabilities"):
+        if key in snapshot:
+            evidence = {"probabilities": snapshot[key]}
+            try:
+                for strategy in _STRATEGIES:
+                    _strategy_probabilities(evidence, strategy)
+            except ValueError as error:
+                raise StateConsistencyError("invalid snapshot probability evidence") from error
+    for key in ("features", "factor_edges", "missing"):
+        if key in snapshot and not isinstance(snapshot[key], dict):
+            _state_error("invalid snapshot feature state")
+    for key in ("created_at", "checked_at", "trained_at", "kickoff_time"):
+        if key in snapshot and not isinstance(snapshot[key], str):
+            _state_error("invalid snapshot timestamp")
+    if snapshot.get("checked") is True and not legacy:
+        if not actual_present or "evaluations" not in snapshot or "rule" not in snapshot:
+            _state_error("incomplete checked lifecycle snapshot")
+    return expected_key
+
+
+def validate_prediction_store(raw, league):
+    if not isinstance(raw, dict):
+        _state_error("prediction store must be an object")
+    if "version" in raw and not _nonnegative_int(raw["version"]):
+        _state_error("invalid prediction store version")
+    if "lifecycle_version" in raw and raw["lifecycle_version"] != STORE_VERSION:
+        _state_error("unsupported prediction lifecycle version")
+    if "league" in raw and raw["league"] != league:
+        _state_error("prediction store league mismatch")
+    _validate_generation(raw, "prediction store")
+    if "updated_at" in raw and not isinstance(raw["updated_at"], str):
+        _state_error("invalid prediction store timestamp")
+    if "matches" not in raw:
+        seen_ids = set()
+        for round_key, packet in raw.items():
+            if not str(round_key).isdigit():
+                continue
+            if not isinstance(packet, dict) or not isinstance(packet.get("predictions"), list):
+                _state_error("invalid legacy prediction round")
+            for pick in packet["predictions"]:
+                if not isinstance(pick, dict) or not _identity_value(pick.get("match_id")) or not _valid_pick(pick):
+                    _state_error("invalid legacy prediction row")
+                match_id = str(pick["match_id"])
+                if match_id in seen_ids:
+                    _state_error("duplicate legacy prediction identity")
+                seen_ids.add(match_id)
+        return raw
+    matches = raw["matches"]
+    if not isinstance(matches, (dict, list)):
+        _state_error("invalid prediction match collection")
+    lifecycle_store = raw.get("lifecycle_version") == STORE_VERSION
+    seen_keys = set()
+    iterable = matches.items() if isinstance(matches, dict) else enumerate(matches)
+    for fallback_id, snapshot in iterable:
+        match_key = _validate_snapshot(snapshot, league, fallback_id, lifecycle_store)
+        if match_key in seen_keys:
+            _state_error(f"duplicate lifecycle identity: {match_key}")
+        seen_keys.add(match_key)
+    return raw
+
+
+def validate_model_state(model, league):
+    if not isinstance(model, dict):
+        _state_error("model state must be an object")
+    if "version" in model and not _nonnegative_int(model["version"]):
+        _state_error("invalid model version")
+    if "league" in model and model["league"] != league:
+        _state_error("model league mismatch")
+    _validate_generation(model, "model")
+    for key in ("active_strategy", "candidate_strategy"):
+        if key in model and model[key] not in _STRATEGIES:
+            _state_error("invalid model strategy")
+    if all(key in model for key in ("active_strategy", "candidate_strategy")) and model["active_strategy"] == model["candidate_strategy"]:
+        _state_error("model strategies must differ")
+    if "factors" in model:
+        _validate_factors(model["factors"])
+    else:
+        for key in _FACTOR_KEYS:
+            if key in model and (not _finite_number(model[key]) or not 0 <= model[key] <= 1):
+                _state_error("invalid legacy model factors")
+    if "calibration" in model:
+        _validate_calibration(model["calibration"])
+    if "meta" in model:
+        _validate_meta(model["meta"])
+    if "applied_ledger_version" in model and model["applied_ledger_version"] != LEDGER_VERSION:
+        _state_error("invalid applied-match ledger version")
+    if "applied_match_keys" in model:
+        keys = model["applied_match_keys"]
+        if (
+            not isinstance(keys, list)
+            or not all(_nonempty_string(key) for key in keys)
+            or len(keys) != len(set(keys))
+        ):
+            _state_error("invalid applied-match ledger")
+    if "promotion_history" in model:
+        rows = model["promotion_history"]
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            _state_error("invalid promotion history")
+        for row in rows:
+            for key in ("from", "to"):
+                if key in row and row[key] not in _STRATEGIES:
+                    _state_error("invalid promotion history")
+            if "at" in row and not isinstance(row["at"], str):
+                _state_error("invalid promotion history")
+            if "comparison" in row:
+                _validate_comparison(row["comparison"], "promotion comparison")
+    if "comparison" in model:
+        _validate_comparison(model["comparison"])
+    if "status" in model:
+        _validate_model_status(model["status"])
+    return model
+
+
+def _validate_history_row(row, league):
+    if not isinstance(row, dict):
+        _state_error("invalid history gameweek row")
+    if "season" in row and not _nonempty_string(row["season"]):
+        _state_error("invalid history season")
+    if "gw" in row and not _nonnegative_int(row["gw"]):
+        _state_error("invalid history round")
+    for key in ("total", "correct_winner", "correct_score", "exact_score", "points"):
+        if key in row and not _nonnegative_int(row[key]):
+            _state_error("invalid history gameweek row")
+    total = row.get("total")
+    if _nonnegative_int(total):
+        for key in ("correct_winner", "correct_score", "exact_score"):
+            if key in row and row[key] > total:
+                _state_error("inconsistent history gameweek row")
+    for key in ("accuracy_pct", "score_acc_pct"):
+        if key in row and (not _finite_number(row[key]) or not 0 <= row[key] <= 100):
+            _state_error("invalid history accuracy")
+
+
+def validate_history_entry(entry, league):
+    if not isinstance(entry, dict):
+        _state_error(f"invalid {league} history entry")
+    _validate_generation(entry, f"{league} history")
+    if "gw_results" in entry:
+        if not isinstance(entry["gw_results"], list):
+            _state_error("invalid history gameweek rows")
+        for row in entry["gw_results"]:
+            _validate_history_row(row, league)
+    for key in ("total_evaluated", "snapshots_locked", "trained_this_build", "refreshed_predictions"):
+        if key in entry and not _nonnegative_int(entry[key]):
+            _state_error(f"invalid {league} history count")
+    for key in ("overall_accuracy", "data_completeness_pct"):
+        if key in entry and (not _finite_number(entry[key]) or not 0 <= entry[key] <= 100):
+            _state_error(f"invalid {league} history metric")
+    if "current_weights" in entry:
+        _validate_factors(entry["current_weights"], "history weights")
+    if "calibration" in entry:
+        _validate_calibration(entry["calibration"], "history calibration")
+    if "model_meta" in entry:
+        _validate_meta(entry["model_meta"], "history model metadata")
+    if "model_comparison" in entry:
+        _validate_comparison(entry["model_comparison"], "history model comparison")
+    if "model_status" in entry:
+        _validate_model_status(entry["model_status"], "history model status")
+    if "counts" in entry:
+        _validate_counts(entry["counts"], "history counts")
+    if "current_season" in entry and not _nonempty_string(entry["current_season"]):
+        _state_error("invalid current history season")
+    if "available_seasons" in entry and (
+        not isinstance(entry["available_seasons"], list)
+        or not all(_nonempty_string(season) for season in entry["available_seasons"])
+    ):
+        _state_error("invalid available history seasons")
+    if "merged_lifecycle_match_ids" in entry and (
+        not isinstance(entry["merged_lifecycle_match_ids"], list)
+        or not all(_nonempty_string(match_id) for match_id in entry["merged_lifecycle_match_ids"])
+        or len(entry["merged_lifecycle_match_ids"]) != len(set(entry["merged_lifecycle_match_ids"]))
+    ):
+        _state_error("invalid merged lifecycle identities")
+    return entry
+
+
+def validate_global_history(history):
+    if not isinstance(history, dict):
+        _state_error("learning history must be an object")
+    for league in ("pl", "laliga", "wc"):
+        if league in history:
+            validate_history_entry(history[league], league)
+    return history
+
+
 def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
-    raw = copy.deepcopy(raw or {})
+    raw = copy.deepcopy({} if raw is None else raw)
+    validate_prediction_store(raw, league)
     if isinstance(raw.get("matches"), list):
         matches = {}
         for snapshot in raw["matches"]:
@@ -786,7 +1223,8 @@ def evolve_competition_state(
 
 def _persistent_model(raw_model, default_model, league):
     default = copy.deepcopy(default_model) if isinstance(default_model, dict) else {}
-    raw = raw_model if isinstance(raw_model, dict) else {}
+    validate_model_state(raw_model, league)
+    raw = raw_model
     model = copy.deepcopy(default)
 
     if "factors" in raw or "calibration" in raw or "meta" in raw:
@@ -838,7 +1276,9 @@ def _persistent_model(raw_model, default_model, league):
 
 
 def merge_learning_history(history, league, league_history):
-    merged = copy.deepcopy(history) if isinstance(history, dict) else {}
+    validate_global_history(history)
+    validate_history_entry(league_history, league)
+    merged = copy.deepcopy(history)
     existing = merged.get(league)
     combined = copy.deepcopy(existing) if isinstance(existing, dict) else {}
     incoming = copy.deepcopy(league_history) if isinstance(league_history, dict) else {}
@@ -871,6 +1311,7 @@ def merge_learning_history(history, league, league_history):
     elif (comparison_accuracy := _comparison_accuracy(incoming)) is not None:
         combined["overall_accuracy"] = comparison_accuracy
     merged[league] = combined
+    validate_global_history(merged)
     return merged
 
 
@@ -934,6 +1375,12 @@ def _validate_pending_bundle(pending, league):
         raise StateConsistencyError("inconsistent pending persistence generation")
     if any(packet.get("league") != league for packet in (pending["store"], pending["model"])):
         raise StateConsistencyError("inconsistent pending persistence league")
+    if version == 1:
+        validate_global_history(pending["history"])
+    validate_prediction_store(pending["store"], league)
+    validate_model_state(pending["model"], league)
+    validate_history_entry(history_entry, league)
+    _validate_counts(pending["counts"], "pending counts")
     return {
         "version": PENDING_VERSION,
         "league": league,
@@ -948,8 +1395,8 @@ def _validate_pending_bundle(pending, league):
 def _write_persistent_bundle(
     *, prediction_path, model_path, history_path, pending, history_fallback=None,
 ):
-    atomic_save_json(model_path, pending["model"])
-    atomic_save_json(prediction_path, pending["store"])
+    league = pending.get("league") if isinstance(pending, dict) else None
+    pending = _validate_pending_bundle(pending, league)
     if history_path:
         latest_history, history_status = load_json_state(history_path, {})
         if history_status == STATE_MISSING and isinstance(history_fallback, dict):
@@ -959,13 +1406,18 @@ def _write_persistent_bundle(
             pending["league"],
             pending["history_entry"],
         )
+        atomic_save_json(model_path, pending["model"])
+        atomic_save_json(prediction_path, pending["store"])
         atomic_save_json(history_path, merged_history)
         return merged_history
-    return merge_learning_history(
+    merged_history = merge_learning_history(
         history_fallback if isinstance(history_fallback, dict) else {},
         pending["league"],
         pending["history_entry"],
     )
+    atomic_save_json(model_path, pending["model"])
+    atomic_save_json(prediction_path, pending["store"])
+    return merged_history
 
 
 def _remove_pending(path):
@@ -979,6 +1431,7 @@ def recover_pending_competitions(configurations, *, history_path):
     if not isinstance(configurations, list):
         raise StateConsistencyError("pending recovery configuration must be a list")
     loaded_history, _ = load_json_state(history_path, {})
+    validate_global_history(loaded_history)
     pending_bundles = []
     seen_leagues = set()
     for configuration in configurations:
@@ -998,8 +1451,10 @@ def recover_pending_competitions(configurations, *, history_path):
         ):
             raise StateConsistencyError("invalid pending recovery configuration")
         seen_leagues.add(league)
-        load_json_state(prediction_path, {})
-        load_json_state(model_path, {})
+        raw_store, _ = load_json_state(prediction_path, {})
+        raw_model, _ = load_json_state(model_path, {})
+        validate_prediction_store(raw_store, league)
+        validate_model_state(raw_model, league)
         pending_path = f"{model_path}.pending"
         pending, pending_status = load_json_state(pending_path, {})
         if pending_status == STATE_LOADED:
@@ -1029,6 +1484,8 @@ def run_persistent_competition(
 ):
     raw_store, _ = load_json_state(prediction_path, {})
     raw_model, model_status = load_json_state(model_path, default_model)
+    validate_prediction_store(raw_store, league)
+    validate_model_state(raw_model if model_status != STATE_MISSING else {}, league)
     if history_path:
         loaded_history, history_status = load_json_state(history_path, {})
         if history_status == STATE_MISSING:
@@ -1039,6 +1496,7 @@ def run_persistent_competition(
         if not isinstance(history, dict):
             raise StateFileError("learning history must be an object")
         loaded_history = copy.deepcopy(history)
+    validate_global_history(loaded_history)
 
     pending_path = f"{model_path}.pending"
     pending, pending_status = load_json_state(pending_path, {}) if history_path else ({}, STATE_MISSING)
@@ -1082,6 +1540,7 @@ def run_persistent_competition(
         "history_entry": copy.deepcopy(merged_history[league]),
         "counts": counts,
     }
+    pending = _validate_pending_bundle(pending, league)
     if history_path:
         atomic_save_json(pending_path, pending)
     persisted_history = _write_persistent_bundle(

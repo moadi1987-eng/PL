@@ -15,7 +15,7 @@ from website.league_learning import (
     promotion_decision,
     score_pick,
 )
-from website.league_learning import StateFileError
+from website.league_learning import StateConsistencyError, StateFileError
 
 
 class LeagueLearningRulesTests(unittest.TestCase):
@@ -331,7 +331,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual(0, counts["trained"])
         self.assertEqual([], trainer_calls)
 
-    def test_normalization_skips_malformed_match_entries(self):
+    def test_normalization_rejects_malformed_match_entries(self):
         raw = {
             "matches": {
                 "bad-list": [],
@@ -339,8 +339,12 @@ class SnapshotLifecycleTests(unittest.TestCase):
                 "91": self.legacy_wc_store()["matches"]["91"],
             },
         }
-        migrated = normalize_prediction_store(raw, "wc")
-        self.assertEqual({"91"}, set(migrated["matches"]))
+        with self.assertRaises(StateConsistencyError):
+            normalize_prediction_store(raw, "wc")
+
+    def test_normalization_does_not_coerce_falsy_non_object_state(self):
+        with self.assertRaises(StateConsistencyError):
+            normalize_prediction_store([], "pl")
 
     def test_legacy_rows_do_not_form_a_promotion_cohort(self):
         matches = {}
@@ -459,17 +463,15 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual(3, history["gw_results"][0]["points"])
         self.assertEqual(0, counts["trained"])
 
-    def test_malformed_nested_legacy_pick_is_skipped_without_losing_valid_history(self):
+    def test_malformed_nested_legacy_pick_is_rejected(self):
         raw = self.legacy_wc_store()
         raw["matches"]["91"]["picks"] = {
             "baseline": {"winner": "home", "home_score": 2, "away_score": 1},
             "v4": [],
         }
         raw["matches"]["91"].pop("v4_shadow")
-        migrated = normalize_prediction_store(raw, "wc")
-        snapshot = migrated["matches"]["91"]
-        self.assertEqual({"baseline"}, set(snapshot["picks"]))
-        self.assertEqual(3, snapshot["evaluations"]["baseline"]["points"])
+        with self.assertRaises(StateConsistencyError):
+            normalize_prediction_store(raw, "wc")
 
     def assert_invalid_builder_can_retry(self, invalid_snapshot):
         store, model, _, counts = evolve_competition_state(

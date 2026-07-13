@@ -1767,20 +1767,28 @@ def fetch_pl_official_season(prev_teams, headers):
         if fixture["fin"] and (fixture["hs"] is None or fixture["as"] is None)
     }
     if missing_result_ids:
-        results_resp = requests.get(
-            PL_OFFICIAL_FIXTURES,
-            params={**fixture_params, "statuses": "C"},
-            headers=pulse_headers,
-            timeout=30,
-        )
-        results_resp.raise_for_status()
         official_results = {}
-        for item in results_resp.json().get("content", []):
-            fixture_id = _pl_official_fixture_id(item)
-            status = str(item.get("status") or "").upper()
-            scores = _pl_official_scores(item)
-            if fixture_id in missing_result_ids and status in ("C", "FT", "F") and scores is not None:
-                official_results[fixture_id] = scores
+        try:
+            results_resp = requests.get(
+                PL_OFFICIAL_FIXTURES,
+                params={**fixture_params, "statuses": "C"},
+                headers=pulse_headers,
+                timeout=30,
+            )
+            results_resp.raise_for_status()
+            results_payload = results_resp.json()
+            if not isinstance(results_payload, dict) or not isinstance(results_payload.get("content"), list):
+                raise ValueError("invalid completed-result overlay")
+            for item in results_payload["content"]:
+                if not isinstance(item, dict):
+                    raise ValueError("invalid completed-result overlay row")
+                fixture_id = _pl_official_fixture_id(item)
+                status = str(item.get("status") or "").upper()
+                scores = _pl_official_scores(item)
+                if fixture_id in missing_result_ids and status in ("C", "FT", "F") and scores is not None:
+                    official_results[fixture_id] = scores
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            official_results = {}
         for fixture in fixtures_out:
             scores = official_results.get(fixture["id"])
             if scores is not None:

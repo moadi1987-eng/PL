@@ -858,6 +858,124 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertTrue(snapshot["model_trained"])
         self.assertEqual((2, 1), (snapshot["actual_home_score"], snapshot["actual_away_score"]))
 
+    def test_pl_official_secondary_result_failures_keep_primary_schedule(self):
+        now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+
+        def team(team_id, name, score=None):
+            side = {
+                "team": {
+                    "id": team_id,
+                    "name": name,
+                    "shortName": name[:3].upper(),
+                    "altIds": {"opta": f"t{team_id}"},
+                },
+            }
+            if score is not None:
+                side["score"] = score
+            return side
+
+        def fixture(fixture_id, status, kickoff, sides):
+            return {
+                "id": fixture_id,
+                "altIds": {"opta": f"g{fixture_id}"},
+                "gameweek": {"gameweek": 2},
+                "kickoff": {"millis": int(kickoff.timestamp() * 1000)},
+                "status": status,
+                "teams": sides,
+            }
+
+        completed_kickoff = now - timedelta(hours=4)
+        upcoming_kickoff = now + timedelta(hours=10)
+        primary_payload = {"content": [
+            fixture(901, "C", completed_kickoff, [team(11, "Home"), team(12, "Away")]),
+            fixture(902, "U", upcoming_kickoff, [team(13, "Next"), team(14, "Later")]),
+        ]}
+
+        class Response:
+            def __init__(self, payload, status_error=None):
+                self.payload = payload
+                self.status_error = status_error
+
+            def raise_for_status(self):
+                if self.status_error is not None:
+                    raise self.status_error
+
+            def json(self):
+                return self.payload
+
+        class Requests:
+            def __init__(self, failure):
+                self.failure = failure
+                self.calls = 0
+
+            def get(self, url, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return Response(primary_payload)
+                if self.failure == "timeout":
+                    raise TimeoutError("secondary result timeout")
+                if self.failure == "http":
+                    return Response({}, OSError("secondary result HTTP failure"))
+                return Response({"content": "corrupt"})
+
+        for failure in ("timeout", "http", "malformed"):
+            with self.subTest(failure=failure):
+                requests_client = Requests(failure)
+                namespace = self._official_adapter_namespace(requests_client)
+                season = namespace["fetch_pl_official_season"]({}, {"User-Agent": "test"})
+                compact = namespace["_compact_pl_learning_fixtures"](
+                    season["fix"], season["season"],
+                )
+
+                self.assertEqual("2026-27", season["season"])
+                self.assertEqual(2, requests_client.calls)
+                self.assertEqual([901, 902], [row["id"] for row in compact])
+                self.assertEqual(
+                    [completed_kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"), upcoming_kickoff.strftime("%Y-%m-%dT%H:%M:%SZ")],
+                    [row["ko"] for row in compact],
+                )
+                self.assertEqual((True, None, None), (
+                    compact[0]["fin"], compact[0]["hs"], compact[0]["as"],
+                ))
+                self.assertTrue(learning.eligible_to_lock(compact[1], now))
+                self.assertEqual({11, 12, 13, 14}, set(season["teams"]))
+
+    def test_pl_official_direct_schedule_scores_do_not_need_overlay(self):
+        now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        primary = {
+            "id": 901,
+            "altIds": {"opta": "g901"},
+            "gameweek": {"gameweek": 2},
+            "kickoff": {"millis": int(now.timestamp() * 1000)},
+            "status": "C",
+            "teams": [
+                {"team": {"id": 11, "name": "Home", "shortName": "HOM", "altIds": {"opta": "t11"}}, "score": 2},
+                {"team": {"id": 12, "name": "Away", "shortName": "AWA", "altIds": {"opta": "t12"}}, "score": 1},
+            ],
+        }
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"content": [primary]}
+
+        class Requests:
+            def __init__(self):
+                self.calls = 0
+
+            def get(self, url, **kwargs):
+                self.calls += 1
+                return Response()
+
+        requests_client = Requests()
+        namespace = self._official_adapter_namespace(requests_client)
+        season = namespace["fetch_pl_official_season"]({}, {"User-Agent": "test"})
+
+        self.assertEqual(1, requests_client.calls)
+        self.assertEqual((2, 1), (season["fix"][0]["hs"], season["fix"][0]["as"]))
+
     def test_pl_official_scores_must_be_finite_non_negative_integers(self):
         class Requests:
             def get(self, *args, **kwargs):
