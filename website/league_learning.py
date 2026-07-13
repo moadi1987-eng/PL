@@ -750,7 +750,11 @@ def validate_prediction_store(raw, league):
             if not isinstance(packet, dict) or not isinstance(packet.get("predictions"), list):
                 _state_error("invalid legacy prediction round")
             for pick in packet["predictions"]:
-                if not isinstance(pick, dict) or not _identity_value(pick.get("match_id")) or not _valid_pick(pick):
+                if (
+                    not isinstance(pick, dict)
+                    or not _identity_value(pick.get("match_id"))
+                    or not _valid_unverified_legacy_pick(pick)
+                ):
                     _state_error("invalid legacy prediction row")
                 match_id = str(pick["match_id"])
                 if match_id in seen_ids:
@@ -994,6 +998,11 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
     for round_key, packet in raw.items():
         if not isinstance(packet, dict):
             continue
+        packet_metadata = {
+            key: copy.deepcopy(value)
+            for key, value in packet.items()
+            if key != "predictions"
+        }
         for pick in packet.get("predictions", []):
             match_id = str(pick.get("match_id") or "")
             if not match_id:
@@ -1007,6 +1016,7 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                 "created_at": packet.get("created_at", ""), "locked": True, "legacy": True,
                 "lock_verified": False, "checked": False, "model_trained": True,
                 "features": {}, "missing": {"legacy_features": True},
+                "legacy_packet_metadata": copy.deepcopy(packet_metadata),
                 "picks": {"baseline": baseline, "v4": candidate},
             }
     return {

@@ -61,6 +61,37 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         }
 
     @staticmethod
+    def representative_raw_pl_packet_store():
+        return {
+            "29": {
+                "predictions": [
+                    {
+                        "match_id": 284,
+                        "winner": "home",
+                        "home_score": 1,
+                        "away_score": 1,
+                        "home_win_pct": 46.1,
+                        "draw_pct": 12.4,
+                        "away_win_pct": 41.5,
+                    },
+                    {
+                        "match_id": 282,
+                        "winner": "home",
+                        "home_score": 2,
+                        "away_score": 1,
+                        "home_win_pct": 50.1,
+                        "draw_pct": 11.5,
+                        "away_win_pct": 38.4,
+                    },
+                ],
+                "created_at": "2026-02-27 21:26:48",
+                "version": 4,
+                "model_updated": "2026-02-27 21:30:00",
+                "custom_packet_field": {"keep": True},
+            },
+        }
+
+    @staticmethod
     def actual_pl_unverified_legacy_store():
         return {
             "version": 1,
@@ -343,6 +374,131 @@ class FinalReviewLifecycleTests(unittest.TestCase):
             self.assertEqual(f"pl:2025-26:{storage_key}", migrated["match_key"])
             self.assertEqual("2025-26", migrated["season"])
             self.assertEqual(int(storage_key), migrated["source_fixture_id"])
+
+    def test_raw_pl_packet_preflight_and_migration_preserve_historical_evidence(self):
+        raw = self.representative_raw_pl_packet_store()
+        original = copy.deepcopy(raw)
+
+        learning.validate_prediction_store(raw, "pl")
+        normalized = learning.normalize_prediction_store(raw, "pl")
+
+        self.assertEqual(original, raw)
+        snapshot = normalized["matches"]["284"]
+        self.assertEqual(original["29"]["predictions"][0], snapshot["picks"]["baseline"])
+        self.assertEqual(
+            {key: value for key, value in original["29"].items() if key != "predictions"},
+            snapshot["legacy_packet_metadata"],
+        )
+        self.assertEqual(29, snapshot["round"])
+        self.assertEqual(original["29"]["created_at"], snapshot["created_at"])
+        self.assertIs(snapshot["legacy"], True)
+        self.assertIs(snapshot["lock_verified"], False)
+        self.assertEqual("pl:2025-26:284", snapshot["match_key"])
+
+    def test_all_current_raw_pl_rows_migrate_read_only_without_evidence_loss(self):
+        path = Path(__file__).parents[1] / "ai_predictions.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        original = copy.deepcopy(raw)
+
+        learning.validate_prediction_store(raw, "pl")
+        normalized = learning.normalize_prediction_store(raw, "pl")
+
+        self.assertEqual(original, raw)
+        expected_ids = set()
+        inconsistent_ids = set()
+        for round_key, packet in original.items():
+            if not str(round_key).isdigit():
+                continue
+            metadata = {key: value for key, value in packet.items() if key != "predictions"}
+            for pick in packet["predictions"]:
+                match_id = str(pick["match_id"])
+                expected_ids.add(match_id)
+                expected_winner = (
+                    "home" if pick["home_score"] > pick["away_score"]
+                    else "away" if pick["away_score"] > pick["home_score"]
+                    else "draw"
+                )
+                if pick["winner"] != expected_winner:
+                    inconsistent_ids.add(int(match_id))
+                snapshot = normalized["matches"][match_id]
+                self.assertEqual(pick, snapshot["picks"]["baseline"])
+                self.assertEqual(metadata, snapshot["legacy_packet_metadata"])
+                self.assertEqual(int(round_key), snapshot["round"])
+                self.assertIs(snapshot["legacy"], True)
+                self.assertIs(snapshot["lock_verified"], False)
+
+        self.assertEqual(108, len(expected_ids))
+        self.assertEqual(expected_ids, set(normalized["matches"]))
+        self.assertEqual({284, 286, 285, 289, 280, 274, 273, 275, 271}, inconsistent_ids)
+
+    def test_raw_pl_rows_never_train_compare_or_promote(self):
+        path = Path(__file__).parents[1] / "ai_predictions.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        trainer_calls = []
+
+        store, model, history, counts = evolve_competition_state(
+            league="pl",
+            fixtures=[],
+            store=raw,
+            model=default_model_state("pl"),
+            snapshot_builder=lambda fixture, state: self.fail("raw archive must not relock"),
+            model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+            now=self.now,
+        )
+
+        inconsistent_ids = {"284", "286", "285", "289", "280", "274", "273", "275", "271"}
+        self.assertTrue(inconsistent_ids.issubset(store["matches"]))
+        self.assertTrue(all(
+            store["matches"][match_id]["legacy"] is True
+            and store["matches"][match_id]["lock_verified"] is False
+            for match_id in inconsistent_ids
+        ))
+        self.assertEqual([], trainer_calls)
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual(0, counts["promoted"])
+        self.assertEqual(0, model["comparison"]["total"])
+        self.assertFalse(model["status"]["promote"])
+        self.assertEqual(0, history["total_evaluated"])
+
+    def test_raw_packet_corruption_rejects_without_relaxing_modern_picks(self):
+        cases = {}
+        invalid_packet = self.representative_raw_pl_packet_store()
+        invalid_packet["29"] = []
+        cases["packet_container"] = invalid_packet
+        invalid_predictions = self.representative_raw_pl_packet_store()
+        invalid_predictions["29"]["predictions"] = {}
+        cases["predictions_container"] = invalid_predictions
+        invalid_row = self.representative_raw_pl_packet_store()
+        invalid_row["29"]["predictions"][0] = []
+        cases["row_container"] = invalid_row
+        invalid_identity = self.representative_raw_pl_packet_store()
+        invalid_identity["29"]["predictions"][0]["match_id"] = True
+        cases["identity"] = invalid_identity
+        for name, value in (("negative", -1), ("fractional", 1.5), ("boolean", True)):
+            invalid_score = self.representative_raw_pl_packet_store()
+            invalid_score["29"]["predictions"][0]["home_score"] = value
+            cases[f"score_{name}"] = invalid_score
+        invalid_winner = self.representative_raw_pl_packet_store()
+        invalid_winner["29"]["predictions"][0]["winner"] = "invalid"
+        cases["winner"] = invalid_winner
+        duplicate = self.representative_raw_pl_packet_store()
+        duplicate["30"] = {
+            "predictions": [copy.deepcopy(duplicate["29"]["predictions"][0])],
+            "created_at": "later",
+        }
+        cases["duplicate"] = duplicate
+
+        for name, raw in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(raw, "pl")
+
+        modern = self.valid_checked_current_store()
+        modern["matches"]["77"]["picks"]["baseline"].update(
+            winner="home", home_score=1, away_score=1,
+        )
+        with self.assertRaises(learning.StateConsistencyError):
+            learning.validate_prediction_store(modern, "pl")
 
     def test_actual_pl_unverified_legacy_rows_keep_history_but_never_train_or_compare(self):
         original = self.actual_pl_unverified_legacy_store()
