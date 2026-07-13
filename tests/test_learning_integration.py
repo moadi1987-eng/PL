@@ -234,6 +234,38 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(54, sum(row["correct_winner"] for row in merged["pl"]["gw_results"]))
         self.assertEqual(50.0, merged["pl"]["overall_accuracy"])
 
+    def test_merge_retains_total_evaluated_for_preserved_gameweek_history(self):
+        retained_rows = [
+            {"gw": gw, "total": 10 if gw < 11 else 8, "correct_winner": 5 if gw < 11 else 4}
+            for gw in range(1, 12)
+        ]
+        original = {
+            "pl": {
+                "gw_results": retained_rows,
+                "total_evaluated": 108,
+                "overall_accuracy": 50.0,
+                "model_comparison": {"total": 108},
+            },
+        }
+        before = copy.deepcopy(original)
+
+        merged = merge_learning_history(
+            original,
+            "pl",
+            {
+                "gw_results": [],
+                "total_evaluated": 0,
+                "overall_accuracy": 0.0,
+                "model_comparison": {"total": 0},
+            },
+        )
+
+        self.assertEqual(11, len(merged["pl"]["gw_results"]))
+        self.assertEqual(108, sum(row["total"] for row in merged["pl"]["gw_results"]))
+        self.assertEqual(108, merged["pl"]["total_evaluated"])
+        self.assertEqual(108, merged["pl"]["model_comparison"]["total"])
+        self.assertEqual(before, original)
+
     def test_merge_keeps_genuine_zero_accuracy_from_evaluated_rows(self):
         merged = merge_learning_history(
             {"pl": {"gw_results": [{"gw": 1, "total": 10, "correct_winner": 5}], "overall_accuracy": 50.0}},

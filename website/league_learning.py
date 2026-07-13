@@ -1449,6 +1449,13 @@ def merge_learning_history(history, league, league_history):
         if key == "gw_results" and not value and combined.get(key):
             continue
         if (
+            key == "total_evaluated"
+            and not value
+            and not incoming.get("gw_results")
+            and combined.get("gw_results")
+        ):
+            continue
+        if (
             key == "model_comparison"
             and isinstance(value, dict)
             and not value.get("total")
