@@ -146,6 +146,194 @@ class FinalReviewLifecycleTests(unittest.TestCase):
                 self.assertEqual(generation, saved_history["pl"]["generation_id"])
                 self.assertFalse(Path(str(model_path) + ".pending").exists())
 
+    def test_legacy_full_history_pending_replays_only_owned_competition_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wc_prediction = root / "wc-predictions.json"
+            wc_model = root / "wc-weights.json"
+            history_path = root / "history.json"
+            generation = "wc-generation"
+            wc_prediction.write_text(
+                json.dumps({"league": "wc", "generation_id": generation, "matches": {}}),
+                encoding="utf-8",
+            )
+            wc_model.write_text(
+                json.dumps({"league": "wc", "generation_id": generation}),
+                encoding="utf-8",
+            )
+            history_path.write_text(
+                json.dumps({"laliga": {"generation_id": "new-laliga", "total_evaluated": 9}}),
+                encoding="utf-8",
+            )
+            pending_path = Path(str(wc_model) + ".pending")
+            pending_path.write_text(json.dumps({
+                "version": 1,
+                "league": "wc",
+                "generation_id": generation,
+                "store": {"league": "wc", "generation_id": generation, "matches": {}},
+                "model": {"league": "wc", "generation_id": generation},
+                "history": {
+                    "laliga": {"generation_id": "stale-laliga", "total_evaluated": 2},
+                    "wc": {"generation_id": generation, "total_evaluated": 1},
+                },
+                "counts": {"locked": 0, "checked": 1, "trained": 1, "skipped": 0, "promoted": 0},
+            }), encoding="utf-8")
+
+            recovered = learning.recover_pending_competitions(
+                [{
+                    "league": "wc",
+                    "prediction_path": str(wc_prediction),
+                    "model_path": str(wc_model),
+                }],
+                history_path=str(history_path),
+            )
+
+            self.assertEqual("new-laliga", recovered["laliga"]["generation_id"])
+            self.assertEqual(9, recovered["laliga"]["total_evaluated"])
+            self.assertEqual(generation, recovered["wc"]["generation_id"])
+            self.assertFalse(pending_path.exists())
+
+    def test_all_pending_journals_validate_before_any_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            history_path = root / "history.json"
+            history_path.write_text('{"safe":{"keep":true}}', encoding="utf-8")
+            configurations = []
+            tracked_paths = [history_path]
+            for league, generation in (("pl", "pl-generation"), ("wc", "wc-generation")):
+                prediction_path = root / f"{league}-predictions.json"
+                model_path = root / f"{league}-weights.json"
+                pending_path = Path(str(model_path) + ".pending")
+                store = {"league": league, "generation_id": generation, "matches": {}}
+                model = {"league": league, "generation_id": generation}
+                prediction_path.write_text(json.dumps(store), encoding="utf-8")
+                model_path.write_text(json.dumps(model), encoding="utf-8")
+                pending_path.write_text(json.dumps({
+                    "version": 2,
+                    "league": league,
+                    "generation_id": "mismatch" if league == "wc" else generation,
+                    "store": store,
+                    "model": model,
+                    "history_entry": {"generation_id": generation},
+                    "counts": {},
+                }), encoding="utf-8")
+                configurations.append({
+                    "league": league,
+                    "prediction_path": str(prediction_path),
+                    "model_path": str(model_path),
+                })
+                tracked_paths.extend((prediction_path, model_path, pending_path))
+            before = {path: path.read_bytes() for path in tracked_paths}
+
+            with self.assertRaises(learning.StateConsistencyError):
+                learning.recover_pending_competitions(
+                    configurations,
+                    history_path=str(history_path),
+                )
+
+            self.assertEqual(before, {path: path.read_bytes() for path in tracked_paths})
+
+    def test_cross_competition_recovery_precedes_new_training_and_preserves_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            history_path = root / "history.json"
+            paths = {
+                league: {
+                    "prediction": root / f"{league}-predictions.json",
+                    "model": root / f"{league}-weights.json",
+                }
+                for league in ("pl", "laliga", "wc")
+            }
+            training_calls = {"laliga": 0, "wc": 0}
+
+            def trainer(league):
+                def apply(model, rows):
+                    training_calls[league] += len(rows)
+                    updated = copy.deepcopy(model)
+                    updated.setdefault("meta", {})["application_count"] = training_calls[league]
+                    return updated
+                return apply
+
+            laliga_fixture = self.fixture(season="2026-27")
+            wc_fixture = self.fixture(season="2026")
+            wc_fixture.update({"id": 88, "source_fixture_id": 88, "e": 18, "grp": "A"})
+
+            history, _, _ = run_persistent_competition(
+                league="laliga", fixtures=[laliga_fixture], teams={},
+                prediction_path=str(paths["laliga"]["prediction"]),
+                model_path=str(paths["laliga"]["model"]),
+                history_path=str(history_path), history={}, now=self.now,
+                snapshot_builder=self.snapshot_builder, model_trainer=trainer("laliga"),
+                default_model=default_model_state("laliga"),
+            )
+            history, _, _ = run_persistent_competition(
+                league="wc", fixtures=[wc_fixture], teams={},
+                prediction_path=str(paths["wc"]["prediction"]),
+                model_path=str(paths["wc"]["model"]),
+                history_path=str(history_path), history=history, now=self.now,
+                snapshot_builder=self.snapshot_builder, model_trainer=trainer("wc"),
+                default_model=default_model_state("wc"),
+            )
+
+            real_save = learning.atomic_save_json
+
+            def fail_wc_history(path, value):
+                if Path(path) == history_path:
+                    raise OSError("injected stale WC history boundary")
+                return real_save(path, value)
+
+            with patch.object(learning, "atomic_save_json", side_effect=fail_wc_history):
+                with self.assertRaisesRegex(OSError, "stale WC"):
+                    run_persistent_competition(
+                        league="wc",
+                        fixtures=[dict(wc_fixture, fin=True, st=True, hs=2, **{"as": 0})],
+                        teams={}, prediction_path=str(paths["wc"]["prediction"]),
+                        model_path=str(paths["wc"]["model"]), history_path=str(history_path),
+                        history=history, now=self.now + timedelta(days=1),
+                        snapshot_builder=self.snapshot_builder, model_trainer=trainer("wc"),
+                        default_model=default_model_state("wc"),
+                    )
+
+            configurations = [
+                {
+                    "league": league,
+                    "prediction_path": str(paths[league]["prediction"]),
+                    "model_path": str(paths[league]["model"]),
+                }
+                for league in ("pl", "laliga", "wc")
+            ]
+            history = learning.recover_pending_competitions(
+                configurations,
+                history_path=str(history_path),
+            )
+            history, _, _ = run_persistent_competition(
+                league="laliga",
+                fixtures=[dict(laliga_fixture, fin=True, st=True, hs=1, **{"as": 0})],
+                teams={}, prediction_path=str(paths["laliga"]["prediction"]),
+                model_path=str(paths["laliga"]["model"]), history_path=str(history_path),
+                history=history, now=self.now + timedelta(days=1),
+                snapshot_builder=self.snapshot_builder, model_trainer=trainer("laliga"),
+                default_model=default_model_state("laliga"),
+            )
+            history, _, _ = run_persistent_competition(
+                league="wc",
+                fixtures=[dict(wc_fixture, fin=True, st=True, hs=2, **{"as": 0})],
+                teams={}, prediction_path=str(paths["wc"]["prediction"]),
+                model_path=str(paths["wc"]["model"]), history_path=str(history_path),
+                history=history, now=self.now + timedelta(days=1, minutes=5),
+                snapshot_builder=self.snapshot_builder, model_trainer=trainer("wc"),
+                default_model=default_model_state("wc"),
+            )
+
+            saved_history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual({"laliga": 1, "wc": 1}, training_calls)
+            self.assertEqual(1, saved_history["laliga"]["total_evaluated"])
+            self.assertEqual(1, saved_history["wc"]["total_evaluated"])
+            for league in ("laliga", "wc"):
+                model = json.loads(paths[league]["model"].read_text(encoding="utf-8"))
+                self.assertEqual(model["generation_id"], saved_history[league]["generation_id"])
+                self.assertFalse(Path(str(paths[league]["model"]) + ".pending").exists())
+
     def test_checked_snapshot_remains_comparable_when_feed_omits_or_corrects_fixture(self):
         model = default_model_state("pl")
         store, model, _, _ = evolve_competition_state(
@@ -248,6 +436,23 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         self.assertEqual(0.5, candidate["goal_mae"])
         self.assertEqual(0.24, candidate["outcome_brier"])
 
+    def test_rounded_probability_vectors_use_their_measured_total_for_brier(self):
+        row = {
+            "locked": True,
+            "fixture": {"fin": True, "hs": 1, "as": 0},
+            "rule": competition_rule("pl", {"e": 1}),
+            "picks": self.snapshot_builder({}, {})["picks"],
+            "probabilities": {
+                "baseline": {"home": 0.699, "draw": 0.2, "away": 0.1},
+                "v4": {"home": 69.9, "draw": 20.0, "away": 10.0},
+            },
+        }
+
+        summary = comparison_summary([row], "baseline", "v4")
+
+        self.assertEqual(0.1403, summary["models"]["baseline"]["outcome_brier"])
+        self.assertEqual(0.1403, summary["models"]["v4"]["outcome_brier"])
+
     def test_invalid_scores_winners_rules_and_probabilities_are_rejected(self):
         valid_pick = {"winner": "home", "home_score": 1, "away_score": 0}
         rule = competition_rule("pl", {"e": 1})
@@ -312,6 +517,28 @@ class FinalReviewStateLoadingTests(unittest.TestCase):
                 learning.atomic_save_json(str(path), {"bad": math.nan})
             self.assertEqual(before, path.read_bytes())
 
+    def test_all_state_roles_reject_recursive_non_finite_json_without_changing_companions(self):
+        roles = ("predictions", "model", "history", "pending")
+        constants = ("NaN", "Infinity", "-Infinity", "1e999")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for role in roles:
+                for constant in constants:
+                    with self.subTest(role=role, constant=constant):
+                        paths = {name: root / f"{role}-{constant}-{name}.json" for name in roles}
+                        for path in paths.values():
+                            path.write_text('{"safe":{"value":1}}', encoding="utf-8")
+                        paths[role].write_text(
+                            '{"outer":[{"bad":' + constant + '}]}',
+                            encoding="utf-8",
+                        )
+                        before = {path: path.read_bytes() for path in paths.values()}
+
+                        with self.assertRaises(StateFileError):
+                            load_json_state(str(paths[role]), {})
+
+                        self.assertEqual(before, {path: path.read_bytes() for path in paths.values()})
+
 
 class FinalReviewDashboardContractTests(unittest.TestCase):
     def test_learning_failures_are_not_swallowed_before_embedding_or_publication(self):
@@ -332,6 +559,14 @@ class FinalReviewDashboardContractTests(unittest.TestCase):
         self.assertNotIn("World Cup ML skipped", source)
         for league in ("pl", "laliga", "wc"):
             self.assertIn(f'_log_learning_counts("{league}"', source)
+
+    def test_all_pending_recovery_runs_before_any_dashboard_evolution(self):
+        source = (Path(__file__).parents[1] / "website" / "update_pl_mobile.py").read_text(encoding="utf-8")
+        recovery = source.index("learning_history = recover_pending_competitions(")
+        self.assertLess(recovery, source.index("learning_history = run_league_learning("))
+        self.assertLess(recovery, source.index("learning_history = run_wc_learning("))
+        for league in ("pl", "laliga", "wc"):
+            self.assertIn(f'"league": "{league}"', source[recovery:source.index("learning_history = run_league_learning(")])
 
 
 class FinalReviewPublisherTests(unittest.TestCase):

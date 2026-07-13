@@ -11,6 +11,7 @@ from numbers import Real
 
 STORE_VERSION = 1
 LEDGER_VERSION = 1
+PENDING_VERSION = 2
 STATE_LOADED = "loaded"
 STATE_MISSING = "missing"
 
@@ -129,10 +130,12 @@ def _probability_vector(value):
     if not all(_finite_number(number) and number >= 0 for number in numbers):
         raise ValueError("invalid probability vector")
     total = sum(numbers)
-    if math.isclose(total, 100.0, abs_tol=0.11):
-        numbers = [number / 100.0 for number in numbers]
-    elif not math.isclose(total, 1.0, abs_tol=0.0011):
+    if not (
+        math.isclose(total, 100.0, abs_tol=0.11)
+        or math.isclose(total, 1.0, abs_tol=0.0011)
+    ):
         raise ValueError("invalid probability vector")
+    numbers = [number / total for number in numbers]
     return dict(zip(("home", "draw", "away"), numbers))
 
 
@@ -478,16 +481,32 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
     }
 
 
+def _reject_json_constant(value):
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _validate_finite_json(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite JSON number")
+    if isinstance(value, dict):
+        for nested in value.values():
+            _validate_finite_json(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _validate_finite_json(nested)
+
+
 def load_json_state(path, default):
     try:
         with open(path, encoding="utf-8") as handle:
-            value = json.load(handle)
+            value = json.load(handle, parse_constant=_reject_json_constant)
         if not isinstance(value, dict):
             raise StateFileError(f"existing state is not a JSON object: {path}")
+        _validate_finite_json(value)
         return value, STATE_LOADED
     except FileNotFoundError:
         return copy.deepcopy(default), STATE_MISSING
-    except (UnicodeError, json.JSONDecodeError, TypeError) as error:
+    except (UnicodeError, TypeError, ValueError) as error:
         raise StateFileError(f"existing state is invalid: {path}") from error
 
 
@@ -889,21 +908,64 @@ def _bundle_generation(store, model, history_entry, counts):
 def _validate_pending_bundle(pending, league):
     if not isinstance(pending, dict) or pending.get("league") != league:
         raise StateConsistencyError("invalid pending persistence bundle")
-    for key in ("store", "model", "history", "counts"):
+    for key in ("store", "model", "counts"):
         if not isinstance(pending.get(key), dict):
             raise StateConsistencyError("invalid pending persistence bundle")
-    generation = pending["model"].get("generation_id")
-    if not generation or pending["store"].get("generation_id") != generation:
+    version = pending.get("version")
+    if version == 1:
+        if "history_entry" in pending or not isinstance(pending.get("history"), dict):
+            raise StateConsistencyError("ambiguous legacy pending persistence bundle")
+        history_entry = pending["history"].get(league)
+    elif version == PENDING_VERSION:
+        if "history" in pending or not isinstance(pending.get("history_entry"), dict):
+            raise StateConsistencyError("ambiguous pending persistence bundle")
+        history_entry = pending["history_entry"]
+    else:
+        raise StateConsistencyError("unsupported pending persistence version")
+    if not isinstance(history_entry, dict):
+        raise StateConsistencyError("invalid pending competition history entry")
+    generation = pending.get("generation_id")
+    if not isinstance(generation, str) or not generation:
+        raise StateConsistencyError("invalid pending persistence generation")
+    if any(
+        packet.get("generation_id") != generation
+        for packet in (pending["store"], pending["model"], history_entry)
+    ):
         raise StateConsistencyError("inconsistent pending persistence generation")
-    if (pending["history"].get(league) or {}).get("generation_id") != generation:
-        raise StateConsistencyError("inconsistent pending persistence generation")
+    if any(packet.get("league") != league for packet in (pending["store"], pending["model"])):
+        raise StateConsistencyError("inconsistent pending persistence league")
+    return {
+        "version": PENDING_VERSION,
+        "league": league,
+        "generation_id": generation,
+        "store": copy.deepcopy(pending["store"]),
+        "model": copy.deepcopy(pending["model"]),
+        "history_entry": copy.deepcopy(history_entry),
+        "counts": copy.deepcopy(pending["counts"]),
+    }
 
 
-def _write_persistent_bundle(*, prediction_path, model_path, history_path, pending):
+def _write_persistent_bundle(
+    *, prediction_path, model_path, history_path, pending, history_fallback=None,
+):
     atomic_save_json(model_path, pending["model"])
     atomic_save_json(prediction_path, pending["store"])
     if history_path:
-        atomic_save_json(history_path, pending["history"])
+        latest_history, history_status = load_json_state(history_path, {})
+        if history_status == STATE_MISSING and isinstance(history_fallback, dict):
+            latest_history = copy.deepcopy(history_fallback)
+        merged_history = merge_learning_history(
+            latest_history,
+            pending["league"],
+            pending["history_entry"],
+        )
+        atomic_save_json(history_path, merged_history)
+        return merged_history
+    return merge_learning_history(
+        history_fallback if isinstance(history_fallback, dict) else {},
+        pending["league"],
+        pending["history_entry"],
+    )
 
 
 def _remove_pending(path):
@@ -911,6 +973,53 @@ def _remove_pending(path):
         os.unlink(path)
     except FileNotFoundError:
         pass
+
+
+def recover_pending_competitions(configurations, *, history_path):
+    if not isinstance(configurations, list):
+        raise StateConsistencyError("pending recovery configuration must be a list")
+    loaded_history, _ = load_json_state(history_path, {})
+    pending_bundles = []
+    seen_leagues = set()
+    for configuration in configurations:
+        if not isinstance(configuration, dict):
+            raise StateConsistencyError("invalid pending recovery configuration")
+        league = configuration.get("league")
+        prediction_path = configuration.get("prediction_path")
+        model_path = configuration.get("model_path")
+        if (
+            not isinstance(league, str)
+            or not league
+            or league in seen_leagues
+            or not isinstance(prediction_path, str)
+            or not prediction_path
+            or not isinstance(model_path, str)
+            or not model_path
+        ):
+            raise StateConsistencyError("invalid pending recovery configuration")
+        seen_leagues.add(league)
+        load_json_state(prediction_path, {})
+        load_json_state(model_path, {})
+        pending_path = f"{model_path}.pending"
+        pending, pending_status = load_json_state(pending_path, {})
+        if pending_status == STATE_LOADED:
+            pending_bundles.append({
+                "prediction_path": prediction_path,
+                "model_path": model_path,
+                "pending_path": pending_path,
+                "pending": _validate_pending_bundle(pending, league),
+            })
+
+    for bundle in pending_bundles:
+        loaded_history = _write_persistent_bundle(
+            prediction_path=bundle["prediction_path"],
+            model_path=bundle["model_path"],
+            history_path=history_path,
+            pending=bundle["pending"],
+            history_fallback=loaded_history,
+        )
+        _remove_pending(bundle["pending_path"])
+    return loaded_history
 
 
 def run_persistent_competition(
@@ -934,15 +1043,16 @@ def run_persistent_competition(
     pending_path = f"{model_path}.pending"
     pending, pending_status = load_json_state(pending_path, {}) if history_path else ({}, STATE_MISSING)
     if pending_status == STATE_LOADED:
-        _validate_pending_bundle(pending, league)
-        _write_persistent_bundle(
+        pending = _validate_pending_bundle(pending, league)
+        recovered_history = _write_persistent_bundle(
             prediction_path=prediction_path,
             model_path=model_path,
             history_path=history_path,
             pending=pending,
+            history_fallback=loaded_history,
         )
         _remove_pending(pending_path)
-        return copy.deepcopy(pending["history"]), copy.deepcopy(pending["counts"]), copy.deepcopy(pending["model"])
+        return recovered_history, copy.deepcopy(pending["counts"]), copy.deepcopy(pending["model"])
 
     store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
     model = _persistent_model(raw_model if model_status != STATE_MISSING else {}, default_model, league)
@@ -964,22 +1074,23 @@ def run_persistent_competition(
     model["generation_id"] = generation
     merged_history[league]["generation_id"] = generation
     pending = {
-        "version": 1,
+        "version": PENDING_VERSION,
         "league": league,
         "generation_id": generation,
         "store": store,
         "model": model,
-        "history": merged_history,
+        "history_entry": copy.deepcopy(merged_history[league]),
         "counts": counts,
     }
     if history_path:
         atomic_save_json(pending_path, pending)
-    _write_persistent_bundle(
+    persisted_history = _write_persistent_bundle(
         prediction_path=prediction_path,
         model_path=model_path,
         history_path=history_path,
         pending=pending,
+        history_fallback=loaded_history,
     )
     if history_path:
         _remove_pending(pending_path)
-    return merged_history, counts, model
+    return persisted_history, counts, model

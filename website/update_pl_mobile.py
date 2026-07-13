@@ -26,12 +26,12 @@ TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
 try:
-    from league_learning import comparison_summary, load_json_state, run_persistent_competition
+    from league_learning import comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
     from github_atomic_publish import publish_generated_outputs, resolve_target_repository
 except ImportError:
-    from .league_learning import comparison_summary, load_json_state, run_persistent_competition
+    from .league_learning import comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
     from .github_atomic_publish import publish_generated_outputs, resolve_target_repository
@@ -1638,6 +1638,38 @@ def _pl_official_int(value, default=0):
         return default
 
 
+def _pl_official_score(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _pl_official_fixture_id(item):
+    if not isinstance(item, dict):
+        return None
+    raw_id = item.get("id")
+    if raw_id is not None:
+        fixture_id = _pl_official_int(raw_id, None)
+        if fixture_id is not None:
+            return fixture_id
+    opta_digits = re.sub(r"\D", "", str((item.get("altIds") or {}).get("opta", "")))
+    return _pl_official_int(opta_digits, None) if opta_digits else None
+
+
+def _pl_official_scores(item):
+    sides = item.get("teams") if isinstance(item, dict) else None
+    if not isinstance(sides, list) or len(sides) < 2:
+        return None
+    scores = (_pl_official_score(sides[0].get("score")), _pl_official_score(sides[1].get("score")))
+    return scores if all(score is not None for score in scores) else None
+
+
 def _pl_official_team(raw_team, prev_teams, teams_out):
     team = (raw_team or {}).get("team") or raw_team or {}
     club = team.get("club") or {}
@@ -1675,16 +1707,17 @@ def fetch_pl_official_season(prev_teams, headers):
         "Origin": "https://www.premierleague.com",
         "Referer": "https://www.premierleague.com/fixtures",
     }
+    fixture_params = {
+        "comps": "1",
+        "compSeasons": PL_OFFICIAL_COMPSEASON,
+        "page": "0",
+        "pageSize": "1000",
+        "sort": "asc",
+        "altIds": "true",
+    }
     resp = requests.get(
         PL_OFFICIAL_FIXTURES,
-        params={
-            "comps": "1",
-            "compSeasons": PL_OFFICIAL_COMPSEASON,
-            "page": "0",
-            "pageSize": "1000",
-            "sort": "asc",
-            "altIds": "true",
-        },
+        params=fixture_params,
         headers=pulse_headers,
         timeout=30,
     )
@@ -1708,26 +1741,50 @@ def fetch_pl_official_season(prev_teams, headers):
         millis = kickoff.get("millis")
         if millis:
             ko = datetime.fromtimestamp(float(millis) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        fid = _pl_official_int(
-            item.get("id") or re.sub(r"\D", "", str((item.get("altIds") or {}).get("opta", ""))),
-            len(fixtures_out) + 1,
-        )
+        official_id = _pl_official_fixture_id(item)
+        fid = official_id if official_id is not None else len(fixtures_out) + 1
         status = str(item.get("status") or "").upper()
         finished = status in ("C", "FT", "F")
         started = status not in ("", "U", "S") and not finished
+        scores = _pl_official_scores(item) if finished else None
         fixtures_out.append({
             "id": fid,
             "e": gw,
             "h": home_id,
             "a": away_id,
-            "hs": None,
-            "as": None,
+            "hs": scores[0] if scores else None,
+            "as": scores[1] if scores else None,
             "fin": finished,
             "st": started,
             "ko": ko,
             "mn": 90 if finished else 0,
             "sx": status,
         })
+
+    missing_result_ids = {
+        fixture["id"]
+        for fixture in fixtures_out
+        if fixture["fin"] and (fixture["hs"] is None or fixture["as"] is None)
+    }
+    if missing_result_ids:
+        results_resp = requests.get(
+            PL_OFFICIAL_FIXTURES,
+            params={**fixture_params, "statuses": "C"},
+            headers=pulse_headers,
+            timeout=30,
+        )
+        results_resp.raise_for_status()
+        official_results = {}
+        for item in results_resp.json().get("content", []):
+            fixture_id = _pl_official_fixture_id(item)
+            status = str(item.get("status") or "").upper()
+            scores = _pl_official_scores(item)
+            if fixture_id in missing_result_ids and status in ("C", "FT", "F") and scores is not None:
+                official_results[fixture_id] = scores
+        for fixture in fixtures_out:
+            scores = official_results.get(fixture["id"])
+            if scores is not None:
+                fixture["hs"], fixture["as"] = scores
 
     fixtures_out = [f for f in fixtures_out if f.get("e")]
     fixtures_out.sort(key=lambda f: (f.get("e", 0), f.get("ko", "")))
@@ -2266,7 +2323,26 @@ html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.n
 
 # ── ML Learning Engine ────────────────────────────────────────────────────
 _validate_learning_state_files()
-learning_history = _load_json_file(LEARNING_HISTORY_FILE, {})
+learning_history = recover_pending_competitions(
+    [
+        {
+            "league": "pl",
+            "prediction_path": PL_PREDICTIONS_FILE,
+            "model_path": PL_WEIGHTS_FILE,
+        },
+        {
+            "league": "laliga",
+            "prediction_path": LL_PREDICTIONS_FILE,
+            "model_path": LL_WEIGHTS_FILE,
+        },
+        {
+            "league": "wc",
+            "prediction_path": WC_PREDICTIONS_FILE,
+            "model_path": WC_WEIGHTS_FILE,
+        },
+    ],
+    history_path=LEARNING_HISTORY_FILE,
+)
 # Compute standings (for position factor in weight updates)
 _pts = {}
 for _f in fx:

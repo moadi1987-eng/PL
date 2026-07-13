@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -718,6 +719,158 @@ class PersistentCompetitionTests(unittest.TestCase):
             "e": 2, "h": 11, "a": 12, "ko": "2026-08-10T19:00:00Z",
             "fin": False, "st": False, "hs": None, "as": None,
         }, compact[0])
+
+    @staticmethod
+    def _official_adapter_namespace(requests_client):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        compact_source = source[
+            source.index("def _compact_pl_learning_fixtures"):source.index("def _set_verified_lifecycle_samples")
+        ]
+        adapter_source = source[
+            source.index("def _pl_official_int"):source.index('print("Fetching Premier League data...")')
+        ]
+        namespace = {
+            "BADGE": "badge/{}.png",
+            "PL_OFFICIAL_COMPSEASON": "841",
+            "PL_OFFICIAL_FIXTURES": "https://official.test/fixtures",
+            "_mark_current_gws": lambda gameweeks, fixtures: None,
+            "_plain_name": lambda value: str(value or ""),
+            "datetime": datetime,
+            "math": math,
+            "re": __import__("re"),
+            "requests": requests_client,
+            "timezone": timezone,
+        }
+        exec(compile(compact_source, str(update_path), "exec"), namespace)
+        exec(compile(adapter_source, str(update_path), "exec"), namespace)
+        return namespace
+
+    def test_selected_pl_official_result_is_scored_checked_and_trained_once(self):
+        now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        kickoff = now + timedelta(hours=10)
+
+        def team(team_id, name, score=None):
+            side = {
+                "team": {
+                    "id": team_id,
+                    "name": name,
+                    "shortName": name[:3].upper(),
+                    "altIds": {"opta": f"t{team_id}"},
+                },
+            }
+            if score is not None:
+                side["score"] = score
+            return side
+
+        def fixture(status, sides):
+            return {
+                "id": 901,
+                "altIds": {"opta": "g901"},
+                "gameweek": {"gameweek": 2},
+                "kickoff": {"millis": int(kickoff.timestamp() * 1000)},
+                "status": status,
+                "teams": sides,
+            }
+
+        class Response:
+            def __init__(self, content):
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"content": self.content}
+
+        class Requests:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return Response(self.responses.pop(0))
+
+        scheduled_requests = Requests([[fixture("U", [team(11, "Home"), team(12, "Away")])]])
+        scheduled_namespace = self._official_adapter_namespace(scheduled_requests)
+        scheduled_pack = scheduled_namespace["fetch_pl_official_season"]({}, {"User-Agent": "test"})
+        scheduled = scheduled_namespace["_compact_pl_learning_fixtures"](
+            scheduled_pack["fix"], scheduled_pack["season"],
+        )
+
+        result = fixture("C", [team(11, "Home", 2), team(12, "Away", 1)])
+        completed_requests = Requests([
+            [fixture("C", [team(11, "Home"), team(12, "Away")])],
+            [result],
+        ])
+        completed_namespace = self._official_adapter_namespace(completed_requests)
+        completed_pack = completed_namespace["fetch_pl_official_season"]({}, {"User-Agent": "test"})
+        completed = completed_namespace["_compact_pl_learning_fixtures"](
+            completed_pack["fix"], completed_pack["season"],
+        )
+
+        self.assertEqual(2, len(completed_requests.calls))
+        self.assertEqual("C", completed_requests.calls[1][1]["params"]["statuses"])
+        self.assertEqual({"id": 901, "season": "2026-27", "ko": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"), "hs": 2, "as": 1}, {
+            key: completed[0][key] for key in ("id", "season", "ko", "hs", "as")
+        })
+
+        calls = []
+
+        def trainer(model, rows):
+            calls.extend(row["match_key"] for row in rows)
+            return self._trainer(model, rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "predictions.json"
+            model_path = root / "weights.json"
+            history_path = root / "history.json"
+            run_persistent_competition(
+                league="pl", fixtures=scheduled, teams=scheduled_pack["teams"],
+                prediction_path=str(prediction_path), model_path=str(model_path),
+                history_path=str(history_path), history={}, now=now,
+                snapshot_builder=self._snapshot_builder, model_trainer=trainer,
+                default_model=default_model_state("pl"),
+            )
+            history, counts, _ = run_persistent_competition(
+                league="pl", fixtures=completed, teams=completed_pack["teams"],
+                prediction_path=str(prediction_path), model_path=str(model_path),
+                history_path=str(history_path), history={}, now=now + timedelta(days=1),
+                snapshot_builder=self._snapshot_builder, model_trainer=trainer,
+                default_model=default_model_state("pl"),
+            )
+            _, rerun_counts, _ = run_persistent_competition(
+                league="pl", fixtures=completed, teams=completed_pack["teams"],
+                prediction_path=str(prediction_path), model_path=str(model_path),
+                history_path=str(history_path), history=history, now=now + timedelta(days=1, minutes=5),
+                snapshot_builder=self._snapshot_builder, model_trainer=trainer,
+                default_model=default_model_state("pl"),
+            )
+            snapshot = next(iter(json.loads(prediction_path.read_text(encoding="utf-8"))["matches"].values()))
+
+        self.assertEqual(["pl:2026-27:901"], calls)
+        self.assertEqual(1, counts["checked"])
+        self.assertEqual(1, counts["trained"])
+        self.assertEqual(0, rerun_counts["trained"])
+        self.assertTrue(snapshot["checked"])
+        self.assertTrue(snapshot["model_trained"])
+        self.assertEqual((2, 1), (snapshot["actual_home_score"], snapshot["actual_away_score"]))
+
+    def test_pl_official_scores_must_be_finite_non_negative_integers(self):
+        class Requests:
+            def get(self, *args, **kwargs):
+                raise AssertionError("score parsing must not make a request")
+
+        namespace = self._official_adapter_namespace(Requests())
+        parser = namespace["_pl_official_score"]
+        for value, expected in ((0, 0), (2, 2), ("3", 3), (4.0, 4)):
+            with self.subTest(value=value):
+                self.assertEqual(expected, parser(value))
+        for value in (True, -1, 1.5, "1.5", math.nan, math.inf, -math.inf, "NaN"):
+            with self.subTest(value=value):
+                self.assertIsNone(parser(value))
 
 
 class LearningEmbeddingTests(unittest.TestCase):
