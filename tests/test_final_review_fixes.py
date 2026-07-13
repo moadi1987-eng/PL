@@ -101,6 +101,49 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         }
 
     @staticmethod
+    def raw_pl_packets_from_production_store(store):
+        if "matches" not in store:
+            return copy.deepcopy(store)
+        matches = store["matches"]
+        if isinstance(matches, dict):
+            rows = matches.values()
+        elif isinstance(matches, list):
+            rows = matches
+        else:
+            raise AssertionError("canonical PL matches must be a collection")
+        packets = {}
+        for snapshot in rows:
+            if (
+                not isinstance(snapshot, dict)
+                or snapshot.get("legacy") is not True
+                or snapshot.get("lock_verified") is not False
+                or not isinstance(snapshot.get("round"), int)
+                or isinstance(snapshot.get("round"), bool)
+            ):
+                raise AssertionError("canonical PL row must be exact unverified legacy evidence")
+            picks = snapshot.get("picks")
+            baseline = picks.get("baseline") if isinstance(picks, dict) else None
+            if (
+                not isinstance(baseline, dict)
+                or baseline.get("match_id") != snapshot.get("match_id")
+            ):
+                raise AssertionError("canonical PL baseline must preserve the raw prediction")
+            metadata = snapshot.get("legacy_packet_metadata")
+            if not isinstance(metadata, dict) or "predictions" in metadata:
+                raise AssertionError("canonical PL row must preserve packet metadata")
+            if snapshot.get("created_at", "") != metadata.get("created_at", ""):
+                raise AssertionError("canonical PL packet timestamp must remain exact")
+            round_key = str(snapshot["round"])
+            packet = packets.setdefault(
+                round_key,
+                {**copy.deepcopy(metadata), "predictions": []},
+            )
+            if {key: value for key, value in packet.items() if key != "predictions"} != metadata:
+                raise AssertionError("canonical PL packet metadata must agree within a round")
+            packet["predictions"].append(copy.deepcopy(baseline))
+        return packets
+
+    @staticmethod
     def actual_pl_unverified_legacy_store():
         return {
             "version": 1,
@@ -406,12 +449,16 @@ class FinalReviewLifecycleTests(unittest.TestCase):
 
     def test_all_current_raw_pl_rows_migrate_read_only_without_evidence_loss(self):
         path = Path(__file__).parents[1] / "ai_predictions.json"
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        production_store = json.loads(path.read_text(encoding="utf-8"))
+        production_original = copy.deepcopy(production_store)
+        learning.validate_prediction_store(production_store, "pl")
+        raw = self.raw_pl_packets_from_production_store(production_store)
         original = copy.deepcopy(raw)
 
         learning.validate_prediction_store(raw, "pl")
         normalized = learning.normalize_prediction_store(raw, "pl")
 
+        self.assertEqual(production_original, production_store)
         self.assertEqual(original, raw)
         expected_ids = set()
         inconsistent_ids = set()
