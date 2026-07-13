@@ -234,6 +234,36 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(54, sum(row["correct_winner"] for row in merged["pl"]["gw_results"]))
         self.assertEqual(50.0, merged["pl"]["overall_accuracy"])
 
+    def test_merge_unions_declared_observed_and_current_seasons(self):
+        merged = merge_learning_history(
+            {
+                "pl": {
+                    "gw_results": [{
+                        "gw": 38,
+                        "season": "2025-26",
+                        "total": 1,
+                        "correct_winner": 1,
+                    }],
+                    "total_evaluated": 1,
+                    "current_season": "2025-26",
+                    "available_seasons": ["2024-25"],
+                },
+            },
+            "pl",
+            {
+                "gw_results": [],
+                "total_evaluated": 0,
+                "current_season": "2026-27",
+                "available_seasons": ["2026-27"],
+            },
+        )
+
+        self.assertEqual("2026-27", merged["pl"]["current_season"])
+        self.assertEqual(
+            ["2024-25", "2025-26", "2026-27"],
+            merged["pl"]["available_seasons"],
+        )
+
     def test_merge_repairs_stale_total_evaluated_from_preserved_gameweek_history(self):
         retained_rows = [
             {"gw": gw, "total": 10 if gw < 11 else 8, "correct_winner": 5 if gw < 11 else 4}
@@ -280,6 +310,31 @@ class PersistentCompetitionTests(unittest.TestCase):
 
         self.assertEqual([], merged["pl"]["gw_results"])
         self.assertEqual(0, merged["pl"]["total_evaluated"])
+
+    def test_merge_preserves_aggregate_when_retained_gameweek_rows_are_sparse(self):
+        original = {
+            "wc": {
+                "gw_results": [{"gw": 18}],
+                "total_evaluated": 7,
+                "model_comparison": {"total": 7},
+            },
+        }
+        before = copy.deepcopy(original)
+
+        merged = merge_learning_history(
+            original,
+            "wc",
+            {
+                "gw_results": [],
+                "total_evaluated": 0,
+                "model_comparison": {"total": 0},
+            },
+        )
+
+        self.assertEqual(1, len(merged["wc"]["gw_results"]))
+        self.assertNotIn("total", merged["wc"]["gw_results"][0])
+        self.assertEqual(7, merged["wc"]["total_evaluated"])
+        self.assertEqual(before, original)
 
     def test_merge_keeps_genuine_zero_accuracy_from_evaluated_rows(self):
         merged = merge_learning_history(

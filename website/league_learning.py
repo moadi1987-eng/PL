@@ -1435,6 +1435,19 @@ def merge_learning_history(history, league, league_history):
     combined = copy.deepcopy(existing) if isinstance(existing, dict) else {}
     incoming = copy.deepcopy(league_history) if isinstance(league_history, dict) else {}
     incoming_has_evidence = _has_accuracy_evidence(incoming)
+    existing_total_evaluated = combined.get("total_evaluated")
+    retaining_existing_rows = (
+        isinstance(combined.get("gw_results"), list)
+        and bool(combined["gw_results"])
+        and isinstance(incoming.get("gw_results"), list)
+        and not incoming["gw_results"]
+    )
+    available_seasons_declared = any("available_seasons" in packet for packet in (combined, incoming))
+    available_seasons = {
+        season
+        for packet in (combined, incoming)
+        for season in packet.get("available_seasons", [])
+    }
 
     for packet in (combined, incoming):
         rows = packet.get("gw_results")
@@ -1457,8 +1470,19 @@ def merge_learning_history(history, league, league_history):
         ):
             continue
         combined[key] = value
-    if isinstance(combined.get("gw_results"), list) and combined["gw_results"]:
-        combined["total_evaluated"] = sum(row.get("total", 0) for row in combined["gw_results"])
+    final_rows = combined.get("gw_results")
+    if isinstance(final_rows, list) and final_rows:
+        if all(_nonnegative_int(row.get("total")) for row in final_rows):
+            combined["total_evaluated"] = sum(row["total"] for row in final_rows)
+        elif retaining_existing_rows and _nonnegative_int(existing_total_evaluated):
+            combined["total_evaluated"] = existing_total_evaluated
+        available_seasons.update(
+            row["season"] for row in final_rows if _nonempty_string(row.get("season"))
+        )
+    if _nonempty_string(combined.get("current_season")):
+        available_seasons.add(combined["current_season"])
+    if available_seasons_declared or available_seasons:
+        combined["available_seasons"] = sorted(available_seasons)
     overall_accuracy = _gameweek_accuracy(combined.get("gw_results"))
     if overall_accuracy is not None:
         combined["overall_accuracy"] = overall_accuracy
