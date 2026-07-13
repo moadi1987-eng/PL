@@ -312,6 +312,23 @@ def _valid_pick(pick):
     )
 
 
+def _valid_unverified_legacy_pick(pick):
+    return (
+        isinstance(pick, dict)
+        and pick.get("winner") in {"home", "away", "draw"}
+        and _valid_score(pick.get("home_score"))
+        and _valid_score(pick.get("away_score"))
+    )
+
+
+def _is_unverified_legacy(snapshot):
+    return (
+        isinstance(snapshot, dict)
+        and snapshot.get("legacy") is True
+        and snapshot.get("lock_verified") is False
+    )
+
+
 def _valid_lock_snapshot(snapshot):
     picks = snapshot.get("picks") if isinstance(snapshot, dict) else None
     if not isinstance(picks, dict) or not all(_valid_pick(picks.get(strategy)) for strategy in ("baseline", "v4")):
@@ -543,6 +560,40 @@ def _validate_evaluations(evaluations, picks):
             _state_error("invalid snapshot evaluations")
 
 
+def _validate_canonical_checked_snapshot(snapshot, picks):
+    required_result = ("actual_home_score", "actual_away_score", "actual_winner")
+    if not all(key in snapshot for key in required_result):
+        _state_error("incomplete checked lifecycle result")
+    fixture = {
+        "fin": True,
+        "hs": snapshot["actual_home_score"],
+        "as": snapshot["actual_away_score"],
+        "winner": snapshot["actual_winner"],
+    }
+    if not _valid_result(fixture):
+        _state_error("invalid checked lifecycle result")
+    try:
+        rule = _normalized_rule(snapshot.get("rule"))
+    except ValueError as error:
+        raise StateConsistencyError("invalid checked lifecycle rule") from error
+    evaluations = snapshot.get("evaluations")
+    if (
+        not isinstance(picks, dict)
+        or not isinstance(evaluations, dict)
+        or not evaluations
+        or set(evaluations) != set(picks)
+    ):
+        _state_error("incomplete checked lifecycle evaluations")
+    for strategy, pick in picks.items():
+        try:
+            canonical = score_pick(pick, fixture, rule)
+        except ValueError as error:
+            raise StateConsistencyError("invalid checked lifecycle evidence") from error
+        evaluation = evaluations[strategy]
+        if any(evaluation.get(key) != value for key, value in canonical.items()):
+            _state_error("inconsistent checked lifecycle evaluation")
+
+
 def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
     if not isinstance(snapshot, dict):
         _state_error("invalid prediction snapshot")
@@ -573,20 +624,22 @@ def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
     legacy = snapshot.get("legacy") is True or not (
         lifecycle_store or snapshot.get("lifecycle_version") == STORE_VERSION
     )
+    unverified_legacy = _is_unverified_legacy(snapshot)
+    pick_validator = _valid_unverified_legacy_pick if unverified_legacy else _valid_pick
     picks = snapshot.get("picks")
     if "picks" in snapshot:
         if not isinstance(picks, dict) or not picks:
             _state_error("invalid snapshot picks")
         for strategy, pick in picks.items():
-            if not _nonempty_string(strategy) or not _valid_pick(pick):
+            if not _nonempty_string(strategy) or not pick_validator(pick):
                 _state_error("invalid snapshot picks")
         if not legacy and not _STRATEGIES.issubset(picks):
             _state_error("incomplete lifecycle snapshot picks")
     for key in ("base_v3_prediction", "v4_shadow"):
-        if key in snapshot and not _valid_pick(snapshot[key]):
+        if key in snapshot and not pick_validator(snapshot[key]):
             _state_error("invalid legacy snapshot pick")
     legacy_pick_fields = ("winner", "home_score", "away_score")
-    if any(key in snapshot for key in legacy_pick_fields) and not _valid_pick({
+    if any(key in snapshot for key in legacy_pick_fields) and not pick_validator({
         key: snapshot.get(key) for key in legacy_pick_fields
     }):
         _state_error("invalid legacy snapshot pick")
@@ -628,8 +681,7 @@ def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
         if key in snapshot and not isinstance(snapshot[key], str):
             _state_error("invalid snapshot timestamp")
     if snapshot.get("checked") is True and not legacy:
-        if not actual_present or "evaluations" not in snapshot or "rule" not in snapshot:
-            _state_error("incomplete checked lifecycle snapshot")
+        _validate_canonical_checked_snapshot(snapshot, picks)
     return expected_key
 
 
@@ -822,12 +874,15 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
             is_legacy_snapshot = snapshot.get("legacy") is True or not (
                 is_lifecycle_store or snapshot.get("lifecycle_version") == STORE_VERSION
             )
+            unverified_legacy = _is_unverified_legacy(snapshot)
             snapshot.setdefault("match_id", int(match_id) if str(match_id).isdigit() else match_id)
             season, source_fixture_id, match_key = _snapshot_identity(snapshot, league, match_id)
             snapshot.setdefault("season", season)
             snapshot.setdefault("source_fixture_id", source_fixture_id)
             snapshot.setdefault("match_key", match_key)
             snapshot.setdefault("league", league)
+            if unverified_legacy:
+                continue
             snapshot.setdefault("locked", True)
             if is_legacy_snapshot:
                 snapshot["legacy"] = True
@@ -1062,6 +1117,8 @@ def evolve_competition_state(
     train_batch = []
     for snapshot in store["matches"].values():
         match_key = snapshot["match_key"]
+        if _is_unverified_legacy(snapshot) and snapshot.get("checked") is True:
+            continue
         fixture = fixture_map.get(match_key)
         if not snapshot.get("checked") and fixture and fixture.get("fin") is True:
             try:
@@ -1090,6 +1147,8 @@ def evolve_competition_state(
                 snapshot["evaluation_probabilities"] = copy.deepcopy(probabilities)
             counts["checked"] += 1
 
+        if _is_unverified_legacy(snapshot):
+            continue
         if match_key in applied:
             snapshot["model_trained"] = True
         elif ledger_present and snapshot.get("model_trained") is True:

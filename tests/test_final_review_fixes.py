@@ -60,6 +60,359 @@ class FinalReviewLifecycleTests(unittest.TestCase):
             "as": score[1] if finished else None,
         }
 
+    @staticmethod
+    def actual_pl_unverified_legacy_store():
+        return {
+            "version": 1,
+            "lifecycle_version": 1,
+            "league": "pl",
+            "updated_at": "2026-07-12T21:00:37Z",
+            "matches": {
+                "284": {
+                    "match_id": 284,
+                    "league": "pl",
+                    "round": 29,
+                    "created_at": "2026-02-27 21:26:48",
+                    "locked": True,
+                    "legacy": True,
+                    "lock_verified": False,
+                    "checked": True,
+                    "model_trained": True,
+                    "features": {},
+                    "missing": {"legacy_features": True},
+                    "picks": {
+                        "baseline": {
+                            "match_id": 284,
+                            "winner": "home",
+                            "home_score": 1,
+                            "away_score": 1,
+                            "home_win_pct": 46.1,
+                            "draw_pct": 12.4,
+                            "away_win_pct": 41.5,
+                        },
+                        "v4": {
+                            "winner": "home",
+                            "home_score": 1,
+                            "away_score": 0,
+                            "reason": "tight-win",
+                        },
+                    },
+                    "active_strategy_at_lock": "baseline",
+                    "checked_at": "2026-07-12T21:00:37Z",
+                    "actual_home_score": 2,
+                    "actual_away_score": 0,
+                    "actual_winner": "home",
+                    "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+                    "evaluations": {
+                        "baseline": {
+                            "winner": "home",
+                            "winner_correct": True,
+                            "exact": False,
+                            "points": 3,
+                            "score": "1-1",
+                        },
+                        "v4": {
+                            "winner": "home",
+                            "winner_correct": True,
+                            "exact": False,
+                            "points": 3,
+                            "score": "1-0",
+                        },
+                    },
+                },
+                "285": {
+                    "match_id": 285,
+                    "league": "pl",
+                    "round": 29,
+                    "created_at": "2026-02-27 21:26:48",
+                    "locked": True,
+                    "legacy": True,
+                    "lock_verified": False,
+                    "checked": True,
+                    "model_trained": True,
+                    "features": {},
+                    "missing": {"legacy_features": True},
+                    "picks": {
+                        "baseline": {
+                            "match_id": 285,
+                            "winner": "away",
+                            "home_score": 2,
+                            "away_score": 2,
+                            "home_win_pct": 41.6,
+                            "draw_pct": 12.4,
+                            "away_win_pct": 46.0,
+                        },
+                        "v4": {
+                            "winner": "away",
+                            "home_score": 1,
+                            "away_score": 3,
+                            "reason": "open-win",
+                        },
+                    },
+                    "active_strategy_at_lock": "baseline",
+                    "checked_at": "2026-07-12T21:00:37Z",
+                    "actual_home_score": 0,
+                    "actual_away_score": 1,
+                    "actual_winner": "away",
+                    "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+                    "evaluations": {
+                        "baseline": {
+                            "winner": "away",
+                            "winner_correct": True,
+                            "exact": False,
+                            "points": 3,
+                            "score": "2-2",
+                        },
+                        "v4": {
+                            "winner": "away",
+                            "winner_correct": True,
+                            "exact": False,
+                            "points": 3,
+                            "score": "1-3",
+                        },
+                    },
+                },
+                "286": {
+                    "match_id": 286,
+                    "league": "pl",
+                    "round": 29,
+                    "created_at": "2026-02-27 21:26:48",
+                    "locked": True,
+                    "legacy": True,
+                    "lock_verified": False,
+                    "checked": True,
+                    "model_trained": True,
+                    "features": {},
+                    "missing": {"legacy_features": True},
+                    "picks": {
+                        "baseline": {
+                            "match_id": 286,
+                            "winner": "home",
+                            "home_score": 1,
+                            "away_score": 1,
+                            "home_win_pct": 49.1,
+                            "draw_pct": 11.7,
+                            "away_win_pct": 39.2,
+                        },
+                        "v4": {
+                            "winner": "home",
+                            "home_score": 1,
+                            "away_score": 0,
+                            "reason": "tight-win",
+                        },
+                    },
+                    "active_strategy_at_lock": "baseline",
+                    "checked_at": "2026-07-12T21:00:37Z",
+                    "actual_home_score": 0,
+                    "actual_away_score": 1,
+                    "actual_winner": "away",
+                    "rule": {"key": "league", "result": 3, "exact": 5, "additive": True},
+                    "evaluations": {
+                        "baseline": {
+                            "winner": "home",
+                            "winner_correct": False,
+                            "exact": False,
+                            "points": 0,
+                            "score": "1-1",
+                        },
+                        "v4": {
+                            "winner": "home",
+                            "winner_correct": False,
+                            "exact": False,
+                            "points": 0,
+                            "score": "1-0",
+                        },
+                    },
+                },
+            },
+        }
+
+    @staticmethod
+    def valid_checked_current_store():
+        fixture = {"fin": True, "hs": 1, "as": 0}
+        rule = competition_rule("pl", fixture)
+        picks = {
+            "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+            "v4": {"winner": "home", "home_score": 2, "away_score": 0},
+        }
+        return {
+            "version": 1,
+            "lifecycle_version": 1,
+            "league": "pl",
+            "matches": {
+                "77": {
+                    "match_id": 77,
+                    "source_fixture_id": 77,
+                    "match_key": "pl:2025-26:77",
+                    "league": "pl",
+                    "season": "2025-26",
+                    "round": 4,
+                    "lifecycle_version": 1,
+                    "locked": True,
+                    "lock_verified": True,
+                    "checked": True,
+                    "model_trained": True,
+                    "active_strategy_at_lock": "baseline",
+                    "features": {},
+                    "missing": {},
+                    "picks": picks,
+                    "actual_home_score": 1,
+                    "actual_away_score": 0,
+                    "actual_winner": "home",
+                    "rule": rule,
+                    "evaluations": {
+                        strategy: score_pick(pick, fixture, rule)
+                        for strategy, pick in picks.items()
+                    },
+                },
+            },
+        }
+
+    def test_actual_pl_unverified_legacy_rows_pass_preflight_and_preserve_raw_content(self):
+        raw = self.actual_pl_unverified_legacy_store()
+        original = copy.deepcopy(raw)
+
+        learning.validate_prediction_store(raw, "pl")
+        normalized = learning.normalize_prediction_store(raw, "pl")
+
+        self.assertEqual(list(original["matches"]), list(normalized["matches"]))
+        for storage_key, source in original["matches"].items():
+            migrated = normalized["matches"][storage_key]
+            self.assertEqual(source, {key: migrated[key] for key in source})
+            self.assertEqual(f"pl:2025-26:{storage_key}", migrated["match_key"])
+            self.assertEqual("2025-26", migrated["season"])
+            self.assertEqual(int(storage_key), migrated["source_fixture_id"])
+
+    def test_actual_pl_unverified_legacy_rows_keep_history_but_never_train_or_compare(self):
+        original = self.actual_pl_unverified_legacy_store()
+        trainer_calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "predictions.json"
+            model_path = root / "weights.json"
+            history_path = root / "history.json"
+            prediction_path.write_text(json.dumps(original), encoding="utf-8")
+
+            history, counts, model = run_persistent_competition(
+                league="pl",
+                fixtures=[],
+                teams={},
+                prediction_path=str(prediction_path),
+                model_path=str(model_path),
+                history_path=str(history_path),
+                history={},
+                now=self.now,
+                snapshot_builder=lambda fixture, state: self.fail("legacy rows must not relock"),
+                model_trainer=lambda state, rows: trainer_calls.append(copy.deepcopy(rows)) or state,
+                default_model=default_model_state("pl"),
+            )
+            persisted = json.loads(prediction_path.read_text(encoding="utf-8"))
+
+        self.assertEqual([], trainer_calls)
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual(0, model["comparison"]["total"])
+        self.assertEqual("collecting", model["status"]["status"])
+        self.assertEqual(3, history["pl"]["total_evaluated"])
+        self.assertEqual(3, sum(row["total"] for row in history["pl"]["gw_results"]))
+        self.assertEqual(list(original["matches"]), list(persisted["matches"]))
+        for storage_key, source in original["matches"].items():
+            migrated = persisted["matches"][storage_key]
+            self.assertEqual(source, {key: migrated[key] for key in source})
+
+    def test_checked_current_snapshot_requires_canonical_evaluations(self):
+        cases = (
+            "empty",
+            "missing_strategy",
+            "evaluation_winner",
+            "winner_correct",
+            "exact",
+            "score",
+            "points",
+            "missing_actual_winner",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                store = self.valid_checked_current_store()
+                snapshot = store["matches"]["77"]
+                if case == "empty":
+                    snapshot["evaluations"] = {}
+                elif case == "missing_strategy":
+                    del snapshot["evaluations"]["v4"]
+                elif case == "missing_actual_winner":
+                    del snapshot["actual_winner"]
+                else:
+                    invalid_values = {
+                        "evaluation_winner": ("winner", "away"),
+                        "winner_correct": ("winner_correct", False),
+                        "exact": ("exact", False),
+                        "score": ("score", "01-00"),
+                        "points": ("points", 3),
+                    }
+                    key, value = invalid_values[case]
+                    snapshot["evaluations"]["baseline"][key] = value
+
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "pl")
+
+    def test_valid_checked_current_snapshot_remains_comparison_evidence(self):
+        trainer_calls = []
+        store, model, history, counts = evolve_competition_state(
+            league="pl",
+            fixtures=[],
+            store=self.valid_checked_current_store(),
+            model=default_model_state("pl"),
+            snapshot_builder=lambda fixture, state: self.fail("checked row must not relock"),
+            model_trainer=lambda state, rows: trainer_calls.append(copy.deepcopy(rows)) or state,
+            now=self.now,
+        )
+
+        self.assertEqual([], trainer_calls)
+        self.assertEqual(0, counts["trained"])
+        self.assertEqual(1, model["comparison"]["total"])
+        self.assertEqual(1, history["total_evaluated"])
+        self.assertEqual(8, history["gw_results"][0]["points"])
+        self.assertEqual(
+            self.valid_checked_current_store()["matches"]["77"]["evaluations"],
+            store["matches"]["77"]["evaluations"],
+        )
+
+    def test_contradictory_checked_current_evaluation_aborts_before_comparison_or_save(self):
+        store = self.valid_checked_current_store()
+        store["matches"]["77"]["evaluations"]["baseline"]["points"] = 3
+        trainer_calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "predictions.json"
+            model_path = root / "weights.json"
+            history_path = root / "history.json"
+            prediction_path.write_text(json.dumps(store), encoding="utf-8")
+            before = prediction_path.read_bytes()
+
+            with patch.object(learning, "comparison_summary", wraps=learning.comparison_summary) as comparison, patch.object(
+                learning, "atomic_save_json", wraps=learning.atomic_save_json,
+            ) as save:
+                with self.assertRaises(learning.StateConsistencyError):
+                    run_persistent_competition(
+                        league="pl",
+                        fixtures=[],
+                        teams={},
+                        prediction_path=str(prediction_path),
+                        model_path=str(model_path),
+                        history_path=str(history_path),
+                        history={},
+                        now=self.now,
+                        snapshot_builder=lambda fixture, state: self.fail("checked row must not relock"),
+                        model_trainer=lambda state, rows: trainer_calls.append(copy.deepcopy(rows)) or state,
+                        default_model=default_model_state("pl"),
+                    )
+
+            comparison.assert_not_called()
+            save.assert_not_called()
+            self.assertEqual([], trainer_calls)
+            self.assertEqual(before, prediction_path.read_bytes())
+            self.assertFalse(model_path.exists())
+            self.assertFalse(history_path.exists())
+
     def test_persistence_boundaries_recover_without_reapplying_training(self):
         for failed_name in ("weights.json", "predictions.json", "history.json"):
             with self.subTest(boundary=failed_name), tempfile.TemporaryDirectory() as tmp:
