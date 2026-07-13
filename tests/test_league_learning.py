@@ -15,6 +15,7 @@ from website.league_learning import (
     promotion_decision,
     score_pick,
 )
+from website.league_learning import StateFileError
 
 
 class LeagueLearningRulesTests(unittest.TestCase):
@@ -226,6 +227,8 @@ class SnapshotLifecycleTests(unittest.TestCase):
         migrated = normalize_prediction_store(legacy, "pl")
         self.assertEqual("home", migrated["matches"]["9"]["picks"]["baseline"]["winner"])
         self.assertTrue(migrated["matches"]["9"]["legacy"])
+        self.assertEqual("2025-26", migrated["matches"]["9"]["season"])
+        self.assertEqual("pl:2025-26:9", migrated["matches"]["9"]["match_key"])
 
     @staticmethod
     def legacy_wc_store():
@@ -250,6 +253,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
     def test_migrated_wc_day_becomes_history_round(self):
         migrated = normalize_prediction_store(self.legacy_wc_store(), "wc")
         self.assertEqual(6, migrated["matches"]["91"]["round"])
+        self.assertEqual("2026", migrated["matches"]["91"]["season"])
 
     def test_checked_wc_snapshot_backfills_history_without_retraining(self):
         trainer_calls = []
@@ -494,31 +498,28 @@ class SnapshotLifecycleTests(unittest.TestCase):
             },
         })
 
-    def test_invalid_json_does_not_replace_valid_default(self):
+    def test_invalid_json_fails_closed_without_replacing_original_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text("{broken", encoding="utf-8")
-            value, valid = load_json_state(str(path), {"safe": True})
-            self.assertEqual({"safe": True}, value)
-            self.assertFalse(valid)
-            atomic_save_json(str(path), {"safe": "new"})
-            self.assertEqual({"safe": "new"}, json.loads(path.read_text(encoding="utf-8")))
+            before = path.read_bytes()
+            with self.assertRaises(StateFileError):
+                load_json_state(str(path), {"safe": True})
+            self.assertEqual(before, path.read_bytes())
 
     def test_load_json_state_rejects_non_dict_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text("[]", encoding="utf-8")
-            value, valid = load_json_state(str(path), {"safe": True})
-            self.assertEqual({"safe": True}, value)
-            self.assertFalse(valid)
+            with self.assertRaises(StateFileError):
+                load_json_state(str(path), {"safe": True})
 
     def test_load_json_state_rejects_invalid_utf8(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_bytes(b"\xff")
-            value, valid = load_json_state(str(path), {"safe": True})
-            self.assertEqual({"safe": True}, value)
-            self.assertFalse(valid)
+            with self.assertRaises(StateFileError):
+                load_json_state(str(path), {"safe": True})
 
 
 if __name__ == "__main__":

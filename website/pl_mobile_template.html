@@ -1768,7 +1768,7 @@ function localModelComparison(){
 function normAIRows(rows){
   return (rows||[]).map(function(r){
     var total=+r.total||0,cw=+r.correct_winner||0,cs=r.correct_score!=null?+r.correct_score:(r.exact_score!=null?+r.exact_score:0),pts=+r.points||0;
-    return{gw:+r.gw||0,total:total,correct_winner:cw,correct_score:cs,exact_score:cs,points:pts,accuracy_pct:total?Math.round(cw/total*1000)/10:0,score_acc_pct:total?Math.round(cs/total*1000)/10:0};
+    return{season:String(r.season||""),gw:+r.gw||0,total:total,correct_winner:cw,correct_score:cs,exact_score:cs,points:pts,accuracy_pct:total?Math.round(cw/total*1000)/10:0,score_acc_pct:total?Math.round(cs/total*1000)/10:0};
   }).filter(function(r){return r.gw&&r.total>0}).sort(function(a,b){return a.gw-b.gw});
 }
 function aiOverall(rows){
@@ -1841,10 +1841,13 @@ function aiModelStatus(lgData,modelCmp){
   var complete=aiStatusNumber(lgData&&lgData.data_completeness_pct);if(verified===0)complete=null;
   var completeLabel=complete===null?"n/a":Math.max(0,Math.min(100,complete)).toFixed(1)+"%";
   var completeNote=complete===null?"Trusted inputs unavailable":complete<100?"Some trusted inputs unavailable":"All tracked inputs available";
-  return '<div class="sec" style="margin-bottom:.25rem">Model Status</div><div class="ainote"><b>'+aiStatusText(label)+'</b> · active '+aiStatusText(active)+' · candidate '+aiStatusText(candidate)+' · verified '+verified+'/30 · trained '+aiStatusText(trained)+'</div>'+
+  function details(box){
+    return 'MAE '+aiStatusMetric(box,"goal_mae")+' · Brier '+aiStatusMetric(box,"outcome_brier")+' · draw '+aiStatusMetric(box,"draw_pick_rate","%")+' · concentration '+aiStatusMetric(box,"scoreline_concentration","%")+' · '+aiStatusMetric(box,"sample_size")+' samples · '+aiStatusMetric(box,"completeness_pct","%")+' complete';
+  }
+  return '<div class="sec" style="margin-bottom:.25rem">Model Status</div><div class="ainote"><b>'+aiStatusText(label)+'</b> · active '+aiStatusText(active)+' · candidate '+aiStatusText(candidate)+' · verified '+verified+'/30 across all verified seasons · trained '+aiStatusText(trained)+'</div>'+
     '<div class="aimetrics">'+
-      '<div class="aimetric"><span>Active '+aiStatusText(active)+'</span><b>'+aiStatusMetric(activeBox,"points"," pts")+'</b><em>'+aiStatusMetric(activeBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(activeBox,"exact_accuracy","%")+' exact</em></div>'+
-      '<div class="aimetric"><span>Candidate '+aiStatusText(candidate)+'</span><b>'+aiStatusMetric(candidateBox,"points"," pts")+'</b><em>'+aiStatusMetric(candidateBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(candidateBox,"exact_accuracy","%")+' exact</em></div>'+
+      '<div class="aimetric"><span>Active '+aiStatusText(active)+'</span><b>'+aiStatusMetric(activeBox,"points"," pts")+'</b><em>'+aiStatusMetric(activeBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(activeBox,"exact_accuracy","%")+' exact · '+details(activeBox)+'</em></div>'+
+      '<div class="aimetric"><span>Candidate '+aiStatusText(candidate)+'</span><b>'+aiStatusMetric(candidateBox,"points"," pts")+'</b><em>'+aiStatusMetric(candidateBox,"winner_accuracy","%")+' direction · '+aiStatusMetric(candidateBox,"exact_accuracy","%")+' exact · '+details(candidateBox)+'</em></div>'+
       '<div class="aimetric"><span>Data complete</span><b>'+completeLabel+'</b><em>'+completeNote+'</em></div>'+
     '</div>';
 }
@@ -1874,8 +1877,9 @@ function rAI(){
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
   var lgKey=D.league,isPL=lgKey==='pl',isWC=lgKey==='wc';
   var lgData=lh[lgKey]||{gw_results:[]};
-  var rows=normAIRows(lgData.gw_results||[]);
-  if(!rows.length)rows=normAIRows(localLearningRows());
+  var selectedSeason=isPL?(D.plSeason||lgData.current_season||""):(lgData.current_season||"");
+  var rows=learningRowsForSeason(normAIRows(lgData.gw_results||[]),selectedSeason);
+  if(!rows.length){var localRows=normAIRows(localLearningRows());localRows.forEach(function(row){row.season=selectedSeason});rows=learningRowsForSeason(localRows,selectedSeason)}
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
   var wts=activeWeights(),cal=activeCalibration(),modelState=learningModelState(lgKey),meta=(lgData.model_meta||modelState.meta||{});
   var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
@@ -1883,7 +1887,7 @@ function rAI(){
   var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0;
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
   var gwLbl=isPL?'GW':isWC?'Day':'MD';
-  var lgName=isPL?'Premier League':isWC?'World Cup':'La Liga';
+  var lgName=(isPL?'Premier League':isWC?'World Cup':'La Liga')+(selectedSeason?' '+selectedSeason:'');
   var focus=null;for(var fi=0;fi<rows.length;fi++){if(rows[fi].gw===D.sel){focus=rows[fi];break}}
   if(!focus&&rows.length)focus=rows[rows.length-1];
   function trendDelta(rs){

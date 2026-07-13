@@ -47,6 +47,12 @@ vm.runInContext(
 );
 vm.runInContext(source, context);
 
+const seasonRows = vm.runInContext(
+  'learningRowsForSeason([{season:"2025-26",gw:1},{season:"2026-27",gw:1}],"2026-27")',
+  context,
+);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(seasonRows)), [{ season: '2026-27', gw: 1 }]);
+
 function assertLeague(league, strength, goalMult, strategy, status) {
   context.D.league = league;
   assert.strictEqual(context.learningModelState(league).factors.strength, strength);
@@ -207,5 +213,25 @@ const verifiedStatus = renderContext.aiModelStatus(
 );
 assert.match(verifiedStatus, /76\.5%/);
 assert.match(verifiedStatus, /Some trusted inputs unavailable/);
+const completeMetricsStatus = renderContext.aiModelStatus(
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 2 }, data_completeness_pct: 100 },
+  { total: 2, models: {
+    baseline: { points: 4, winner_accuracy: 50, exact_accuracy: 25, goal_mae: 0.75, outcome_brier: 0.42, draw_pick_rate: 50, scoreline_concentration: 50, sample_size: 2, completeness_pct: 100 },
+    v4: { points: 5, winner_accuracy: 50, exact_accuracy: 50, goal_mae: 0.5, outcome_brier: 0.31, draw_pick_rate: 0, scoreline_concentration: 50, sample_size: 2, completeness_pct: 100 },
+  } },
+);
+assert.match(completeMetricsStatus, /MAE 0\.75/);
+assert.match(completeMetricsStatus, /Brier 0\.42/);
+assert.match(completeMetricsStatus, /draw 50%/);
+assert.match(completeMetricsStatus, /concentration 50%/);
+assert.match(completeMetricsStatus, /2 samples · 100% complete/);
+assert.match(completeMetricsStatus, /all verified seasons/);
+const invalidMetricsStatus = renderContext.aiModelStatus(
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 1 } },
+  { total: 1, models: { baseline: { goal_mae: Infinity, outcome_brier: NaN }, v4: {} } },
+);
+assert.doesNotMatch(invalidMetricsStatus, /Infinity|NaN/);
+assert.match(template, /learningRowsForSeason\(normAIRows/);
+assert.match(template, /selectedSeason/);
 
 console.log('learning runtime ok');

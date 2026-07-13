@@ -27,6 +27,13 @@ function learningRuntimeValues(state,key,defaultFactory,direct){
 function learningRuntimeLeague(){
   return typeof D!=="undefined"&&D&&typeof D.league==="string"?D.league:"";
 }
+function learningRowsForSeason(rows,season){
+  if(!Array.isArray(rows))return[];
+  var selected=typeof season==="string"?season:"";
+  return rows.filter(function(row){
+    return row&&typeof row==="object"&&(!selected||row.season===selected);
+  }).map(function(row){return learningRuntimeCopy(row)});
+}
 function learningModelState(league){
   var models=typeof EMBEDDED_MODELS!=="undefined"&&learningRuntimePlainObject(EMBEDDED_MODELS)?EMBEDDED_MODELS:{};
   var state=models[league];

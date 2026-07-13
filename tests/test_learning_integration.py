@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -76,7 +77,7 @@ class PersistentCompetitionTests(unittest.TestCase):
                     model_trainer=train_factor_model,
                     default_model=default_model_state(league),
                 )
-                histories[league] = history
+                histories[league] = history[league]
                 models[league] = json.loads(model_path.read_text(encoding="utf-8"))
                 self.assertEqual(1, counts["locked"])
                 self.assertEqual(league, model["league"])
@@ -125,29 +126,26 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertTrue(second["model_trained"])
         self.assertEqual(0, counts["trained"])
 
-    def test_malformed_state_falls_back_to_independent_default_model(self):
+    def test_malformed_state_aborts_without_changing_any_bundle_file(self):
         now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             prediction_path = root / "predictions.json"
             model_path = root / "weights.json"
+            history_path = root / "history.json"
             prediction_path.write_text("{bad", encoding="utf-8")
             model_path.write_text("[]", encoding="utf-8")
-            history, counts, model = run_persistent_competition(
-                league="laliga", fixtures=[self._fixture(now)], teams={},
-                prediction_path=str(prediction_path), model_path=str(model_path),
-                history={}, now=now, snapshot_builder=self._snapshot_builder,
-                model_trainer=self._trainer, default_model=default_model_state("laliga"),
-            )
-
-            stored = json.loads(prediction_path.read_text(encoding="utf-8"))
-            saved_model = json.loads(model_path.read_text(encoding="utf-8"))
-
-        self.assertEqual(1, counts["locked"])
-        self.assertEqual("laliga", model["league"])
-        self.assertEqual("laliga", saved_model["league"])
-        self.assertIn("77", stored["matches"])
-        self.assertEqual(1, history["snapshots_locked"])
+            history_path.write_text('{"laliga":{"keep":true}}', encoding="utf-8")
+            before = {path: path.read_bytes() for path in (prediction_path, model_path, history_path)}
+            with self.assertRaises(learning.StateFileError):
+                run_persistent_competition(
+                    league="laliga", fixtures=[self._fixture(now)], teams={},
+                    prediction_path=str(prediction_path), model_path=str(model_path),
+                    history_path=str(history_path), history={}, now=now,
+                    snapshot_builder=self._snapshot_builder,
+                    model_trainer=self._trainer, default_model=default_model_state("laliga"),
+                )
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     def test_default_models_and_physical_paths_do_not_cross_contaminate(self):
         now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -374,7 +372,7 @@ class PersistentCompetitionTests(unittest.TestCase):
 
         wc = history["wc"]
         self.assertEqual(66, wc["total_evaluated"])
-        self.assertEqual(["11"], wc["merged_lifecycle_match_ids"])
+        self.assertEqual(["wc:2026:11"], wc["merged_lifecycle_match_ids"])
         self.assertEqual(1, wc["model_status"]["verified_lifecycle_samples"])
         self.assertEqual(66, wc["model_comparison"]["total"])
         self.assertEqual(41, wc["model_comparison"]["baseline"]["winner_correct"])
@@ -382,9 +380,9 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(43, wc["model_comparison"]["challenger"]["winner_correct"])
         self.assertEqual(15, wc["model_comparison"]["challenger"]["exact_correct"])
         self.assertEqual(75, wc["model_comparison"]["challenger"]["points"])
-        self.assertEqual({"gw": 19, "total": 1, "correct_winner": 1, "correct_score": 1, "exact_score": 1, "points": 3, "accuracy_pct": 100.0, "score_acc_pct": 100.0}, next(row for row in wc["gw_results"] if row["gw"] == 19))
+        self.assertEqual({"season": "2026", "gw": 19, "total": 1, "correct_winner": 1, "correct_score": 1, "exact_score": 1, "points": 3, "accuracy_pct": 100.0, "score_acc_pct": 100.0}, next(row for row in wc["gw_results"] if row["gw"] == 19))
         self.assertEqual(66, rerun["wc"]["total_evaluated"])
-        self.assertEqual(["11"], rerun["wc"]["merged_lifecycle_match_ids"])
+        self.assertEqual(["wc:2026:11"], rerun["wc"]["merged_lifecycle_match_ids"])
 
     def test_transient_prediction_read_error_aborts_before_any_persistent_save(self):
         now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -425,62 +423,53 @@ class PersistentCompetitionTests(unittest.TestCase):
             with self.assertRaisesRegex(PermissionError, "denied"):
                 namespace["_load_json_file"]("learning_history.json", {})
 
-    def test_league_prepare_failure_saves_neither_competition(self):
+    def test_league_runner_failure_propagates_before_dashboard_continues(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")
         prefix = source[:source.index("\ndef _pl_official_int")]
         namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
         exec(compile(prefix, str(update_path), "exec"), namespace)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            pl_prediction = root / "pl-predictions.json"
-            pl_model = root / "pl-model.json"
-            pl_prediction.write_text('{"before":"prediction"}', encoding="utf-8")
-            pl_model.write_text('{"before":"model"}', encoding="utf-8")
-            namespace["PL_PREDICTIONS_FILE"] = str(pl_prediction)
-            namespace["PL_WEIGHTS_FILE"] = str(pl_model)
-            namespace["LL_PREDICTIONS_FILE"] = str(root / "ll-predictions.json")
-            namespace["LL_WEIGHTS_FILE"] = str(root / "ll-model.json")
-            saves = []
-            namespace["atomic_save_json"] = lambda path, value: saves.append(path)
-            namespace["_prepare_persistent_competition"] = lambda **kwargs: (
-                ({"matches": {}}, {"league": "pl"}, {"snapshots_locked": 0}, {})
-                if kwargs["league"] == "pl" else (_ for _ in ()).throw(PermissionError("laliga denied"))
-            )
-            with self.assertRaisesRegex(PermissionError, "laliga denied"):
-                namespace["run_league_learning"]([], {}, [], {}, {})
-            self.assertEqual([], saves)
-            self.assertEqual('{"before":"prediction"}', pl_prediction.read_text(encoding="utf-8"))
-            self.assertEqual('{"before":"model"}', pl_model.read_text(encoding="utf-8"))
+        calls = []
 
-    def test_wc_merges_prepared_store_without_post_save_read(self):
+        def runner(**kwargs):
+            calls.append(kwargs["league"])
+            if kwargs["league"] == "laliga":
+                raise PermissionError("laliga denied")
+            return ({"pl": {"model_comparison": {"total": 0}, "model_status": {"verified_lifecycle_samples": 0}}}, {}, {})
+
+        namespace["run_persistent_competition"] = runner
+        with self.assertRaisesRegex(PermissionError, "laliga denied"):
+            namespace["run_league_learning"]([], {}, [], {}, {})
+        self.assertEqual(["pl", "laliga"], calls)
+
+    def test_wc_delegates_archive_merge_to_persistent_runner(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")
         prefix = source[:source.index("\ndef _pl_official_int")]
         namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
         exec(compile(prefix, str(update_path), "exec"), namespace)
-        store = {"matches": {}}
-        prepared = (store, {"league": "wc"}, {"gw_results": [], "model_comparison": {"total": 0}, "model_status": {}}, {"locked": 0, "checked": 0, "trained": 0})
-        saves = []
-        namespace["_prepare_persistent_competition"] = lambda **kwargs: prepared
-        namespace["_load_json_file"] = lambda *args: (_ for _ in ()).throw(PermissionError("post-save read"))
-        namespace["atomic_save_json"] = lambda path, value: saves.append(path)
+        calls = []
+
+        def runner(**kwargs):
+            calls.append(kwargs)
+            return ({"wc": {"gw_results": [], "model_comparison": {"total": 0}, "model_status": {}}}, {"locked": 0, "checked": 0, "trained": 0, "skipped": 0, "promoted": 0}, {})
+
+        namespace["run_persistent_competition"] = runner
         history = namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
         self.assertEqual([], history["wc"]["gw_results"])
-        self.assertEqual([namespace["WC_PREDICTIONS_FILE"], namespace["WC_WEIGHTS_FILE"], namespace["LEARNING_HISTORY_FILE"]], saves)
+        self.assertEqual(1, len(calls))
+        self.assertIs(calls[0]["history_transform"], namespace["_wc_merge_verified_archive"])
+        self.assertEqual(namespace["LEARNING_HISTORY_FILE"], calls[0]["history_path"])
 
-    def test_wc_prepare_read_error_saves_nothing(self):
+    def test_wc_persistent_runner_error_propagates(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")
         prefix = source[:source.index("\ndef _pl_official_int")]
         namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
         exec(compile(prefix, str(update_path), "exec"), namespace)
-        saves = []
-        namespace["_prepare_persistent_competition"] = lambda **kwargs: (_ for _ in ()).throw(PermissionError("wc denied"))
-        namespace["atomic_save_json"] = lambda path, value: saves.append(path)
+        namespace["run_persistent_competition"] = lambda **kwargs: (_ for _ in ()).throw(PermissionError("wc denied"))
         with self.assertRaisesRegex(PermissionError, "wc denied"):
             namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
-        self.assertEqual([], saves)
 
     def test_wc_comparison_preserves_full_schema_and_hidden_legacy_score_histogram(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
@@ -612,6 +601,79 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["baseline"])
         self.assertEqual({"1-1": 1}, merged["model_comparison"]["lifecycle_score_histograms"]["v4"])
 
+    def test_wc_archive_exposes_design_metric_schema_for_both_strategies(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        store = {"matches": {"1": {
+            "legacy": True,
+            "checked": True,
+            "actual_home_score": 1,
+            "actual_away_score": 0,
+            "actual_winner": "home",
+            "rule": {"key": "group", "result": 1, "exact": 3, "additive": False},
+            "probabilities": {
+                "baseline": {"home": 0.7, "draw": 0.2, "away": 0.1},
+                "v4": {"home": 0.6, "draw": 0.2, "away": 0.2},
+            },
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                "v4": {"winner": "home", "home_score": 2, "away_score": 0},
+            },
+        }}}
+        previous = {"total_evaluated": 1, "model_comparison": {
+            "total": 1,
+            "baseline": {"winner_correct": 1, "exact_correct": 1, "points": 3},
+            "challenger": {"winner_correct": 1, "exact_correct": 0, "points": 1},
+        }}
+        comparison = namespace["_wc_archive_comparison"](previous, [], store)
+        for strategy in ("baseline", "v4"):
+            box = comparison["models"][strategy]
+            for key in ("goal_mae", "outcome_brier", "draw_pick_rate", "scoreline_concentration", "sample_size", "completeness_pct"):
+                self.assertIn(key, box)
+        self.assertEqual(0.0, comparison["models"]["baseline"]["goal_mae"])
+        self.assertEqual(0.14, comparison["models"]["baseline"]["outcome_brier"])
+        self.assertEqual(0.5, comparison["models"]["v4"]["goal_mae"])
+
+    def test_wc_bare_merged_ids_migrate_without_counting_snapshot_twice(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        previous = {
+            "merged_lifecycle_match_ids": ["11"],
+            "gw_results": [{"season": "2026", "gw": 19, "total": 1, "correct_winner": 1, "correct_score": 1, "exact_score": 1, "points": 3}],
+            "total_evaluated": 1,
+            "model_comparison": {"total": 1},
+        }
+        snapshot = {
+            "match_id": 11,
+            "match_key": "wc:2026:11",
+            "season": "2026",
+            "round": 19,
+            "lock_verified": True,
+            "checked": True,
+            "active_strategy_at_lock": "v4",
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                "v4": {"winner": "home", "home_score": 1, "away_score": 0},
+            },
+            "evaluations": {
+                "baseline": {"winner_correct": True, "exact": True, "points": 3},
+                "v4": {"winner_correct": True, "exact": True, "points": 3},
+            },
+        }
+        merged = namespace["_wc_merge_verified_archive"](
+            previous,
+            {"model_comparison": {"total": 1}, "model_status": {}},
+            {"matches": {"11": snapshot}},
+        )
+        self.assertEqual(1, merged["total_evaluated"])
+        self.assertEqual(["wc:2026:11"], merged["merged_lifecycle_match_ids"])
+
 
     def test_league_learning_replaces_stale_verified_lifecycle_counts(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
@@ -620,20 +682,42 @@ class PersistentCompetitionTests(unittest.TestCase):
         namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
         exec(compile(prefix, str(update_path), "exec"), namespace)
 
-        namespace["_prepare_persistent_competition"] = lambda **kwargs: (
-            {}, {}, {"model_comparison": {"total": 0}, "model_status": {}}, {}
-        )
-        namespace["atomic_save_json"] = lambda *args: None
         stale_history = {
             "pl": {"model_comparison": {"total": 108}, "model_status": {"verified_lifecycle_samples": 108}},
             "laliga": {"model_comparison": {"total": 108}, "model_status": {"verified_lifecycle_samples": 108}},
         }
+
+        def runner(**kwargs):
+            updated = copy.deepcopy(kwargs["history"])
+            league = kwargs["league"]
+            packet = updated.setdefault(league, {})
+            packet["model_status"] = {"verified_lifecycle_samples": 0}
+            return updated, {}, {}
+
+        namespace["run_persistent_competition"] = runner
 
         updated = namespace["run_league_learning"]([], {}, [], {}, stale_history)
 
         self.assertEqual(0, updated["pl"]["model_status"]["verified_lifecycle_samples"])
         self.assertEqual(0, updated["laliga"]["model_status"]["verified_lifecycle_samples"])
         self.assertEqual(108, updated["pl"]["model_comparison"]["total"])
+
+    def test_pl_compaction_preserves_selected_official_season_identity(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        compact = namespace["_compact_pl_learning_fixtures"]([{
+            "id": 91, "e": 2, "h": 11, "a": 12,
+            "ko": "2026-08-10T19:00:00Z", "fin": False, "st": False,
+            "hs": None, "as": None,
+        }], "2026-27")
+        self.assertEqual({
+            "id": 91, "source_fixture_id": 91, "season": "2026-27",
+            "e": 2, "h": 11, "a": 12, "ko": "2026-08-10T19:00:00Z",
+            "fin": False, "st": False, "hs": None, "as": None,
+        }, compact[0])
 
 
 class LearningEmbeddingTests(unittest.TestCase):

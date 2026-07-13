@@ -3,12 +3,24 @@ import json
 import math
 import os
 import tempfile
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from numbers import Real
 
 
 STORE_VERSION = 1
+LEDGER_VERSION = 1
+STATE_LOADED = "loaded"
+STATE_MISSING = "missing"
+
+
+class StateFileError(RuntimeError):
+    """An existing state file cannot be trusted or safely migrated."""
+
+
+class StateConsistencyError(StateFileError):
+    """Persisted files disagree in a way that cannot be repaired safely."""
 
 
 def _winner(home_score, away_score):
@@ -19,28 +31,78 @@ def _winner(home_score, away_score):
     return "draw"
 
 
+def _valid_score(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _valid_result(fixture):
+    if not isinstance(fixture, dict) or fixture.get("fin") is not True:
+        return False
+    home_score = fixture.get("hs")
+    away_score = fixture.get("as")
+    if not (_valid_score(home_score) and _valid_score(away_score)):
+        return False
+    declared = fixture.get("winner")
+    return declared is None or declared == _winner(home_score, away_score)
+
+
 def competition_rule(league, fixture):
-    if league != "wc":
+    if league in {"pl", "laliga"}:
         return {"key": "league", "result": 3, "exact": 5, "additive": True}
+    if league != "wc" or not isinstance(fixture, dict):
+        raise ValueError(f"invalid competition: {league!r}")
     if fixture.get("grp"):
         return {"key": "group", "result": 1, "exact": 3, "additive": False}
-    day = int(fixture.get("e") or 0)
-    if day >= 35:
+    day = fixture.get("e")
+    if not _valid_score(day):
+        raise ValueError("invalid World Cup phase")
+    if day == 35:
         return {"key": "final", "result": 8, "exact": 15, "additive": False}
     if day == 34:
         return {"key": "third", "result": 5, "exact": 10, "additive": False}
-    if day >= 32:
+    if 32 <= day <= 33:
         return {"key": "semi", "result": 5, "exact": 10, "additive": False}
-    if day >= 28:
+    if 28 <= day <= 31:
         return {"key": "quarter", "result": 4, "exact": 8, "additive": False}
-    if day >= 25:
+    if 25 <= day <= 27:
         return {"key": "r16", "result": 2, "exact": 5, "additive": False}
-    return {"key": "r32", "result": 2, "exact": 5, "additive": False}
+    if 18 <= day <= 24:
+        return {"key": "r32", "result": 2, "exact": 5, "additive": False}
+    raise ValueError("invalid World Cup phase")
+
+
+def _normalized_rule(rule):
+    if not isinstance(rule, dict):
+        raise ValueError("invalid competition rule")
+    key = rule.get("key")
+    expected = {
+        "league": (3, 5, True),
+        "group": (1, 3, False),
+        "r32": (2, 5, False),
+        "r16": (2, 5, False),
+        "quarter": (4, 8, False),
+        "semi": (5, 10, False),
+        "third": (5, 10, False),
+        "final": (8, 15, False),
+    }.get(key)
+    if expected is None:
+        raise ValueError("invalid competition rule")
+    result, exact, additive = expected
+    if rule.get("result") != result or rule.get("exact") != exact:
+        raise ValueError("invalid competition rule")
+    if "additive" in rule and rule.get("additive") is not additive:
+        raise ValueError("invalid competition rule")
+    return {"key": key, "result": result, "exact": exact, "additive": additive}
 
 
 def score_pick(pick, fixture, rule):
+    if not _valid_result(fixture):
+        raise ValueError("invalid completed result")
+    if not _valid_pick(pick):
+        raise ValueError("invalid prediction")
+    rule = _normalized_rule(rule)
     actual_winner = _winner(fixture["hs"], fixture["as"])
-    picked_winner = pick.get("winner") or _winner(pick["home_score"], pick["away_score"])
+    picked_winner = pick["winner"]
     exact = pick.get("home_score") == fixture["hs"] and pick.get("away_score") == fixture["as"]
     correct = picked_winner == actual_winner
     if rule.get("additive"):
@@ -58,6 +120,31 @@ def score_pick(pick, fixture, rule):
 
 def _finite_number(value):
     return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _probability_vector(value):
+    if not isinstance(value, dict) or set(value) != {"home", "draw", "away"}:
+        raise ValueError("invalid probability vector")
+    numbers = [value[name] for name in ("home", "draw", "away")]
+    if not all(_finite_number(number) and number >= 0 for number in numbers):
+        raise ValueError("invalid probability vector")
+    total = sum(numbers)
+    if math.isclose(total, 100.0, abs_tol=0.11):
+        numbers = [number / 100.0 for number in numbers]
+    elif not math.isclose(total, 1.0, abs_tol=0.0011):
+        raise ValueError("invalid probability vector")
+    return dict(zip(("home", "draw", "away"), numbers))
+
+
+def _strategy_probabilities(row, strategy):
+    evidence = row.get("probabilities")
+    if evidence is None:
+        return None
+    if isinstance(evidence, dict) and set(evidence) == {"home", "draw", "away"}:
+        return _probability_vector(evidence)
+    if not isinstance(evidence, dict) or set(evidence) != {"baseline", "v4"}:
+        raise ValueError("invalid probability evidence")
+    return _probability_vector(evidence[strategy])
 
 
 def _positive_evaluation_count(value):
@@ -103,32 +190,81 @@ def _has_accuracy_evidence(history):
 
 def comparison_summary(rows, active_strategy, candidate_strategy):
     strategies = (active_strategy, candidate_strategy)
-    metrics = {name: {"winner_correct": 0, "exact_correct": 0, "points": 0, "scores": Counter()} for name in strategies}
-    valid_rows = [
-        row for row in rows
-        if row.get("locked") is True
-        and row.get("fixture", {}).get("fin") is True
-        and all(
-            isinstance(row["fixture"].get(key), Real)
-            and not isinstance(row["fixture"].get(key), bool)
-            for key in ("hs", "as")
-        )
-    ]
+    metrics = {
+        name: {
+            "winner_correct": 0,
+            "exact_correct": 0,
+            "points": 0,
+            "draw_picks": 0,
+            "goal_error": 0.0,
+            "brier_total": 0.0,
+            "brier_samples": 0,
+            "scores": Counter(),
+        }
+        for name in strategies
+    }
+    valid_rows = []
+    for row in rows:
+        if row.get("locked") is not True or row.get("fixture", {}).get("fin") is not True:
+            continue
+        if not _valid_result(row.get("fixture")):
+            raise ValueError("invalid comparison result")
+        _normalized_rule(row.get("rule"))
+        picks = row.get("picks")
+        if not isinstance(picks, dict) or not all(_valid_pick(picks.get(name)) for name in strategies):
+            raise ValueError("invalid comparison prediction")
+        for name in strategies:
+            _strategy_probabilities(row, name)
+        valid_rows.append(row)
     for row in valid_rows:
+        actual_winner = _winner(row["fixture"]["hs"], row["fixture"]["as"])
         for name in strategies:
             scored = score_pick(row["picks"][name], row["fixture"], row["rule"])
+            pick = row["picks"][name]
             metrics[name]["winner_correct"] += int(scored["winner_correct"])
             metrics[name]["exact_correct"] += int(scored["exact"])
             metrics[name]["points"] += scored["points"]
+            metrics[name]["draw_picks"] += int(pick["winner"] == "draw")
+            metrics[name]["goal_error"] += (
+                abs(pick["home_score"] - row["fixture"]["hs"])
+                + abs(pick["away_score"] - row["fixture"]["as"])
+            ) / 2
             metrics[name]["scores"][scored["score"]] += 1
+            probabilities = _strategy_probabilities(row, name)
+            if probabilities is not None:
+                metrics[name]["brier_total"] += sum(
+                    (probabilities[outcome] - int(outcome == actual_winner)) ** 2
+                    for outcome in ("home", "draw", "away")
+                )
+                metrics[name]["brier_samples"] += 1
     total = len(valid_rows)
     for box in metrics.values():
         box["winner_accuracy"] = round(box["winner_correct"] / max(total, 1) * 100, 1)
         box["exact_accuracy"] = round(box["exact_correct"] / max(total, 1) * 100, 1)
+        box["goal_mae"] = round(box["goal_error"] / max(total, 1), 3)
+        box["outcome_brier"] = (
+            round(box["brier_total"] / box["brier_samples"], 4)
+            if box["brier_samples"] else None
+        )
+        box["draw_pick_rate"] = round(box["draw_picks"] / max(total, 1) * 100, 1)
+        top_count = max(box["scores"].values(), default=0)
+        box["scoreline_concentration"] = round(top_count / max(total, 1) * 100, 1)
+        box["sample_size"] = total
+        box["completeness_pct"] = 100.0 if total else 0.0
+        box["brier_sample_size"] = box["brier_samples"]
+        box["brier_completeness_pct"] = round(box["brier_samples"] / max(total, 1) * 100, 1)
         box["unique_scores"] = len(box["scores"])
         box["top_scores"] = [{"score": key, "count": count} for key, count in box["scores"].most_common(6)]
-        del box["scores"]
-    return {"total": total, "active_strategy": active_strategy, "candidate_strategy": candidate_strategy, "models": metrics}
+        for internal in ("scores", "goal_error", "brier_total", "brier_samples"):
+            del box[internal]
+    return {
+        "total": total,
+        "sample_size": total,
+        "completeness_pct": round(total / max(len(rows), 1) * 100, 1),
+        "active_strategy": active_strategy,
+        "candidate_strategy": candidate_strategy,
+        "models": metrics,
+    }
 
 
 def promotion_decision(comparison, minimum_samples=30):
@@ -167,16 +303,47 @@ def _valid_pick(pick):
     return (
         isinstance(pick, dict)
         and pick.get("winner") in {"home", "away", "draw"}
-        and all(
-            isinstance(pick.get(score), Real) and not isinstance(pick.get(score), bool)
-            for score in ("home_score", "away_score")
-        )
+        and _valid_score(pick.get("home_score"))
+        and _valid_score(pick.get("away_score"))
+        and pick.get("winner") == _winner(pick["home_score"], pick["away_score"])
     )
 
 
 def _valid_lock_snapshot(snapshot):
     picks = snapshot.get("picks") if isinstance(snapshot, dict) else None
-    return isinstance(picks, dict) and all(_valid_pick(picks.get(strategy)) for strategy in ("baseline", "v4"))
+    if not isinstance(picks, dict) or not all(_valid_pick(picks.get(strategy)) for strategy in ("baseline", "v4")):
+        return False
+    try:
+        for strategy in ("baseline", "v4"):
+            _strategy_probabilities(snapshot, strategy)
+    except ValueError:
+        return False
+    return True
+
+
+def _default_season(league):
+    return "2026" if league == "wc" else "2025-26"
+
+
+def competition_match_key(league, season, source_fixture_id):
+    if league not in {"pl", "laliga", "wc"}:
+        raise ValueError("invalid competition identity")
+    season_text = str(season or "").strip()
+    if not season_text or isinstance(source_fixture_id, bool) or source_fixture_id in (None, ""):
+        raise ValueError("incomplete competition identity")
+    return f"{league}:{season_text}:{source_fixture_id}"
+
+
+def _snapshot_identity(snapshot, league, fallback_id=None):
+    source_fixture_id = snapshot.get("source_fixture_id", snapshot.get("match_id", fallback_id))
+    season = snapshot.get("season") or _default_season(league)
+    return season, source_fixture_id, competition_match_key(league, season, source_fixture_id)
+
+
+def _fixture_identity(fixture, league):
+    source_fixture_id = fixture.get("source_fixture_id", fixture.get("id"))
+    season = fixture.get("season") or _default_season(league)
+    return season, source_fixture_id, competition_match_key(league, season, source_fixture_id)
 
 
 def _legacy_active_strategy(snapshot):
@@ -216,6 +383,11 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                 is_lifecycle_store or snapshot.get("lifecycle_version") == STORE_VERSION
             )
             snapshot.setdefault("match_id", int(match_id) if str(match_id).isdigit() else match_id)
+            season, source_fixture_id, match_key = _snapshot_identity(snapshot, league, match_id)
+            snapshot.setdefault("season", season)
+            snapshot.setdefault("source_fixture_id", source_fixture_id)
+            snapshot.setdefault("match_key", match_key)
+            snapshot.setdefault("league", league)
             snapshot.setdefault("locked", True)
             if is_legacy_snapshot:
                 snapshot["legacy"] = True
@@ -257,18 +429,26 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
                     snapshot["active_strategy_at_lock"] = active_strategy
             actual_scores = (snapshot.get("actual_home_score"), snapshot.get("actual_away_score"))
             if snapshot.get("checked") and not snapshot.get("evaluations") and all(
-                isinstance(score, Real) and not isinstance(score, bool) for score in actual_scores
+                _valid_score(score) for score in actual_scores
             ):
-                fixture = {"hs": actual_scores[0], "as": actual_scores[1], "e": snapshot.get("round")}
+                fixture = {"fin": True, "hs": actual_scores[0], "as": actual_scores[1], "e": snapshot.get("round")}
                 if snapshot.get("phase") == "group":
                     fixture["grp"] = "legacy"
-                rule = snapshot.get("rule") or snapshot.get("phase_rule") or competition_rule(league, fixture)
-                snapshot.setdefault("actual_winner", _winner(*actual_scores))
-                snapshot.setdefault("rule", rule)
-                snapshot["evaluations"] = {
-                    name: score_pick(pick, fixture, rule)
-                    for name, pick in snapshot["picks"].items()
-                }
+                try:
+                    rule = _normalized_rule(
+                        snapshot.get("rule") or snapshot.get("phase_rule") or competition_rule(league, fixture)
+                    )
+                    actual_winner = _winner(*actual_scores)
+                    if snapshot.get("actual_winner") not in (None, actual_winner):
+                        raise ValueError("inconsistent stored winner")
+                    snapshot.setdefault("actual_winner", actual_winner)
+                    snapshot.setdefault("rule", rule)
+                    snapshot["evaluations"] = {
+                        name: score_pick(pick, fixture, rule)
+                        for name, pick in snapshot["picks"].items()
+                    }
+                except ValueError:
+                    pass
         return raw
     matches = {}
     for round_key, packet in raw.items():
@@ -281,7 +461,9 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
             baseline = copy.deepcopy(pick)
             candidate = legacy_candidate_builder(baseline) if legacy_candidate_builder else copy.deepcopy(baseline)
             matches[match_id] = {
-                "match_id": pick.get("match_id"), "league": league, "round": int(round_key),
+                "match_id": pick.get("match_id"), "source_fixture_id": pick.get("match_id"),
+                "match_key": competition_match_key(league, _default_season(league), pick.get("match_id")),
+                "league": league, "season": _default_season(league), "round": int(round_key),
                 "created_at": packet.get("created_at", ""), "locked": True, "legacy": True,
                 "lock_verified": False, "checked": False, "model_trained": True,
                 "features": {}, "missing": {"legacy_features": True},
@@ -301,12 +483,12 @@ def load_json_state(path, default):
         with open(path, encoding="utf-8") as handle:
             value = json.load(handle)
         if not isinstance(value, dict):
-            return copy.deepcopy(default), False
-        return value, True
+            raise StateFileError(f"existing state is not a JSON object: {path}")
+        return value, STATE_LOADED
     except FileNotFoundError:
-        return copy.deepcopy(default), False
-    except (UnicodeError, json.JSONDecodeError, TypeError):
-        return copy.deepcopy(default), False
+        return copy.deepcopy(default), STATE_MISSING
+    except (UnicodeError, json.JSONDecodeError, TypeError) as error:
+        raise StateFileError(f"existing state is invalid: {path}") from error
 
 
 def atomic_save_json(path, value):
@@ -315,7 +497,7 @@ def atomic_save_json(path, value):
     fd, tmp = tempfile.mkstemp(prefix=".learning-", suffix=".json", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
+            json.dump(value, handle, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -332,14 +514,68 @@ def evolve_competition_state(
     store.setdefault("matches", {})
     model.setdefault("promotion_history", [])
     counts = {"locked": 0, "checked": 0, "trained": 0, "skipped": 0, "promoted": 0}
-    fixture_map = {str(item.get("id")): item for item in fixtures if item.get("id") is not None}
     timestamp = _utc(now).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    for fixture in fixtures:
-        match_id = str(fixture.get("id") or "")
-        if not match_id or match_id in store["matches"]:
+    snapshots_by_key = {}
+    storage_keys_by_match = {}
+    for storage_key, snapshot in store["matches"].items():
+        match_key = snapshot.get("match_key")
+        if match_key in snapshots_by_key:
+            raise StateConsistencyError(f"duplicate lifecycle identity: {match_key}")
+        snapshots_by_key[match_key] = snapshot
+        storage_keys_by_match[match_key] = str(storage_key)
+
+    fixture_map = {}
+    normalized_fixtures = []
+    for fixture in fixtures if isinstance(fixtures, list) else []:
+        if not isinstance(fixture, dict):
+            counts["skipped"] += 1
+            continue
+        try:
+            season, source_fixture_id, match_key = _fixture_identity(fixture, league)
+        except ValueError:
+            counts["skipped"] += 1
+            continue
+        normalized = copy.deepcopy(fixture)
+        normalized.update({
+            "league": league,
+            "season": season,
+            "source_fixture_id": source_fixture_id,
+            "match_key": match_key,
+        })
+        if match_key in fixture_map:
+            raise StateConsistencyError(f"duplicate fixture identity: {match_key}")
+        fixture_map[match_key] = normalized
+        normalized_fixtures.append(normalized)
+
+    ledger_present = model.get("applied_ledger_version") == LEDGER_VERSION
+    raw_ledger = model.get("applied_match_keys", [])
+    if ledger_present and (
+        not isinstance(raw_ledger, list)
+        or not all(isinstance(key, str) and key for key in raw_ledger)
+        or len(raw_ledger) != len(set(raw_ledger))
+    ):
+        raise StateConsistencyError("invalid applied-match ledger")
+    applied = set(raw_ledger if ledger_present else [])
+    if not ledger_present:
+        applied.update(
+            snapshot["match_key"]
+            for snapshot in store["matches"].values()
+            if snapshot.get("model_trained") is True or snapshot.get("checked") is True or snapshot.get("legacy") is True
+        )
+    model["applied_ledger_version"] = LEDGER_VERSION
+    model["applied_match_keys"] = sorted(applied)
+
+    for fixture in normalized_fixtures:
+        match_key = fixture["match_key"]
+        if match_key in snapshots_by_key:
             continue
         if not eligible_to_lock(fixture, now, lock_hours):
+            counts["skipped"] += 1
+            continue
+        try:
+            competition_rule(league, fixture)
+        except ValueError:
             counts["skipped"] += 1
             continue
         snapshot = copy.deepcopy(snapshot_builder(fixture, model))
@@ -347,54 +583,116 @@ def evolve_competition_state(
             counts["skipped"] += 1
             continue
         snapshot.update({
-            "match_id": fixture["id"], "league": league, "round": fixture.get("e"),
+            "match_id": fixture.get("id", fixture["source_fixture_id"]),
+            "source_fixture_id": fixture["source_fixture_id"],
+            "match_key": match_key,
+            "league": league,
+            "season": fixture["season"],
+            "round": fixture.get("e"),
             "home_id": fixture.get("h"), "away_id": fixture.get("a"),
             "kickoff_time": fixture.get("ko", ""), "created_at": timestamp,
             "locked": True, "checked": False, "model_trained": False,
             "lifecycle_version": STORE_VERSION, "lock_verified": True,
             "active_strategy_at_lock": model.get("active_strategy", "baseline"),
         })
-        store["matches"][match_id] = snapshot
+        preferred_storage_key = str(fixture["source_fixture_id"])
+        storage_key = preferred_storage_key if preferred_storage_key not in store["matches"] else match_key
+        store["matches"][storage_key] = snapshot
+        snapshots_by_key[match_key] = snapshot
+        storage_keys_by_match[match_key] = storage_key
         counts["locked"] += 1
 
     comparison_rows = []
     train_batch = []
-    for match_id, snapshot in store["matches"].items():
-        fixture = fixture_map.get(str(match_id))
-        if not fixture or not fixture.get("fin") or fixture.get("hs") is None or fixture.get("as") is None:
-            continue
-        if not snapshot.get("checked"):
+    for snapshot in store["matches"].values():
+        match_key = snapshot["match_key"]
+        fixture = fixture_map.get(match_key)
+        if not snapshot.get("checked") and fixture and fixture.get("fin") is True:
+            try:
+                if not _valid_result(fixture):
+                    raise ValueError("invalid completed result")
+                rule = competition_rule(league, fixture)
+                probabilities = snapshot.get("probabilities")
+                if probabilities is not None:
+                    for strategy in ("baseline", "v4"):
+                        _strategy_probabilities(snapshot, strategy)
+                evaluations = {
+                    name: score_pick(pick, fixture, rule)
+                    for name, pick in snapshot.get("picks", {}).items()
+                }
+            except ValueError:
+                counts["skipped"] += 1
+                continue
             snapshot["checked"] = True
             snapshot["checked_at"] = timestamp
             snapshot["actual_home_score"] = fixture["hs"]
             snapshot["actual_away_score"] = fixture["as"]
             snapshot["actual_winner"] = _winner(fixture["hs"], fixture["as"])
-            snapshot["rule"] = competition_rule(league, fixture)
-            snapshot["evaluations"] = {
-                name: score_pick(pick, fixture, snapshot["rule"])
-                for name, pick in snapshot.get("picks", {}).items()
-            }
+            snapshot["rule"] = rule
+            snapshot["evaluations"] = evaluations
+            if probabilities is not None:
+                snapshot["evaluation_probabilities"] = copy.deepcopy(probabilities)
             counts["checked"] += 1
+
+        if match_key in applied:
+            snapshot["model_trained"] = True
+        elif ledger_present and snapshot.get("model_trained") is True:
+            raise StateConsistencyError(f"trained flag is absent from model ledger: {match_key}")
+
+        if not snapshot.get("checked"):
+            continue
+        stored_fixture = {
+            "fin": True,
+            "hs": snapshot.get("actual_home_score"),
+            "as": snapshot.get("actual_away_score"),
+            "winner": snapshot.get("actual_winner"),
+        }
+        try:
+            if not _valid_result(stored_fixture):
+                raise ValueError("invalid stored result")
+            rule = _normalized_rule(snapshot.get("rule"))
+            picks = snapshot.get("picks", {})
+            if not all(_valid_pick(picks.get(strategy)) for strategy in ("baseline", "v4")):
+                raise ValueError("invalid stored prediction")
+            probabilities = snapshot.get("evaluation_probabilities", snapshot.get("probabilities"))
+            evidence_row = {
+                "match_id": snapshot.get("match_id"),
+                "match_key": match_key,
+                "locked": snapshot.get("locked") is True and snapshot.get("lock_verified") is True,
+                "fixture": stored_fixture,
+                "rule": rule,
+                "picks": picks,
+            }
+            if probabilities is not None:
+                evidence_row["probabilities"] = probabilities
+                for strategy in ("baseline", "v4"):
+                    _strategy_probabilities(evidence_row, strategy)
+        except ValueError:
+            counts["skipped"] += 1
+            continue
+
         if {"baseline", "v4"}.issubset(snapshot.get("picks", {})):
             comparison_rows.append({
-                "match_id": snapshot.get("match_id"),
-                "locked": snapshot.get("locked") is True and snapshot.get("lock_verified") is True,
-                "fixture": {"fin": True, "hs": fixture["hs"], "as": fixture["as"]},
-                "rule": snapshot.get("rule") or competition_rule(league, fixture),
-                "picks": snapshot["picks"],
+                **evidence_row,
             })
-        if not snapshot.get("model_trained") and not snapshot.get("legacy"):
+        if match_key not in applied and not snapshot.get("legacy"):
             training_row = copy.deepcopy(snapshot)
-            training_row["fixture"] = {"hs": fixture["hs"], "as": fixture["as"]}
+            training_row["fixture"] = copy.deepcopy(stored_fixture)
             train_batch.append(training_row)
 
     if train_batch:
         model = model_trainer(model, train_batch)
+        if not isinstance(model, dict):
+            raise StateConsistencyError("model trainer returned invalid state")
         for row in train_batch:
-            stored = store["matches"][str(row["match_id"])]
+            match_key = row["match_key"]
+            applied.add(match_key)
+            stored = snapshots_by_key[match_key]
             stored["model_trained"] = True
             stored["trained_at"] = timestamp
         counts["trained"] = len(train_batch)
+    model["applied_ledger_version"] = LEDGER_VERSION
+    model["applied_match_keys"] = sorted(applied)
 
     active = model.setdefault("active_strategy", "baseline")
     candidate = model.get("candidate_strategy", "v4" if active == "baseline" else "baseline")
@@ -422,7 +720,8 @@ def evolve_competition_state(
         if not evaluation:
             continue
         round_id = int(snapshot.get("round") or 0)
-        row = by_round.setdefault(round_id, {"gw": round_id, "total": 0, "correct_winner": 0, "correct_score": 0, "exact_score": 0, "points": 0})
+        season = str(snapshot.get("season") or _default_season(league))
+        row = by_round.setdefault((season, round_id), {"season": season, "gw": round_id, "total": 0, "correct_winner": 0, "correct_score": 0, "exact_score": 0, "points": 0})
         row["total"] += 1
         row["correct_winner"] += int(evaluation["winner_correct"])
         row["correct_score"] += int(evaluation["exact"])
@@ -432,13 +731,16 @@ def evolve_competition_state(
         if missing_flags:
             completeness_values.append(sum(not bool(value) for value in missing_flags) / len(missing_flags))
     gw_results = []
-    for row in sorted(by_round.values(), key=lambda item: item["gw"]):
+    for row in sorted(by_round.values(), key=lambda item: (item["season"], item["gw"])):
         row["accuracy_pct"] = round(row["correct_winner"] / max(row["total"], 1) * 100, 1)
         row["score_acc_pct"] = round(row["correct_score"] / max(row["total"], 1) * 100, 1)
         gw_results.append(row)
     overall_accuracy = _gameweek_accuracy(gw_results)
     if overall_accuracy is None:
         overall_accuracy = comparison["models"].get(model["active_strategy"], {}).get("winner_accuracy", 0)
+    available_seasons = sorted({row["season"] for row in gw_results})
+    fixture_seasons = sorted({fixture["season"] for fixture in normalized_fixtures})
+    current_season = fixture_seasons[-1] if fixture_seasons else (available_seasons[-1] if available_seasons else _default_season(league))
     history = {
         "gw_results": gw_results,
         "overall_accuracy": overall_accuracy,
@@ -447,10 +749,18 @@ def evolve_competition_state(
         "calibration": model.get("calibration", {}),
         "model_meta": model.get("meta", {}),
         "model_comparison": comparison,
-        "model_status": {**decision, "active_strategy": model["active_strategy"], "candidate_strategy": model["candidate_strategy"]},
+        "model_status": {
+            **decision,
+            "active_strategy": model["active_strategy"],
+            "candidate_strategy": model["candidate_strategy"],
+            "verified_lifecycle_samples": comparison["total"],
+        },
         "data_completeness_pct": round(sum(completeness_values) / len(completeness_values) * 100, 1) if completeness_values else 100.0,
         "snapshots_locked": len(store["matches"]),
         "trained_this_build": counts["trained"],
+        "counts": copy.deepcopy(counts),
+        "current_season": current_season,
+        "available_seasons": sorted(set(available_seasons + fixture_seasons)),
     }
     return store, model, history, counts
 
@@ -497,6 +807,13 @@ def _persistent_model(raw_model, default_model, league):
             from league_predictor import normalize_model_state
         normalized = normalize_model_state(model, league, model["active_strategy"])
         normalized["promotion_history"] = copy.deepcopy(model["promotion_history"])
+        for key in ("applied_ledger_version", "applied_match_keys", "generation_id", "comparison", "status"):
+            if key in model:
+                normalized[key] = copy.deepcopy(model[key])
+        if isinstance(model.get("meta"), dict):
+            for key, value in model["meta"].items():
+                if key not in {"trained_matches", "last_trained_at", "last_batch_size"}:
+                    normalized["meta"][key] = copy.deepcopy(value)
         return normalized
     return model
 
@@ -507,6 +824,13 @@ def merge_learning_history(history, league, league_history):
     combined = copy.deepcopy(existing) if isinstance(existing, dict) else {}
     incoming = copy.deepcopy(league_history) if isinstance(league_history, dict) else {}
     incoming_has_evidence = _has_accuracy_evidence(incoming)
+
+    for packet in (combined, incoming):
+        rows = packet.get("gw_results")
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    row.setdefault("season", _default_season(league))
 
     for key, value in incoming.items():
         if key == "overall_accuracy" and not incoming_has_evidence and _finite_number(combined.get(key)):
@@ -537,8 +861,8 @@ def _prepare_persistent_competition(
 ):
     raw_store, _ = load_json_state(prediction_path, {})
     store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
-    raw_model, model_valid = load_json_state(model_path, default_model)
-    model = _persistent_model(raw_model if model_valid else {}, default_model, league)
+    raw_model, model_status = load_json_state(model_path, default_model)
+    model = _persistent_model(raw_model if model_status != STATE_MISSING else {}, default_model, league)
     return evolve_competition_state(
         league=league,
         fixtures=fixtures if isinstance(fixtures, list) else [],
@@ -550,23 +874,112 @@ def _prepare_persistent_competition(
     )
 
 
+def _bundle_generation(store, model, history_entry, counts):
+    model_generation = model.get("generation_id")
+    if model_generation and (
+        store.get("generation_id") != model_generation
+        or history_entry.get("generation_id") != model_generation
+    ):
+        return model_generation
+    if model_generation and not any(counts.values()):
+        return model_generation
+    return uuid.uuid4().hex
+
+
+def _validate_pending_bundle(pending, league):
+    if not isinstance(pending, dict) or pending.get("league") != league:
+        raise StateConsistencyError("invalid pending persistence bundle")
+    for key in ("store", "model", "history", "counts"):
+        if not isinstance(pending.get(key), dict):
+            raise StateConsistencyError("invalid pending persistence bundle")
+    generation = pending["model"].get("generation_id")
+    if not generation or pending["store"].get("generation_id") != generation:
+        raise StateConsistencyError("inconsistent pending persistence generation")
+    if (pending["history"].get(league) or {}).get("generation_id") != generation:
+        raise StateConsistencyError("inconsistent pending persistence generation")
+
+
+def _write_persistent_bundle(*, prediction_path, model_path, history_path, pending):
+    atomic_save_json(model_path, pending["model"])
+    atomic_save_json(prediction_path, pending["store"])
+    if history_path:
+        atomic_save_json(history_path, pending["history"])
+
+
+def _remove_pending(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def run_persistent_competition(
     *, league, fixtures, teams, prediction_path, model_path, history, now,
     snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
+    history_path=None, history_transform=None,
 ):
-    store, model, league_history, counts = _prepare_persistent_competition(
+    raw_store, _ = load_json_state(prediction_path, {})
+    raw_model, model_status = load_json_state(model_path, default_model)
+    if history_path:
+        loaded_history, history_status = load_json_state(history_path, {})
+        if history_status == STATE_MISSING:
+            if not isinstance(history, dict):
+                raise StateFileError("learning history must be an object")
+            loaded_history = copy.deepcopy(history)
+    else:
+        if not isinstance(history, dict):
+            raise StateFileError("learning history must be an object")
+        loaded_history = copy.deepcopy(history)
+
+    pending_path = f"{model_path}.pending"
+    pending, pending_status = load_json_state(pending_path, {}) if history_path else ({}, STATE_MISSING)
+    if pending_status == STATE_LOADED:
+        _validate_pending_bundle(pending, league)
+        _write_persistent_bundle(
+            prediction_path=prediction_path,
+            model_path=model_path,
+            history_path=history_path,
+            pending=pending,
+        )
+        _remove_pending(pending_path)
+        return copy.deepcopy(pending["history"]), copy.deepcopy(pending["counts"]), copy.deepcopy(pending["model"])
+
+    store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
+    model = _persistent_model(raw_model if model_status != STATE_MISSING else {}, default_model, league)
+    store, model, league_history, counts = evolve_competition_state(
         league=league,
-        fixtures=fixtures,
-        teams=teams,
-        prediction_path=prediction_path,
-        model_path=model_path,
-        history=history,
+        fixtures=fixtures if isinstance(fixtures, list) else [],
+        store=store,
+        model=model,
         snapshot_builder=snapshot_builder,
         model_trainer=model_trainer,
         now=now,
-        default_model=default_model,
-        legacy_candidate_builder=legacy_candidate_builder,
     )
-    atomic_save_json(prediction_path, store)
-    atomic_save_json(model_path, model)
-    return league_history, counts, model
+    previous_entry = copy.deepcopy(loaded_history.get(league, {}))
+    if history_transform is not None:
+        league_history = history_transform(previous_entry, league_history, store)
+    merged_history = merge_learning_history(loaded_history, league, league_history)
+    generation = _bundle_generation(store, model, merged_history.get(league, {}), counts)
+    store["generation_id"] = generation
+    model["generation_id"] = generation
+    merged_history[league]["generation_id"] = generation
+    pending = {
+        "version": 1,
+        "league": league,
+        "generation_id": generation,
+        "store": store,
+        "model": model,
+        "history": merged_history,
+        "counts": counts,
+    }
+    if history_path:
+        atomic_save_json(pending_path, pending)
+    _write_persistent_bundle(
+        prediction_path=prediction_path,
+        model_path=model_path,
+        history_path=history_path,
+        pending=pending,
+    )
+    if history_path:
+        _remove_pending(pending_path)
+    return merged_history, counts, model

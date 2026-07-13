@@ -26,15 +26,15 @@ TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
 try:
-    from league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
+    from league_learning import comparison_summary, load_json_state, run_persistent_competition
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
-    from github_atomic_publish import publish_generated_outputs
+    from github_atomic_publish import publish_generated_outputs, resolve_target_repository
 except ImportError:
-    from .league_learning import _prepare_persistent_competition, atomic_save_json, merge_learning_history, run_persistent_competition
+    from .league_learning import comparison_summary, load_json_state, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
-    from .github_atomic_publish import publish_generated_outputs
+    from .github_atomic_publish import publish_generated_outputs, resolve_target_repository
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -409,14 +409,8 @@ def _normalize_wc_model(raw):
 
 
 def _load_json_file(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            value = json.load(f)
-        return value
-    except FileNotFoundError:
-        return default
-    except (UnicodeError, json.JSONDecodeError, TypeError):
-        return default
+    value, _ = load_json_state(path, default)
+    return value
 
 
 def _save_json_file(path, data):
@@ -1333,6 +1327,48 @@ def _wc_archive_box(comparison, name):
     return source
 
 
+def _wc_archive_metric_summary(store, archive_total):
+    rows = []
+    matches = store.get("matches", {}) if isinstance(store, dict) else {}
+    for snapshot in matches.values() if isinstance(matches, dict) else ():
+        if not isinstance(snapshot, dict) or snapshot.get("checked") is not True:
+            continue
+        picks = snapshot.get("picks")
+        rule = snapshot.get("rule") or snapshot.get("phase_rule")
+        if not isinstance(picks, dict) or not isinstance(rule, dict):
+            continue
+        rule = {**rule, "additive": False}
+        row = {
+            "locked": True,
+            "fixture": {
+                "fin": True,
+                "hs": snapshot.get("actual_home_score"),
+                "as": snapshot.get("actual_away_score"),
+                "winner": snapshot.get("actual_winner"),
+            },
+            "rule": rule,
+            "picks": picks,
+        }
+        probabilities = snapshot.get("evaluation_probabilities", snapshot.get("probabilities"))
+        if probabilities is None and all(snapshot.get(key) is not None for key in ("home_win_pct", "draw_pct", "away_win_pct")):
+            probabilities = {
+                "home": snapshot.get("home_win_pct"),
+                "draw": snapshot.get("draw_pct"),
+                "away": snapshot.get("away_win_pct"),
+            }
+        if probabilities is not None:
+            row["probabilities"] = probabilities
+        try:
+            if comparison_summary([row], "baseline", "v4")["total"] == 1:
+                rows.append(row)
+        except ValueError:
+            continue
+    summary = comparison_summary(rows, "baseline", "v4")
+    for box in summary["models"].values():
+        box["completeness_pct"] = round(box["sample_size"] / max(archive_total, 1) * 100, 1)
+    return summary
+
+
 def _wc_archive_comparison(previous, snapshots, store):
     previous = previous if isinstance(previous, dict) else {}
     comparison = copy.deepcopy(previous.get("model_comparison") if isinstance(previous.get("model_comparison"), dict) else {})
@@ -1380,6 +1416,17 @@ def _wc_archive_comparison(previous, snapshots, store):
         if isinstance(model_box, dict):
             for key in ("winner_correct", "exact_correct", "points", "draw_picks", "unique_scores", "top_scores", "winner_accuracy", "exact_accuracy"):
                 model_box[key] = copy.deepcopy(box[key])
+    metric_summary = _wc_archive_metric_summary(store, total)
+    metric_keys = (
+        "goal_mae", "outcome_brier", "draw_pick_rate", "scoreline_concentration",
+        "sample_size", "completeness_pct", "brier_sample_size", "brier_completeness_pct",
+    )
+    for name, box in (("baseline", baseline), ("v4", challenger)):
+        metric_box = metric_summary["models"][name]
+        model_box = models.setdefault(name, {})
+        for key in metric_keys:
+            box[key] = copy.deepcopy(metric_box[key])
+            model_box[key] = copy.deepcopy(metric_box[key])
     delta = comparison.setdefault("delta", {})
     if not isinstance(delta, dict):
         delta = comparison["delta"] = {}
@@ -1403,19 +1450,28 @@ def _wc_merge_verified_archive(previous, lifecycle_history, store):
     previous = previous if isinstance(previous, dict) else {}
     merged = copy.deepcopy(lifecycle_history)
     matches = store.get("matches", {}) if isinstance(store, dict) else {}
-    seen = {str(match_id) for match_id in previous.get("merged_lifecycle_match_ids", [])}
+    seen = {
+        str(match_id) if ":" in str(match_id) else f"wc:2026:{match_id}"
+        for match_id in previous.get("merged_lifecycle_match_ids", [])
+    }
     new_snapshots = []
     for match_id, snapshot in matches.items() if isinstance(matches, dict) else ():
-        if not isinstance(snapshot, dict) or str(match_id) in seen:
+        if not isinstance(snapshot, dict):
+            continue
+        lifecycle_key = str(snapshot.get("match_key") or match_id)
+        if ":" not in lifecycle_key:
+            lifecycle_key = f"wc:{snapshot.get('season') or '2026'}:{snapshot.get('source_fixture_id', snapshot.get('match_id', match_id))}"
+        if lifecycle_key in seen:
             continue
         if snapshot.get("lock_verified") is True and snapshot.get("checked") is True and {"baseline", "v4"}.issubset((snapshot.get("evaluations") or {})):
             new_snapshots.append(snapshot)
-            seen.add(str(match_id))
+            seen.add(lifecycle_key)
 
-    rows = {int(row.get("gw", 0) or 0): copy.deepcopy(row) for row in previous.get("gw_results", []) if isinstance(row, dict)}
+    rows = {(str(row.get("season") or "2026"), int(row.get("gw", 0) or 0)): copy.deepcopy(row) for row in previous.get("gw_results", []) if isinstance(row, dict)}
     for snapshot in new_snapshots:
         round_id = int(snapshot.get("round", 0) or 0)
-        row = rows.setdefault(round_id, {"gw": round_id, "total": 0, "correct_winner": 0, "correct_score": 0, "exact_score": 0, "points": 0})
+        season = str(snapshot.get("season") or "2026")
+        row = rows.setdefault((season, round_id), {"season": season, "gw": round_id, "total": 0, "correct_winner": 0, "correct_score": 0, "exact_score": 0, "points": 0})
         evaluation = (snapshot.get("evaluations") or {}).get(snapshot.get("active_strategy_at_lock", "v4"), {})
         row["total"] += 1
         row["correct_winner"] += int(bool(evaluation.get("winner_correct")))
@@ -1424,7 +1480,8 @@ def _wc_merge_verified_archive(previous, lifecycle_history, store):
         row["points"] += int(evaluation.get("points", 0) or 0)
 
     gw_results = []
-    for row in sorted(rows.values(), key=lambda item: item["gw"]):
+    for row in sorted(rows.values(), key=lambda item: (str(item.get("season") or "2026"), item["gw"])):
+        row.setdefault("season", "2026")
         row.setdefault("total", 0)
         row.setdefault("correct_winner", 0)
         row.setdefault("correct_score", 0)
@@ -1459,81 +1516,119 @@ def run_wc_learning(wc_payload, history):
         return history
     teams_obj = wc.get("teams", {})
     fixtures = wc.get("fix", [])
-    previous = copy.deepcopy((history or {}).get("wc", {}))
-    store, model, wc_history, counts = _prepare_persistent_competition(
+    fixtures = [{**fixture, "season": fixture.get("season") or "2026"} for fixture in fixtures]
+    history, counts, _ = run_persistent_competition(
         league="wc",
         fixtures=fixtures,
         teams=teams_obj,
         prediction_path=WC_PREDICTIONS_FILE,
         model_path=WC_WEIGHTS_FILE,
-        history=previous,
+        history=history,
         now=datetime.now(timezone.utc),
         snapshot_builder=lambda match, model: _wc_shared_snapshot(teams_obj, fixtures, match, model),
         model_trainer=_wc_shared_trainer,
         default_model=_wc_default_model(),
+        history_path=LEARNING_HISTORY_FILE,
+        history_transform=_wc_merge_verified_archive,
     )
-    wc_history = _wc_merge_verified_archive(previous, wc_history, store)
-    wc_history["refreshed_predictions"] = 0
-    history = merge_learning_history(history, "wc", wc_history)
-    atomic_save_json(WC_PREDICTIONS_FILE, store)
-    atomic_save_json(WC_WEIGHTS_FILE, model)
-    atomic_save_json(LEARNING_HISTORY_FILE, history)
-    print(f"World Cup ML: {counts['locked']} new locked predictions, 0 refreshed, {counts['checked']} checked, {counts['trained']} trained, accuracy {history['wc'].get('overall_accuracy', 0)}%")
+    history["wc"]["refreshed_predictions"] = 0
+    history["wc"]["counts"] = copy.deepcopy(counts)
     return history
 
 
-def _compact_pl_learning_fixtures(fixtures):
-    return [{
-        "id": fixture.get("id"), "e": fixture.get("event"),
-        "h": fixture.get("team_h"), "a": fixture.get("team_a"),
-        "ko": fixture.get("kickoff_time", ""), "fin": fixture.get("finished") is True,
-        "st": fixture.get("started") is True,
-        "hs": fixture.get("team_h_score"), "as": fixture.get("team_a_score"),
-    } for fixture in fixtures if fixture.get("id") is not None]
+def _compact_pl_learning_fixtures(fixtures, season="2025-26"):
+    compact = []
+    for fixture in fixtures:
+        if not isinstance(fixture, dict) or fixture.get("id") is None:
+            continue
+        normalized = "e" in fixture
+        compact.append({
+            "id": fixture["id"],
+            "source_fixture_id": fixture.get("source_fixture_id", fixture["id"]),
+            "season": fixture.get("season") or season,
+            "e": fixture.get("e") if normalized else fixture.get("event"),
+            "h": fixture.get("h") if normalized else fixture.get("team_h"),
+            "a": fixture.get("a") if normalized else fixture.get("team_a"),
+            "ko": fixture.get("ko", "") if normalized else fixture.get("kickoff_time", ""),
+            "fin": fixture.get("fin") is True if normalized else fixture.get("finished") is True,
+            "st": fixture.get("st") is True if normalized else fixture.get("started") is True,
+            "hs": fixture.get("hs") if normalized else fixture.get("team_h_score"),
+            "as": fixture.get("as") if normalized else fixture.get("team_a_score"),
+        })
+    return compact
 
 
 def _set_verified_lifecycle_samples(league_history):
     league_history = league_history if isinstance(league_history, dict) else {}
     comparison = league_history.get("model_comparison") or {}
+    status = copy.deepcopy(league_history.get("model_status") or {})
     try:
-        verified_samples = max(0, int(comparison.get("total", 0)))
+        verified_samples = max(0, int(status.get("verified_lifecycle_samples", comparison.get("total", 0))))
     except (TypeError, ValueError):
         verified_samples = 0
-    status = copy.deepcopy(league_history.get("model_status") or {})
     status["verified_lifecycle_samples"] = verified_samples
     league_history["model_status"] = status
     return league_history
 
 
-def run_league_learning(pl_fixtures, pl_teams, ll_fixtures, ll_teams, history):
+def run_league_learning(
+    pl_fixtures, pl_teams, ll_fixtures, ll_teams, history,
+    pl_season="2025-26", ll_season="2025-26",
+):
     now = datetime.now(timezone.utc)
-    compact_pl = _compact_pl_learning_fixtures(pl_fixtures)
-    pl_store, pl_model, pl_history, _ = _prepare_persistent_competition(
+    compact_pl = _compact_pl_learning_fixtures(pl_fixtures, pl_season)
+    history, pl_counts, _ = run_persistent_competition(
         league="pl", fixtures=compact_pl, teams=pl_teams,
         prediction_path=PL_PREDICTIONS_FILE, model_path=PL_WEIGHTS_FILE,
-        history=(history or {}).get("pl", {}), now=now,
+        history=history if isinstance(history, dict) else {}, now=now,
         snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_pl, pl_teams, model, "pl"),
         model_trainer=train_factor_model, default_model=default_model_state("pl"),
         legacy_candidate_builder=legacy_v4_pick,
+        history_path=LEARNING_HISTORY_FILE,
     )
-    compact_ll = ll_fixtures if isinstance(ll_fixtures, list) else []
-    ll_store, ll_model, ll_history, _ = _prepare_persistent_competition(
+    compact_ll = [
+        {**fixture, "source_fixture_id": fixture.get("source_fixture_id", fixture.get("id")), "season": fixture.get("season") or ll_season}
+        for fixture in ll_fixtures
+    ] if isinstance(ll_fixtures, list) else []
+    history, ll_counts, _ = run_persistent_competition(
         league="laliga", fixtures=compact_ll, teams=ll_teams if isinstance(ll_teams, dict) else {},
         prediction_path=LL_PREDICTIONS_FILE, model_path=LL_WEIGHTS_FILE,
-        history=(history or {}).get("laliga", {}), now=now,
+        history=history, now=now,
         snapshot_builder=lambda fixture, model: predict_league_snapshot(fixture, compact_ll, ll_teams, model, "laliga"),
         model_trainer=train_factor_model, default_model=default_model_state("laliga"),
+        history_path=LEARNING_HISTORY_FILE,
     )
-    pl_history = _set_verified_lifecycle_samples(pl_history)
-    ll_history = _set_verified_lifecycle_samples(ll_history)
-    history = merge_learning_history(history, "pl", pl_history)
-    history = merge_learning_history(history, "laliga", ll_history)
-    atomic_save_json(PL_PREDICTIONS_FILE, pl_store)
-    atomic_save_json(PL_WEIGHTS_FILE, pl_model)
-    atomic_save_json(LL_PREDICTIONS_FILE, ll_store)
-    atomic_save_json(LL_WEIGHTS_FILE, ll_model)
-    atomic_save_json(LEARNING_HISTORY_FILE, history)
+    history["pl"] = _set_verified_lifecycle_samples(history["pl"])
+    history["laliga"] = _set_verified_lifecycle_samples(history["laliga"])
+    history["pl"]["counts"] = copy.deepcopy(pl_counts)
+    history["laliga"]["counts"] = copy.deepcopy(ll_counts)
     return history
+
+
+def _validate_learning_state_files():
+    paths = [
+        PL_PREDICTIONS_FILE, PL_WEIGHTS_FILE,
+        LL_PREDICTIONS_FILE, LL_WEIGHTS_FILE,
+        WC_PREDICTIONS_FILE, WC_WEIGHTS_FILE,
+        LEARNING_HISTORY_FILE,
+        f"{PL_WEIGHTS_FILE}.pending",
+        f"{LL_WEIGHTS_FILE}.pending",
+        f"{WC_WEIGHTS_FILE}.pending",
+    ]
+    for path in paths:
+        load_json_state(path, {})
+
+
+def _log_learning_counts(league, history):
+    counts = ((history or {}).get(league) or {}).get("counts") or {}
+    print(
+        f"{league} learning: "
+        f"locked={int(counts.get('locked', 0) or 0)} "
+        f"checked={int(counts.get('checked', 0) or 0)} "
+        f"trained={int(counts.get('trained', 0) or 0)} "
+        f"skipped={int(counts.get('skipped', 0) or 0)} "
+        f"promoted={int(counts.get('promoted', 0) or 0)}"
+    )
 
 
 def _pl_official_int(value, default=0):
@@ -1796,9 +1891,11 @@ guesses_json = json.dumps(guesses, ensure_ascii=False, separators=(",", ":"))
 
 # ── La Liga data from ESPN ──
 print("\nFetching La Liga data...")
+ll_season_key = "2025-26"
 try:
     now = datetime.now(timezone.utc)
     start_year = now.year if now.month >= 7 else now.year - 1
+    ll_season_key = f"{start_year}-{str(start_year + 1)[-2:]}"
     date_range = f"{start_year}0801-{start_year + 1}0630"
 
     espn_events = requests.get(ESPN_SCOREBOARD, params={"dates": date_range, "limit": "1000"},
@@ -1895,6 +1992,8 @@ try:
             team_finished[aid] = team_finished.get(aid, 0) + 1
         ll_raw.append({
             "id": int(ev.get("id", 0)),
+            "source_fixture_id": int(ev.get("id", 0)),
+            "season": ll_season_key,
             "h": hid, "a": aid,
             "hs": hs, "as": as_score,
             "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
@@ -1928,7 +2027,7 @@ try:
 
     _mark_current_gws(ll_gws, ll_fixtures)
 
-    ll_data = json.dumps({"teams": ll_teams, "gws": ll_gws, "fix": ll_fixtures},
+    ll_data = json.dumps({"teams": ll_teams, "gws": ll_gws, "fix": ll_fixtures, "season": ll_season_key},
                           ensure_ascii=False, separators=(",", ":"))
     print(f"La Liga — Teams: {len(ll_teams)}, Matchdays: {len(ll_gws)}, Fixtures: {len(ll_fixtures)}")
 except Exception as e:
@@ -2166,38 +2265,40 @@ html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if 
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
 
 # ── ML Learning Engine ────────────────────────────────────────────────────
+_validate_learning_state_files()
 learning_history = _load_json_file(LEARNING_HISTORY_FILE, {})
-try:
-    # Compute standings (for position factor in weight updates)
-    _pts = {}
-    for _f in fx:
-        if not _f.get("finished"): continue
-        _hs, _as = _f.get("team_h_score"), _f.get("team_a_score")
-        if _hs is None or _as is None: continue
-        for _tid, _sf, _sa in [(_f["team_h"], _hs, _as), (_f["team_a"], _as, _hs)]:
-            if _tid not in _pts: _pts[_tid] = {"pts": 0, "gd": 0}
-            _pts[_tid]["pts"] += 3 if _sf > _sa else (1 if _sf == _sa else 0)
-            _pts[_tid]["gd"]  += _sf - _sa
-    _pos = {tid: i + 1 for i, (tid, _) in enumerate(
-        sorted(_pts.items(), key=lambda x: (-x[1]["pts"], -x[1]["gd"]))
-    )}
-    teams_ml = {tid: {**t, "position": _pos.get(tid, 10)} for tid, t in teams.items()}
-    learning_history = run_league_learning(
-        fx,
-        teams_ml,
-        globals().get("ll_fixtures", []),
-        globals().get("ll_teams", {}),
-        learning_history,
-    )
-    print("ML learning complete")
-except Exception as _ml_err:
-    print(f"ML learning skipped: {_ml_err}")
-
-try:
-    learning_history = run_wc_learning(wc_data, learning_history)
-except Exception as _wc_ml_err:
-    learning_history.setdefault("wc", {"gw_results": []})
-    print(f"World Cup ML skipped: {_wc_ml_err}")
+# Compute standings (for position factor in weight updates)
+_pts = {}
+for _f in fx:
+    if not _f.get("finished"): continue
+    _hs, _as = _f.get("team_h_score"), _f.get("team_a_score")
+    if _hs is None or _as is None: continue
+    for _tid, _sf, _sa in [(_f["team_h"], _hs, _as), (_f["team_a"], _as, _hs)]:
+        if _tid not in _pts: _pts[_tid] = {"pts": 0, "gd": 0}
+        _pts[_tid]["pts"] += 3 if _sf > _sa else (1 if _sf == _sa else 0)
+        _pts[_tid]["gd"]  += _sf - _sa
+_pos = {tid: i + 1 for i, (tid, _) in enumerate(
+    sorted(_pts.items(), key=lambda x: (-x[1]["pts"], -x[1]["gd"]))
+)}
+teams_ml = {tid: {**t, "position": _pos.get(tid, 10)} for tid, t in teams.items()}
+pl_learning_pack = pl_seasons_data[pl_current_key]
+pl_learning_teams = {
+    tid: {**team, "position": _pos.get(tid, 10)}
+    for tid, team in pl_learning_pack.get("teams", teams).items()
+}
+learning_history = run_league_learning(
+    pl_learning_pack.get("fix", []),
+    pl_learning_teams,
+    globals().get("ll_fixtures", []),
+    globals().get("ll_teams", {}),
+    learning_history,
+    pl_season=pl_current_key,
+    ll_season=ll_season_key,
+)
+_log_learning_counts("pl", learning_history)
+_log_learning_counts("laliga", learning_history)
+learning_history = run_wc_learning(wc_data, learning_history)
+_log_learning_counts("wc", learning_history)
 
 with open(os.path.join(HERE, "learning_runtime.js"), "r", encoding="utf-8") as _runtime_file:
     learning_runtime_source = _runtime_file.read()
@@ -2247,33 +2348,30 @@ print("Updated: live.json")
 
 # ── Optional local upload to GitHub Pages ──
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = "moadi1987-eng/PL"
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "").strip()
 
 if PUBLISH_TO_GITHUB and not IS_CI:
-  if GITHUB_TOKEN:
-    try:
-        publish_generated_outputs(
-            GITHUB_REPO,
-            GITHUB_TOKEN,
-            {
-                "index.html": INDEX_OUT,
-                "website/pl_mobile.html": OUT,
-                "live.json": os.path.join(ROOT, "live.json"),
-                "learning_history.json": os.path.join(ROOT, "learning_history.json"),
-                "ai_predictions.json": os.path.join(ROOT, "ai_predictions.json"),
-                "ai_weights.json": os.path.join(ROOT, "ai_weights.json"),
-                "ai_predictions_laliga.json": os.path.join(ROOT, "ai_predictions_laliga.json"),
-                "ai_weights_laliga.json": os.path.join(ROOT, "ai_weights_laliga.json"),
-                "ai_predictions_wc.json": os.path.join(ROOT, "ai_predictions_wc.json"),
-                "ai_weights_wc.json": os.path.join(ROOT, "ai_weights_wc.json"),
-            },
-            requests.request,
-        )
-        print("Published generated dashboard outputs in one commit.")
-    except Exception as error:
-        print(f"GitHub atomic publish failed: {error}")
-  else:
-    print("PUBLISH_TO_GITHUB=1 but no GITHUB_TOKEN is set — skipping GitHub upload.")
+    if not GITHUB_TOKEN:
+        raise RuntimeError("PUBLISH_TO_GITHUB=1 requires GITHUB_TOKEN")
+    target_repository = resolve_target_repository(GITHUB_REPO or None, cwd=ROOT)
+    publish_generated_outputs(
+        target_repository,
+        GITHUB_TOKEN,
+        {
+            "index.html": INDEX_OUT,
+            "website/pl_mobile.html": OUT,
+            "live.json": os.path.join(ROOT, "live.json"),
+            "learning_history.json": os.path.join(ROOT, "learning_history.json"),
+            "ai_predictions.json": os.path.join(ROOT, "ai_predictions.json"),
+            "ai_weights.json": os.path.join(ROOT, "ai_weights.json"),
+            "ai_predictions_laliga.json": os.path.join(ROOT, "ai_predictions_laliga.json"),
+            "ai_weights_laliga.json": os.path.join(ROOT, "ai_weights_laliga.json"),
+            "ai_predictions_wc.json": os.path.join(ROOT, "ai_predictions_wc.json"),
+            "ai_weights_wc.json": os.path.join(ROOT, "ai_weights_wc.json"),
+        },
+        requests.request,
+    )
+    print("Published generated dashboard outputs in one commit.")
 else:
     print("GitHub upload disabled — set PUBLISH_TO_GITHUB=1 for a local publish.")
 
