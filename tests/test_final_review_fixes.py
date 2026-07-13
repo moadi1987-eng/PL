@@ -268,6 +268,51 @@ class FinalReviewLifecycleTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def valid_checked_context_store(league, round_id, phase=None):
+        fixture = {"fin": True, "hs": 1, "as": 0, "e": round_id}
+        if phase == "group":
+            fixture["grp"] = "A"
+        rule = competition_rule(league, fixture)
+        picks = {
+            "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+            "v4": {"winner": "home", "home_score": 2, "away_score": 0},
+        }
+        season = "2026" if league == "wc" else "2025-26"
+        snapshot = {
+            "match_id": 77,
+            "source_fixture_id": 77,
+            "match_key": f"{league}:{season}:77",
+            "league": league,
+            "season": season,
+            "round": round_id,
+            "lifecycle_version": 1,
+            "locked": True,
+            "lock_verified": True,
+            "checked": True,
+            "model_trained": True,
+            "active_strategy_at_lock": "baseline",
+            "features": {},
+            "missing": {},
+            "picks": picks,
+            "actual_home_score": 1,
+            "actual_away_score": 0,
+            "actual_winner": "home",
+            "rule": rule,
+            "evaluations": {
+                strategy: score_pick(pick, fixture, rule)
+                for strategy, pick in picks.items()
+            },
+        }
+        if league == "wc":
+            snapshot["phase"] = phase
+        return {
+            "version": 1,
+            "lifecycle_version": 1,
+            "league": league,
+            "matches": {"77": snapshot},
+        }
+
     def test_actual_pl_unverified_legacy_rows_pass_preflight_and_preserve_raw_content(self):
         raw = self.actual_pl_unverified_legacy_store()
         original = copy.deepcopy(raw)
@@ -353,6 +398,170 @@ class FinalReviewLifecycleTests(unittest.TestCase):
 
                 with self.assertRaises(learning.StateConsistencyError):
                     learning.validate_prediction_store(store, "pl")
+
+    def test_lifecycle_compatibility_rejects_every_nonexact_flag_claim(self):
+        cases = (
+            ("verified_legacy", True, True),
+            ("unverified_nonlegacy", False, False),
+            ("unverified_current", None, False),
+        )
+        for name, legacy, lock_verified in cases:
+            with self.subTest(case=name):
+                store = self.valid_checked_current_store()
+                snapshot = store["matches"]["77"]
+                if legacy is None:
+                    snapshot.pop("legacy", None)
+                else:
+                    snapshot["legacy"] = legacy
+                snapshot["lock_verified"] = lock_verified
+
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "pl")
+
+    def test_lifecycle_boundary_accepts_exact_legacy_modern_and_pre_normalized_wc_controls(self):
+        exact_legacy = self.actual_pl_unverified_legacy_store()
+        modern = self.valid_checked_current_store()
+        pre_normalized_wc = {
+            "version": 4,
+            "matches": {
+                "91": {
+                    "match_id": 91,
+                    "day": 6,
+                    "phase": "group",
+                    "winner": "home",
+                    "home_score": 2,
+                    "away_score": 1,
+                    "checked": True,
+                    "actual_home_score": 2,
+                    "actual_away_score": 1,
+                    "v4_shadow": {"winner": "home", "home_score": 1, "away_score": 0},
+                },
+            },
+        }
+
+        learning.validate_prediction_store(exact_legacy, "pl")
+        learning.validate_prediction_store(modern, "pl")
+        learning.validate_prediction_store(pre_normalized_wc, "wc")
+        migrated = learning.normalize_prediction_store(pre_normalized_wc, "wc")
+
+        self.assertTrue(migrated["matches"]["91"]["legacy"])
+        self.assertFalse(migrated["matches"]["91"]["lock_verified"])
+        self.assertEqual(6, migrated["matches"]["91"]["round"])
+
+    def test_checked_modern_rules_are_bound_to_competition_and_every_wc_phase(self):
+        wc_contexts = (
+            ("group", 6),
+            ("r32", 18),
+            ("r16", 25),
+            ("quarter", 28),
+            ("semi", 32),
+            ("third", 34),
+            ("final", 35),
+        )
+        wc_rules = {
+            phase: competition_rule(
+                "wc",
+                {"e": round_id, **({"grp": "A"} if phase == "group" else {})},
+            )
+            for phase, round_id in wc_contexts
+        }
+
+        for league in ("pl", "laliga"):
+            with self.subTest(control=league):
+                learning.validate_prediction_store(
+                    self.valid_checked_context_store(league, 4), league,
+                )
+            with self.subTest(wrong_wc_rule=league):
+                store = self.valid_checked_context_store(league, 4)
+                self._replace_checked_rule(store, wc_rules["group"])
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, league)
+
+        with self.subTest(wc_wrong_league_rule=True):
+            store = self.valid_checked_context_store("wc", 6, "group")
+            self._replace_checked_rule(store, competition_rule("pl", {"e": 6}))
+            with self.assertRaises(learning.StateConsistencyError):
+                learning.validate_prediction_store(store, "wc")
+
+        phases = [phase for phase, _round_id in wc_contexts]
+        for index, (phase, round_id) in enumerate(wc_contexts):
+            with self.subTest(control=phase):
+                learning.validate_prediction_store(
+                    self.valid_checked_context_store("wc", round_id, phase), "wc",
+                )
+            wrong_phase = phases[(index + 1) % len(phases)]
+            with self.subTest(expected=phase, wrong=wrong_phase):
+                store = self.valid_checked_context_store("wc", round_id, phase)
+                self._replace_checked_rule(store, wc_rules[wrong_phase])
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "wc")
+
+    def test_wc_lock_persists_phase_and_evaluation_ignores_mutable_feed_phase(self):
+        upcoming = self.fixture(season="2026")
+        upcoming.update({"e": 18, "grp": None})
+        store, model, _history, _counts = evolve_competition_state(
+            league="wc",
+            fixtures=[upcoming],
+            store={"version": 1, "league": "wc", "matches": {}},
+            model=default_model_state("wc"),
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+
+        snapshot = store["matches"]["77"]
+        self.assertEqual("r32", snapshot.get("phase"))
+        self.assertEqual(18, snapshot["round"])
+
+        completed = copy.deepcopy(upcoming)
+        completed.update({"e": 28, "fin": True, "st": True, "hs": 1, "as": 0})
+        store, _model, history, counts = evolve_competition_state(
+            league="wc",
+            fixtures=[completed],
+            store=store,
+            model=model,
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+
+        snapshot = store["matches"]["77"]
+        self.assertEqual("r32", snapshot["rule"]["key"])
+        self.assertEqual(5, history["gw_results"][0]["points"])
+        self.assertEqual(1, counts["checked"])
+
+    def test_wc_group_lock_requires_immutable_round_context(self):
+        upcoming = self.fixture(season="2026")
+        upcoming.pop("e")
+        upcoming["grp"] = "A"
+
+        store, _model, _history, counts = evolve_competition_state(
+            league="wc",
+            fixtures=[upcoming],
+            store={"version": 1, "league": "wc", "matches": {}},
+            model=default_model_state("wc"),
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+
+        self.assertEqual({}, store["matches"])
+        self.assertEqual(0, counts["locked"])
+        self.assertEqual(1, counts["skipped"])
+
+    @staticmethod
+    def _replace_checked_rule(store, rule):
+        snapshot = store["matches"]["77"]
+        fixture = {
+            "fin": True,
+            "hs": snapshot["actual_home_score"],
+            "as": snapshot["actual_away_score"],
+        }
+        snapshot["rule"] = copy.deepcopy(rule)
+        snapshot["evaluations"] = {
+            strategy: score_pick(pick, fixture, rule)
+            for strategy, pick in snapshot["picks"].items()
+        }
 
     def test_valid_checked_current_snapshot_remains_comparison_evidence(self):
         trainer_calls = []
