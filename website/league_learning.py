@@ -1449,13 +1449,6 @@ def merge_learning_history(history, league, league_history):
         if key == "gw_results" and not value and combined.get(key):
             continue
         if (
-            key == "total_evaluated"
-            and not value
-            and not incoming.get("gw_results")
-            and combined.get("gw_results")
-        ):
-            continue
-        if (
             key == "model_comparison"
             and isinstance(value, dict)
             and not value.get("total")
@@ -1464,6 +1457,8 @@ def merge_learning_history(history, league, league_history):
         ):
             continue
         combined[key] = value
+    if isinstance(combined.get("gw_results"), list) and combined["gw_results"]:
+        combined["total_evaluated"] = sum(row.get("total", 0) for row in combined["gw_results"])
     overall_accuracy = _gameweek_accuracy(combined.get("gw_results"))
     if overall_accuracy is not None:
         combined["overall_accuracy"] = overall_accuracy
