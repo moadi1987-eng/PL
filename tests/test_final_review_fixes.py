@@ -28,6 +28,15 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         self.now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
     @staticmethod
+    def empty_current_store(league="pl"):
+        return {
+            "version": learning.STORE_VERSION,
+            "lifecycle_version": learning.STORE_VERSION,
+            "league": league,
+            "matches": {},
+        }
+
+    @staticmethod
     def snapshot_builder(fixture, model):
         return {
             "features": {"strength": 0.4},
@@ -499,6 +508,161 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         )
         with self.assertRaises(learning.StateConsistencyError):
             learning.validate_prediction_store(modern, "pl")
+
+    def test_prediction_schema_markers_without_matches_fail_closed(self):
+        marker_cases = {
+            "version": {"version": learning.STORE_VERSION},
+            "lifecycle_version": {"lifecycle_version": learning.STORE_VERSION},
+            "league": {"league": "pl"},
+            "generation_id": {"generation_id": "generation"},
+            "updated_at": {"updated_at": "2026-07-13T00:00:00Z"},
+            "combined": {
+                "version": learning.STORE_VERSION,
+                "lifecycle_version": learning.STORE_VERSION,
+                "league": "pl",
+            },
+        }
+
+        for case, raw in marker_cases.items():
+            original = copy.deepcopy(raw)
+            for operation in (
+                learning.validate_prediction_store,
+                learning.normalize_prediction_store,
+            ):
+                with self.subTest(case=case, operation=operation.__name__):
+                    with self.assertRaisesRegex(
+                        learning.StateConsistencyError,
+                        "current prediction store is missing matches",
+                    ):
+                        operation(raw, "pl")
+                    self.assertEqual(original, raw)
+
+    def test_prediction_schema_rejects_unknown_root_metadata_and_existing_empty_object(self):
+        for payload_name, payload in (
+            ("object", {"keep": True}),
+            ("list", ["keep"]),
+            ("scalar", "keep"),
+        ):
+            raw = self.representative_raw_pl_packet_store()
+            raw["metadata"] = payload
+            original = copy.deepcopy(raw)
+            for operation in (
+                learning.validate_prediction_store,
+                learning.normalize_prediction_store,
+            ):
+                with self.subTest(payload=payload_name, operation=operation.__name__):
+                    with self.assertRaisesRegex(
+                        learning.StateConsistencyError,
+                        "unknown prediction store root key",
+                    ):
+                        operation(raw, "pl")
+                    self.assertEqual(original, raw)
+
+        for operation in (
+            learning.validate_prediction_store,
+            learning.normalize_prediction_store,
+        ):
+            with self.subTest(payload="existing_empty", operation=operation.__name__):
+                with self.assertRaisesRegex(
+                    learning.StateConsistencyError,
+                    "empty prediction store is ambiguous",
+                ):
+                    operation({}, "pl")
+
+    def test_valid_current_empty_prediction_store_still_passes(self):
+        raw = {
+            "version": learning.STORE_VERSION,
+            "lifecycle_version": learning.STORE_VERSION,
+            "league": "pl",
+            "generation_id": "generation",
+            "updated_at": "2026-07-13T00:00:00Z",
+            "matches": {},
+        }
+        original = copy.deepcopy(raw)
+
+        learning.validate_prediction_store(raw, "pl")
+        normalized = learning.normalize_prediction_store(raw, "pl")
+
+        self.assertEqual(original, raw)
+        self.assertEqual(original, normalized)
+
+    def test_damaged_versioned_store_aborts_before_training_journal_save_or_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "predictions.json"
+            model_path = root / "weights.json"
+            history_path = root / "history.json"
+            pending_path = Path(str(model_path) + ".pending")
+            prediction_path.write_bytes(
+                b'{"version":1,"lifecycle_version":1,"league":"pl"}'
+            )
+            model_path.write_text(json.dumps(default_model_state("pl")), encoding="utf-8")
+            history_path.write_bytes(b'{"other":{"keep":true}}')
+            tracked_paths = (prediction_path, model_path, history_path)
+            before = {path: path.read_bytes() for path in tracked_paths}
+            trainer_calls = []
+            save_calls = []
+
+            with patch.object(
+                learning,
+                "atomic_save_json",
+                side_effect=lambda path, value: save_calls.append(path),
+            ):
+                with self.assertRaisesRegex(
+                    learning.StateConsistencyError,
+                    "current prediction store is missing matches",
+                ):
+                    run_persistent_competition(
+                        league="pl",
+                        fixtures=[],
+                        teams={},
+                        prediction_path=str(prediction_path),
+                        model_path=str(model_path),
+                        history_path=str(history_path),
+                        history={},
+                        now=self.now,
+                        snapshot_builder=lambda fixture, state: self.fail(
+                            "damaged state must not lock"
+                        ),
+                        model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+                        default_model=default_model_state("pl"),
+                    )
+
+            self.assertEqual([], trainer_calls)
+            self.assertEqual([], save_calls)
+            self.assertFalse(pending_path.exists())
+            self.assertEqual(before, {path: path.read_bytes() for path in tracked_paths})
+
+    def test_missing_prediction_file_default_initializes_current_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "predictions.json"
+            model_path = root / "weights.json"
+            history_path = root / "history.json"
+            trainer_calls = []
+
+            run_persistent_competition(
+                league="pl",
+                fixtures=[],
+                teams={},
+                prediction_path=str(prediction_path),
+                model_path=str(model_path),
+                history_path=str(history_path),
+                history={},
+                now=self.now,
+                snapshot_builder=lambda fixture, state: self.fail(
+                    "empty state must not lock without fixtures"
+                ),
+                model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+                default_model=default_model_state("pl"),
+            )
+
+            persisted = json.loads(prediction_path.read_text(encoding="utf-8"))
+            self.assertEqual([], trainer_calls)
+            self.assertEqual(learning.STORE_VERSION, persisted["version"])
+            self.assertEqual(learning.STORE_VERSION, persisted["lifecycle_version"])
+            self.assertEqual("pl", persisted["league"])
+            self.assertEqual({}, persisted["matches"])
 
     def test_actual_pl_unverified_legacy_rows_keep_history_but_never_train_or_compare(self):
         original = self.actual_pl_unverified_legacy_store()
@@ -1389,7 +1553,7 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         store, model, _, _ = evolve_competition_state(
             league="pl",
             fixtures=[self.fixture()],
-            store={},
+            store=self.empty_current_store(),
             model=model,
             snapshot_builder=self.snapshot_builder,
             model_trainer=lambda state, rows: state,
@@ -1438,7 +1602,7 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         store, model, _, counts = evolve_competition_state(
             league="pl",
             fixtures=fixtures,
-            store={},
+            store=self.empty_current_store(),
             model=default_model_state("pl"),
             snapshot_builder=self.snapshot_builder,
             model_trainer=lambda state, rows: state,
@@ -1528,7 +1692,7 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         store, _, _, counts = evolve_competition_state(
             league="wc",
             fixtures=[invalid_phase],
-            store={},
+            store=self.empty_current_store("wc"),
             model=default_model_state("wc"),
             snapshot_builder=self.snapshot_builder,
             model_trainer=lambda state, rows: state,

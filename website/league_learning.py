@@ -14,6 +14,9 @@ LEDGER_VERSION = 1
 PENDING_VERSION = 2
 STATE_LOADED = "loaded"
 STATE_MISSING = "missing"
+_CURRENT_PREDICTION_MARKERS = {
+    "version", "lifecycle_version", "league", "generation_id", "updated_at",
+}
 
 
 class StateFileError(RuntimeError):
@@ -730,7 +733,21 @@ def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
     return expected_key
 
 
-def validate_prediction_store(raw, league):
+def _prediction_store_schema(raw, *, allow_missing=False):
+    if "matches" in raw:
+        return "current"
+    if any(key in raw for key in _CURRENT_PREDICTION_MARKERS):
+        _state_error("current prediction store is missing matches")
+    if not raw:
+        if allow_missing:
+            return "missing"
+        _state_error("empty prediction store is ambiguous")
+    if any(not str(key).isdigit() for key in raw):
+        _state_error("unknown prediction store root key")
+    return "raw"
+
+
+def validate_prediction_store(raw, league, *, allow_missing=False):
     if not isinstance(raw, dict):
         _state_error("prediction store must be an object")
     if "version" in raw and not _nonnegative_int(raw["version"]):
@@ -742,11 +759,10 @@ def validate_prediction_store(raw, league):
     _validate_generation(raw, "prediction store")
     if "updated_at" in raw and not isinstance(raw["updated_at"], str):
         _state_error("invalid prediction store timestamp")
-    if "matches" not in raw:
+    schema = _prediction_store_schema(raw, allow_missing=allow_missing)
+    if schema != "current":
         seen_ids = set()
         for round_key, packet in raw.items():
-            if not str(round_key).isdigit():
-                continue
             if not isinstance(packet, dict) or not isinstance(packet.get("predictions"), list):
                 _state_error("invalid legacy prediction round")
             for pick in packet["predictions"]:
@@ -899,10 +915,13 @@ def validate_global_history(history):
     return history
 
 
-def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
+def normalize_prediction_store(
+    raw, league, legacy_candidate_builder=None, *, allow_missing=False,
+):
     raw = copy.deepcopy({} if raw is None else raw)
-    validate_prediction_store(raw, league)
-    if isinstance(raw.get("matches"), list):
+    validate_prediction_store(raw, league, allow_missing=allow_missing)
+    schema = _prediction_store_schema(raw, allow_missing=allow_missing)
+    if schema == "current" and isinstance(raw.get("matches"), list):
         matches = {}
         for snapshot in raw["matches"]:
             if not isinstance(snapshot, dict):
@@ -911,7 +930,7 @@ def normalize_prediction_store(raw, league, legacy_candidate_builder=None):
             if match_id is not None:
                 matches[str(match_id)] = snapshot
         raw["matches"] = matches
-    if isinstance(raw.get("matches"), dict):
+    if schema == "current" and isinstance(raw.get("matches"), dict):
         is_lifecycle_store = raw.get("lifecycle_version") == STORE_VERSION
         raw.setdefault("version", STORE_VERSION)
         raw.setdefault("league", league)
@@ -1452,8 +1471,13 @@ def _prepare_persistent_competition(
     *, league, fixtures, teams, prediction_path, model_path, history, now,
     snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
 ):
-    raw_store, _ = load_json_state(prediction_path, {})
-    store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
+    raw_store, store_status = load_json_state(prediction_path, {})
+    store = normalize_prediction_store(
+        raw_store,
+        league,
+        legacy_candidate_builder,
+        allow_missing=store_status == STATE_MISSING,
+    )
     raw_model, model_status = load_json_state(model_path, default_model)
     model = _persistent_model(raw_model if model_status != STATE_MISSING else {}, default_model, league)
     return evolve_competition_state(
@@ -1584,9 +1608,13 @@ def recover_pending_competitions(configurations, *, history_path):
         ):
             raise StateConsistencyError("invalid pending recovery configuration")
         seen_leagues.add(league)
-        raw_store, _ = load_json_state(prediction_path, {})
+        raw_store, store_status = load_json_state(prediction_path, {})
         raw_model, _ = load_json_state(model_path, {})
-        validate_prediction_store(raw_store, league)
+        validate_prediction_store(
+            raw_store,
+            league,
+            allow_missing=store_status == STATE_MISSING,
+        )
         validate_model_state(raw_model, league)
         pending_path = f"{model_path}.pending"
         pending, pending_status = load_json_state(pending_path, {})
@@ -1615,9 +1643,13 @@ def run_persistent_competition(
     snapshot_builder, model_trainer, default_model, legacy_candidate_builder=None,
     history_path=None, history_transform=None,
 ):
-    raw_store, _ = load_json_state(prediction_path, {})
+    raw_store, store_status = load_json_state(prediction_path, {})
     raw_model, model_status = load_json_state(model_path, default_model)
-    validate_prediction_store(raw_store, league)
+    validate_prediction_store(
+        raw_store,
+        league,
+        allow_missing=store_status == STATE_MISSING,
+    )
     validate_model_state(raw_model if model_status != STATE_MISSING else {}, league)
     if history_path:
         loaded_history, history_status = load_json_state(history_path, {})
@@ -1645,7 +1677,12 @@ def run_persistent_competition(
         _remove_pending(pending_path)
         return recovered_history, copy.deepcopy(pending["counts"]), copy.deepcopy(pending["model"])
 
-    store = normalize_prediction_store(raw_store, league, legacy_candidate_builder)
+    store = normalize_prediction_store(
+        raw_store,
+        league,
+        legacy_candidate_builder,
+        allow_missing=store_status == STATE_MISSING,
+    )
     model = _persistent_model(raw_model if model_status != STATE_MISSING else {}, default_model, league)
     store, model, league_history, counts = evolve_competition_state(
         league=league,

@@ -176,6 +176,15 @@ class SnapshotLifecycleTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def empty_current_store():
+        return {
+            "version": 1,
+            "lifecycle_version": 1,
+            "league": "pl",
+            "matches": {},
+        }
+
     def test_only_locks_inside_thirty_six_hour_window(self):
         self.assertTrue(eligible_to_lock(self.fixture, self.now))
         later = dict(self.fixture, ko=(self.now + timedelta(hours=37)).isoformat())
@@ -183,7 +192,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
 
     def test_locked_snapshot_is_not_rewritten(self):
         store, model, history, counts = evolve_competition_state(
-            league="pl", fixtures=[self.fixture], store={}, model=self.model,
+            league="pl", fixtures=[self.fixture], store=self.empty_current_store(), model=self.model,
             snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
             now=self.now,
         )
@@ -198,7 +207,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
 
     def test_finished_match_trains_exactly_once(self):
         store, model, _, _ = evolve_competition_state(
-            league="pl", fixtures=[self.fixture], store={}, model=self.model,
+            league="pl", fixtures=[self.fixture], store=self.empty_current_store(), model=self.model,
             snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
             now=self.now,
         )
@@ -475,7 +484,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
 
     def assert_invalid_builder_can_retry(self, invalid_snapshot):
         store, model, _, counts = evolve_competition_state(
-            league="pl", fixtures=[self.fixture], store={}, model=self.model,
+            league="pl", fixtures=[self.fixture], store=self.empty_current_store(), model=self.model,
             snapshot_builder=lambda fixture, state: invalid_snapshot,
             model_trainer=lambda state, rows: state, now=self.now,
         )
