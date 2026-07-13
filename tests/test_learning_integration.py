@@ -285,7 +285,7 @@ class PersistentCompetitionTests(unittest.TestCase):
         payload = {
             "teams": {"1": {"id": 1, "s": "A"}, "2": {"id": 2, "s": "B"}},
             "fix": [{
-                "id": 10, "e": 18, "grp": "A", "h": 1, "a": 2,
+                "id": 10, "e": 17, "grp": "A", "h": 1, "a": 2,
                 "ko": (now + timedelta(hours=1)).isoformat(),
                 "fin": False, "st": False, "hs": None, "as": None,
             }],
@@ -335,7 +335,7 @@ class PersistentCompetitionTests(unittest.TestCase):
         exec(compile(prefix, str(update_path), "exec"), namespace)
         now = datetime.now(timezone.utc)
         future = {
-            "id": 11, "e": 19, "grp": "A", "h": 1, "a": 2,
+            "id": 11, "e": 17, "grp": "A", "h": 1, "a": 2,
             "ko": (now + timedelta(hours=1)).isoformat(),
             "fin": False, "st": False, "hs": None, "as": None,
         }
@@ -381,7 +381,7 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(43, wc["model_comparison"]["challenger"]["winner_correct"])
         self.assertEqual(15, wc["model_comparison"]["challenger"]["exact_correct"])
         self.assertEqual(75, wc["model_comparison"]["challenger"]["points"])
-        self.assertEqual({"season": "2026", "gw": 19, "total": 1, "correct_winner": 1, "correct_score": 1, "exact_score": 1, "points": 3, "accuracy_pct": 100.0, "score_acc_pct": 100.0}, next(row for row in wc["gw_results"] if row["gw"] == 19))
+        self.assertEqual({"season": "2026", "gw": 17, "total": 1, "correct_winner": 1, "correct_score": 1, "exact_score": 1, "points": 3, "accuracy_pct": 100.0, "score_acc_pct": 100.0}, next(row for row in wc["gw_results"] if row["gw"] == 17))
         self.assertEqual(66, rerun["wc"]["total_evaluated"])
         self.assertEqual(["wc:2026:11"], rerun["wc"]["merged_lifecycle_match_ids"])
 

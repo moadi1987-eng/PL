@@ -52,11 +52,13 @@ def competition_rule(league, fixture):
         return {"key": "league", "result": 3, "exact": 5, "additive": True}
     if league != "wc" or not isinstance(fixture, dict):
         raise ValueError(f"invalid competition: {league!r}")
-    if fixture.get("grp"):
-        return {"key": "group", "result": 1, "exact": 3, "additive": False}
     day = fixture.get("e")
     if not _valid_score(day):
         raise ValueError("invalid World Cup phase")
+    if fixture.get("grp"):
+        if 1 <= day <= 17:
+            return {"key": "group", "result": 1, "exact": 3, "additive": False}
+        raise ValueError("invalid World Cup group round")
     if day == 35:
         return {"key": "final", "result": 8, "exact": 15, "additive": False}
     if day == 34:
@@ -418,6 +420,11 @@ def _state_error(message):
     raise StateConsistencyError(message)
 
 
+def _require_verified_current_lock(snapshot):
+    if snapshot.get("locked") is not True or snapshot.get("lock_verified") is not True:
+        _state_error("current lifecycle snapshot requires a verified lock")
+
+
 def _nonempty_string(value):
     return isinstance(value, str) and bool(value.strip())
 
@@ -656,6 +663,13 @@ def _validate_snapshot(snapshot, league, fallback_id, lifecycle_store):
     if not pre_normalized_legacy and legacy_flag is True and not unverified_legacy:
         _state_error("invalid legacy lifecycle boundary")
     legacy_compatibility = pre_normalized_legacy or unverified_legacy
+    if not legacy_compatibility:
+        _require_verified_current_lock(snapshot)
+        if league == "wc":
+            try:
+                _canonical_snapshot_rule(snapshot, league)
+            except ValueError as error:
+                raise StateConsistencyError("invalid World Cup lifecycle context") from error
     pick_validator = _valid_unverified_legacy_pick if unverified_legacy else _valid_pick
     picks = snapshot.get("picks")
     if "picks" in snapshot:
@@ -1061,6 +1075,8 @@ def evolve_competition_state(
     snapshots_by_key = {}
     storage_keys_by_match = {}
     for storage_key, snapshot in store["matches"].items():
+        if not _is_unverified_legacy(snapshot):
+            _require_verified_current_lock(snapshot)
         match_key = snapshot.get("match_key")
         if match_key in snapshots_by_key:
             raise StateConsistencyError(f"duplicate lifecycle identity: {match_key}")
@@ -1156,12 +1172,19 @@ def evolve_competition_state(
         match_key = snapshot["match_key"]
         if _is_unverified_legacy(snapshot) and snapshot.get("checked") is True:
             continue
+        if not _is_unverified_legacy(snapshot):
+            _require_verified_current_lock(snapshot)
         fixture = fixture_map.get(match_key)
         if not snapshot.get("checked") and fixture and fixture.get("fin") is True:
             try:
                 if not _valid_result(fixture):
                     raise ValueError("invalid completed result")
-                rule = _canonical_snapshot_rule(snapshot, league)
+                if _is_unverified_legacy(snapshot) and (
+                    historical_rule := snapshot.get("rule") or snapshot.get("phase_rule")
+                ):
+                    rule = _normalized_rule(historical_rule)
+                else:
+                    rule = _canonical_snapshot_rule(snapshot, league)
                 probabilities = snapshot.get("probabilities")
                 if probabilities is not None:
                     for strategy in ("baseline", "v4"):
@@ -1269,6 +1292,8 @@ def evolve_competition_state(
     for snapshot in store["matches"].values():
         if not snapshot.get("checked"):
             continue
+        if not _is_unverified_legacy(snapshot):
+            _require_verified_current_lock(snapshot)
         strategy_at_lock = snapshot.get("active_strategy_at_lock", "baseline")
         evaluation = (snapshot.get("evaluations") or {}).get(strategy_at_lock)
         if not evaluation:

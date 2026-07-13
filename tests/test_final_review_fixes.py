@@ -269,6 +269,22 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         }
 
     @staticmethod
+    def valid_unchecked_current_store():
+        store = FinalReviewLifecycleTests.valid_checked_current_store()
+        snapshot = store["matches"]["77"]
+        snapshot["checked"] = False
+        snapshot["model_trained"] = False
+        for key in (
+            "actual_home_score",
+            "actual_away_score",
+            "actual_winner",
+            "rule",
+            "evaluations",
+        ):
+            snapshot.pop(key, None)
+        return store
+
+    @staticmethod
     def valid_checked_context_store(league, round_id, phase=None):
         fixture = {"fin": True, "hs": 1, "as": 0, "e": round_id}
         if phase == "group":
@@ -448,6 +464,114 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         self.assertFalse(migrated["matches"]["91"]["lock_verified"])
         self.assertEqual(6, migrated["matches"]["91"]["round"])
 
+    def test_modern_snapshot_requires_exact_verified_lock_invariant(self):
+        cases = (
+            ("missing_locked", self.valid_checked_current_store, lambda row: row.pop("locked")),
+            ("false_locked", self.valid_unchecked_current_store, lambda row: row.update(locked=False)),
+            ("checked_unlocked", self.valid_checked_current_store, lambda row: row.update(locked=False)),
+            (
+                "missing_lock_verified",
+                self.valid_checked_current_store,
+                lambda row: row.pop("lock_verified"),
+            ),
+            (
+                "false_lock_verified",
+                self.valid_checked_current_store,
+                lambda row: row.update(lock_verified=False),
+            ),
+        )
+        for name, store_builder, mutate in cases:
+            with self.subTest(case=name):
+                store = store_builder()
+                mutate(store["matches"]["77"])
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "pl")
+
+        learning.validate_prediction_store(self.valid_checked_current_store(), "pl")
+        learning.validate_prediction_store(self.actual_pl_unverified_legacy_store(), "pl")
+
+    def test_invalid_preexisting_lock_claim_fails_before_occupying_fixture_identity(self):
+        store = self.valid_unchecked_current_store()
+        store["matches"]["77"]["locked"] = False
+        original = copy.deepcopy(store)
+        builder_calls = []
+        trainer_calls = []
+
+        with self.assertRaises(learning.StateConsistencyError):
+            evolve_competition_state(
+                league="pl",
+                fixtures=[self.fixture()],
+                store=store,
+                model=default_model_state("pl"),
+                snapshot_builder=lambda fixture, model: builder_calls.append(fixture) or self.snapshot_builder(
+                    fixture, model,
+                ),
+                model_trainer=lambda model, rows: trainer_calls.append(rows) or model,
+                now=self.now,
+            )
+
+        self.assertEqual(original, store)
+        self.assertEqual([], builder_calls)
+        self.assertEqual([], trainer_calls)
+
+    def test_defensive_lock_invariant_precedes_empty_ledger_evidence(self):
+        store = self.valid_checked_current_store()
+        snapshot = store["matches"]["77"]
+        snapshot["locked"] = False
+        snapshot["model_trained"] = False
+        model = default_model_state("pl")
+        model["applied_ledger_version"] = learning.LEDGER_VERSION
+        model["applied_match_keys"] = []
+        trainer_calls = []
+
+        with patch.object(
+            learning,
+            "normalize_prediction_store",
+            return_value=copy.deepcopy(store),
+        ), patch.object(
+            learning,
+            "comparison_summary",
+            wraps=learning.comparison_summary,
+        ) as comparison:
+            with self.assertRaises(learning.StateConsistencyError):
+                evolve_competition_state(
+                    league="pl",
+                    fixtures=[],
+                    store=store,
+                    model=model,
+                    snapshot_builder=lambda fixture, state: self.fail("no fixture should lock"),
+                    model_trainer=lambda state, rows: trainer_calls.append(rows) or state,
+                    now=self.now,
+                )
+
+        self.assertEqual([], trainer_calls)
+        comparison.assert_not_called()
+
+    def test_valid_current_snapshot_trains_with_present_empty_ledger(self):
+        store = self.valid_checked_current_store()
+        store["matches"]["77"]["model_trained"] = False
+        model = default_model_state("pl")
+        model["applied_ledger_version"] = learning.LEDGER_VERSION
+        model["applied_match_keys"] = []
+        trainer_calls = []
+
+        store, model, history, counts = evolve_competition_state(
+            league="pl",
+            fixtures=[],
+            store=store,
+            model=model,
+            snapshot_builder=lambda fixture, state: self.fail("no fixture should lock"),
+            model_trainer=lambda state, rows: trainer_calls.append(copy.deepcopy(rows)) or state,
+            now=self.now,
+        )
+
+        self.assertEqual(1, len(trainer_calls))
+        self.assertEqual(["pl:2025-26:77"], model["applied_match_keys"])
+        self.assertTrue(store["matches"]["77"]["model_trained"])
+        self.assertEqual(1, counts["trained"])
+        self.assertEqual(1, model["comparison"]["total"])
+        self.assertEqual(1, history["total_evaluated"])
+
     def test_checked_modern_rules_are_bound_to_competition_and_every_wc_phase(self):
         wc_contexts = (
             ("group", 6),
@@ -548,6 +672,126 @@ class FinalReviewLifecycleTests(unittest.TestCase):
         self.assertEqual({}, store["matches"])
         self.assertEqual(0, counts["locked"])
         self.assertEqual(1, counts["skipped"])
+
+    def test_wc_group_rule_and_lock_accept_only_rounds_one_through_seventeen(self):
+        invalid_rounds = (0, 18, 35, None, 1.5, -1, True)
+        for round_id in invalid_rounds:
+            with self.subTest(round=round_id):
+                upcoming = self.fixture(season="2026")
+                upcoming["grp"] = "A"
+                if round_id is None:
+                    upcoming.pop("e")
+                else:
+                    upcoming["e"] = round_id
+
+                with self.assertRaises(ValueError):
+                    competition_rule("wc", upcoming)
+                store, _model, _history, counts = evolve_competition_state(
+                    league="wc",
+                    fixtures=[upcoming],
+                    store={"version": 1, "league": "wc", "matches": {}},
+                    model=default_model_state("wc"),
+                    snapshot_builder=self.snapshot_builder,
+                    model_trainer=lambda state, rows: state,
+                    now=self.now,
+                )
+                self.assertEqual({}, store["matches"])
+                self.assertEqual(0, counts["locked"])
+                self.assertEqual(1, counts["skipped"])
+
+        for round_id in (1, 17):
+            with self.subTest(control=round_id):
+                upcoming = self.fixture(season="2026")
+                upcoming.update({"e": round_id, "grp": "A"})
+                self.assertEqual("group", competition_rule("wc", upcoming)["key"])
+                store, _model, _history, counts = evolve_competition_state(
+                    league="wc",
+                    fixtures=[upcoming],
+                    store={"version": 1, "league": "wc", "matches": {}},
+                    model=default_model_state("wc"),
+                    snapshot_builder=self.snapshot_builder,
+                    model_trainer=lambda state, rows: state,
+                    now=self.now,
+                )
+                self.assertEqual("group", store["matches"]["77"]["phase"])
+                self.assertEqual(round_id, store["matches"]["77"]["round"])
+                self.assertEqual(1, counts["locked"])
+
+        knockout = self.fixture(season="2026")
+        knockout.update({"e": 18, "grp": None})
+        self.assertEqual("r32", competition_rule("wc", knockout)["key"])
+        store, _model, _history, counts = evolve_competition_state(
+            league="wc",
+            fixtures=[knockout],
+            store={"version": 1, "league": "wc", "matches": {}},
+            model=default_model_state("wc"),
+            snapshot_builder=self.snapshot_builder,
+            model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        self.assertEqual("r32", store["matches"]["77"]["phase"])
+        self.assertEqual(1, counts["locked"])
+
+    def test_loaded_checked_wc_group_accepts_only_rounds_one_through_seventeen(self):
+        for round_id in (0, 18, 35, None, 1.5, -1, True):
+            with self.subTest(round=round_id):
+                store = self.valid_checked_context_store("wc", 1, "group")
+                snapshot = store["matches"]["77"]
+                if round_id is None:
+                    snapshot.pop("round")
+                else:
+                    snapshot["round"] = round_id
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "wc")
+
+        for round_id in (1, 17):
+            with self.subTest(control=round_id):
+                learning.validate_prediction_store(
+                    self.valid_checked_context_store("wc", round_id, "group"),
+                    "wc",
+                )
+        learning.validate_prediction_store(
+            self.valid_checked_context_store("wc", 18, "r32"),
+            "wc",
+        )
+
+    def test_loaded_unchecked_wc_context_rejects_invalid_group_rounds(self):
+        for round_id in (0, 18, 35, None):
+            with self.subTest(round=round_id):
+                store = self.valid_checked_context_store("wc", 1, "group")
+                snapshot = store["matches"]["77"]
+                snapshot["checked"] = False
+                snapshot["model_trained"] = False
+                for key in (
+                    "actual_home_score",
+                    "actual_away_score",
+                    "actual_winner",
+                    "rule",
+                    "evaluations",
+                ):
+                    snapshot.pop(key)
+                if round_id is None:
+                    snapshot.pop("round")
+                else:
+                    snapshot["round"] = round_id
+                with self.assertRaises(learning.StateConsistencyError):
+                    learning.validate_prediction_store(store, "wc")
+
+        for phase, round_id in (("group", 1), ("group", 17), ("r32", 18)):
+            with self.subTest(control=(phase, round_id)):
+                store = self.valid_checked_context_store("wc", round_id, phase)
+                snapshot = store["matches"]["77"]
+                snapshot["checked"] = False
+                snapshot["model_trained"] = False
+                for key in (
+                    "actual_home_score",
+                    "actual_away_score",
+                    "actual_winner",
+                    "rule",
+                    "evaluations",
+                ):
+                    snapshot.pop(key)
+                learning.validate_prediction_store(store, "wc")
 
     @staticmethod
     def _replace_checked_rule(store, rule):
@@ -906,7 +1150,7 @@ class FinalReviewLifecycleTests(unittest.TestCase):
 
             laliga_fixture = self.fixture(season="2026-27")
             wc_fixture = self.fixture(season="2026")
-            wc_fixture.update({"id": 88, "source_fixture_id": 88, "e": 18, "grp": "A"})
+            wc_fixture.update({"id": 88, "source_fixture_id": 88, "e": 17, "grp": "A"})
 
             history, _, _ = run_persistent_competition(
                 league="laliga", fixtures=[laliga_fixture], teams={},
