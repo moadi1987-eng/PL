@@ -304,6 +304,11 @@ function seasonData(lg,key){
 function activeLD(lg){return(lg==="pl"||lg==="laliga")?seasonData(lg,activeSeasonKey(lg)):LDATA[lg]}
 function renderSeasonSel(){
   var el=$("seasonSel");if(!el)return;
+  if(D.league==="wc"){
+    var wcYear='<option value="2026">2026</option>';
+    if(el.innerHTML!==wcYear)el.innerHTML=wcYear;
+    el.value="2026";el.title="World Cup year";el.style.display="block";return;
+  }
   var catalog=activeCatalog(D.league),items=catalog&&catalog.items?catalog.items:[];
   if(items.length<2){el.style.display="none";return}
   var h="";items.forEach(function(it){h+='<option value="'+it.key+'">'+it.label+'</option>'});

@@ -189,6 +189,22 @@ assert.deepStrictEqual(
 );
 assert.match(template, /llFixtureIdentity\(f,D\.llSeason\|\|LL_SEASONS\.current\)/);
 assert.match(template, /llFixtureIdentity\(\{id:\+\(ev\.id\|\|0\)\},season\)/);
+const renderSeasonStart = template.indexOf('function renderSeasonSel');
+const renderSeasonEnd = template.indexOf('\nfunction swSeason', renderSeasonStart);
+const wcSeasonSelect = { innerHTML: '', value: '', title: '', style: { display: '' } };
+const wcSeasonContext = {
+  D: { league: 'wc' },
+  $: () => wcSeasonSelect,
+  activeCatalog: () => null,
+  activeSeasonKey: () => '',
+};
+vm.createContext(wcSeasonContext);
+vm.runInContext(template.slice(renderSeasonStart, renderSeasonEnd), wcSeasonContext);
+wcSeasonContext.renderSeasonSel();
+assert.strictEqual(wcSeasonSelect.innerHTML, '<option value="2026">2026</option>');
+assert.strictEqual(wcSeasonSelect.value, '2026');
+assert.strictEqual(wcSeasonSelect.title, 'World Cup year');
+assert.strictEqual(wcSeasonSelect.style.display, 'block');
 const guessSource = template.slice(
   template.indexOf('var _gMerged=false;'),
   template.indexOf('function autoFillDueGuesses'),
