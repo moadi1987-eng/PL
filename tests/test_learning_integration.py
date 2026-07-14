@@ -799,7 +799,9 @@ class PersistentCompetitionTests(unittest.TestCase):
 
         namespace["run_persistent_competition"] = runner
 
-        updated = namespace["run_league_learning"]([], {}, [], {}, stale_history)
+        with tempfile.TemporaryDirectory() as tmp:
+            namespace["LEARNING_HISTORY_FILE"] = str(Path(tmp) / "history.json")
+            updated = namespace["run_league_learning"]([], {}, [], {}, stale_history)
 
         self.assertEqual(0, updated["pl"]["model_status"]["verified_lifecycle_samples"])
         self.assertEqual(0, updated["laliga"]["model_status"]["verified_lifecycle_samples"])
@@ -909,15 +911,17 @@ class PersistentCompetitionTests(unittest.TestCase):
             "season": "2025-26",
         }
 
-        history = namespace["run_league_learning"](
-            [],
-            {},
-            [archive_fixture, current_fixture],
-            {1: {"id": 1}, 2: {"id": 2}},
-            {},
-            ll_season="2026-27",
-            ll_available_seasons=["2026-27", "2025-26"],
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            namespace["LEARNING_HISTORY_FILE"] = str(Path(tmp) / "history.json")
+            history = namespace["run_league_learning"](
+                [],
+                {},
+                [archive_fixture, current_fixture],
+                {1: {"id": 1}, 2: {"id": 2}},
+                {},
+                ll_season="2026-27",
+                ll_available_seasons=["2026-27", "2025-26"],
+            )
 
         laliga_call = next(call for call in calls if call["league"] == "laliga")
         self.assertEqual([current_fixture], laliga_call["fixtures"])
