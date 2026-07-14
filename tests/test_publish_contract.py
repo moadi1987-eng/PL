@@ -925,6 +925,33 @@ def _alternate_upload_paths(workflow):
 
 
 class PublishContractTests(unittest.TestCase):
+    def test_mobile_selector_and_archived_laliga_contract(self):
+        template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+
+        self.assertIn('llSeason:""', template)
+        self.assertIn("function activeCatalog(lg)", template)
+        self.assertIn("function activeSeasonKey(lg)", template)
+        self.assertIn("function seasonData(lg,key)", template)
+        selector = template.split("function renderSeasonSel()", 1)[1].split("function swSeason", 1)[0]
+        self.assertNotIn('D.league!=="pl"', selector)
+        self.assertIn("activeCatalog(D.league)", selector)
+        self.assertIn("La Liga season", selector)
+        self.assertIn("sessionStorage.setItem(seasonStorageKey(lg)", template)
+        self.assertIn("if(D.arch)return;", template)
+        self.assertIn("(m.fin||D.arch)?\"disabled\":\"\"", template)
+        self.assertIn("if(openPlayable.length>0&&!D.arch)", template)
+        self.assertIn("function fetchLive(){\n  if(D.arch)return;", template)
+        self.assertIn("d.ll_seasons[D.llSeason]", template)
+        self.assertIn("D.llSeason===LL_SEASONS.current", template)
+        self.assertIn("SEASON_RUNTIME.migrateLegacyLaligaGuesses(localStorage,D.llSeason)", template)
+        self.assertIn("EMBEDDED_GUESSES_LL_SEASONS[D.llSeason]", template)
+        for name in ("sG", "setW", "setS", "randomFill", "aiFill", "autoFillDueGuesses"):
+            body = template.split(f"function {name}(", 1)[1][:180]
+            self.assertIn("if(D.arch)return", body, name)
+        for name in ("fetchLive", "_fLiveJson", "_fetchLeague", "_applyData", "_fPL", "_fLL", "_fWC", "_fWCQuick"):
+            body = template.split(f"function {name}(", 1)[1][:180]
+            self.assertIn("if(D.arch", body, name)
+
     def test_season_runtime_is_embedded_once_after_data_and_before_init(self):
         source = self.source
         template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")

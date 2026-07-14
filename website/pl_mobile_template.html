@@ -237,9 +237,10 @@ body.wc .htot .hl,body.wc .htot .hp{color:#f7c948}
 /*__LEARNING_RUNTIME__*/
 /*__SEASON_RUNTIME__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
-var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,ct3:null,ct4:null,cn:5,league:"pl",gwl:"GW",arch:false,plSeason:""};
+var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,ct3:null,ct4:null,cn:5,league:"pl",gwl:"GW",arch:false,plSeason:"",llSeason:""};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]},wc:{tm:{},gw:[],fx:[],archive:false}};
 var PL_SEASONS={current:"2025-26",items:[],data:{}};
+var LL_SEASONS={current:"2026-27",items:[],data:{}};
 function $(i){return document.getElementById(i)}
 function T(id){return D.tm[id]||{s:"?",b:"",n:"?"}}
 function ilDateKey(v){
@@ -280,36 +281,43 @@ function setLeagueLook(lg){
   document.querySelectorAll(".lb").forEach(function(b){b.className="lb"+(b.getAttribute("data-l")===lg?" a":"")});
   renderSeasonSel();
 }
-function normPLSeason(raw){
-  if(!raw)return{tm:{},gw:[],fx:[]};
+function normSeason(raw){
+  if(!raw)return{tm:{},gw:[],fx:[],archive:false,label:""};
   return{tm:raw.teams||{},gw:raw.gws||[],fx:raw.fix||[],archive:!!raw.archive,label:raw.label||""};
 }
-function plSeasonData(key){
-  var data=PL_SEASONS&&PL_SEASONS.data?PL_SEASONS.data:{};
-  var k=(key&&data[key])?key:(D.plSeason&&data[D.plSeason])?D.plSeason:PL_SEASONS.current;
-  if(!data[k]){var ks=Object.keys(data);k=ks.length?ks[0]:""}
-  D.plSeason=k||"";
-  return data[k]?normPLSeason(data[k]):LDATA.pl;
+function activeCatalog(lg){return SEASON_RUNTIME.catalogFor(lg,PL_SEASONS,LL_SEASONS)}
+function activeSeasonKey(lg){return lg==="pl"?D.plSeason:lg==="laliga"?D.llSeason:""}
+function setActiveSeasonKey(lg,key){if(lg==="pl")D.plSeason=key;else if(lg==="laliga")D.llSeason=key}
+function seasonStorageKey(lg){return lg==="pl"?"plSeason":"llSeason"}
+function seasonData(lg,key){
+  var catalog=activeCatalog(lg),resolved=SEASON_RUNTIME.resolveKey(catalog,key);
+  setActiveSeasonKey(lg,resolved);
+  var raw=SEASON_RUNTIME.packFor(catalog,resolved);
+  return raw?normSeason(raw):LDATA[lg];
 }
-function activeLD(lg){return lg==="pl"?plSeasonData(D.plSeason):LDATA[lg]}
+function activeLD(lg){return(lg==="pl"||lg==="laliga")?seasonData(lg,activeSeasonKey(lg)):LDATA[lg]}
 function renderSeasonSel(){
   var el=$("seasonSel");if(!el)return;
-  var items=PL_SEASONS&&PL_SEASONS.items?PL_SEASONS.items:[];
-  if(D.league!=="pl"||items.length<2){el.style.display="none";return}
+  var catalog=activeCatalog(D.league),items=catalog&&catalog.items?catalog.items:[];
+  if(items.length<2){el.style.display="none";return}
   var h="";items.forEach(function(it){h+='<option value="'+it.key+'">'+it.label+'</option>'});
   if(el.innerHTML!==h)el.innerHTML=h;
-  el.value=D.plSeason||PL_SEASONS.current;el.style.display="block";
+  el.value=activeSeasonKey(D.league)||catalog.current;el.title=D.league==="laliga"?"La Liga season":"Premier League season";el.style.display="block";
 }
 function swSeason(key){
-  if(D.league!=="pl"||key===D.plSeason)return;
-  var ld=plSeasonData(key);if(!ld||!ld.tm||!Object.keys(ld.tm).length)return;
-  sessionStorage.setItem("plSeason",D.plSeason);sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
+  var lg=D.league,catalog=activeCatalog(lg);if(!catalog)return;
+  var resolved=SEASON_RUNTIME.resolveKey(catalog,key);if(!resolved||resolved===activeSeasonKey(lg))return;
+  var ld=seasonData(lg,resolved);if(!ld||!ld.tm||!Object.keys(ld.tm).length)return;
+  sessionStorage.setItem(seasonStorageKey(lg),activeSeasonKey(lg));sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
   D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;_gMerged=false;
-  initAfterData();render();fetchLive();
+  initAfterData();render();if(!D.arch)fetchLive();
 }
 function swL(lg){
   if(lg===D.league)return;
-  D.league=lg;if(lg==="pl")D.plSeason=sessionStorage.getItem("plSeason")||D.plSeason||PL_SEASONS.current;setLeagueLook(lg);
+  D.league=lg;
+  if(lg==="pl")D.plSeason=SEASON_RUNTIME.resolveKey(PL_SEASONS,sessionStorage.getItem("plSeason")||D.plSeason);
+  else if(lg==="laliga")D.llSeason=SEASON_RUNTIME.resolveKey(LL_SEASONS,sessionStorage.getItem("llSeason")||D.llSeason);
+  setLeagueLook(lg);
   sessionStorage.setItem("plLeague",lg);sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
   var ld=activeLD(lg);
   if(ld&&ld.tm&&Object.keys(ld.tm).length){D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;_gMerged=false;initAfterData();render();fetchLive()}
@@ -329,9 +337,15 @@ function init(){
   }else{
     PL_SEASONS={current:"2025-26",items:[{key:"2025-26",label:"2025/26"}],data:{"2025-26":EMBEDDED}};
   }
-  D.plSeason=sessionStorage.getItem("plSeason")||PL_SEASONS.current||"2025-26";
-  LDATA.pl=plSeasonData(D.plSeason);
-  if(typeof EMBEDDED_LL!=="undefined"&&EMBEDDED_LL.teams){LDATA.laliga={tm:EMBEDDED_LL.teams,gw:EMBEDDED_LL.gws,fx:EMBEDDED_LL.fix}}
+  if(typeof EMBEDDED_LL_SEASONS!=="undefined"&&EMBEDDED_LL_SEASONS.data){
+    LL_SEASONS=EMBEDDED_LL_SEASONS;
+  }else if(typeof EMBEDDED_LL!=="undefined"&&EMBEDDED_LL.teams){
+    LL_SEASONS={current:"2026-27",items:[{key:"2026-27",label:"2026/27"}],data:{"2026-27":EMBEDDED_LL}};
+  }
+  D.plSeason=SEASON_RUNTIME.resolveKey(PL_SEASONS,sessionStorage.getItem("plSeason")||PL_SEASONS.current||"2025-26");
+  D.llSeason=SEASON_RUNTIME.resolveKey(LL_SEASONS,sessionStorage.getItem("llSeason")||LL_SEASONS.current||"2026-27");
+  LDATA.pl=seasonData("pl",D.plSeason);
+  LDATA.laliga=seasonData("laliga",D.llSeason);
   if(typeof EMBEDDED_WC!=="undefined"&&EMBEDDED_WC.teams){LDATA.wc={tm:EMBEDDED_WC.teams,gw:EMBEDDED_WC.gws,fx:EMBEDDED_WC.fix,archive:!!EMBEDDED_WC.archive}}
   var savedLg=sessionStorage.getItem("plLeague")||"pl";
   D.league=savedLg;setLeagueLook(savedLg);
@@ -358,11 +372,13 @@ function init(){
 }
 
 function autoSync(){
+  if(D.arch)return;
   if(location.port==="5000"){trySync(location.origin);return}
   if(typeof EMBEDDED_SERVER!=="undefined"&&EMBEDDED_SERVER){trySync(EMBEDDED_SERVER);return}
 }
 
 function trySync(server){
+  if(D.arch)return;
   var local=gG();
   var phoneData={};var hasData=false;
   for(var gw in local){phoneData[gw]={};for(var mid in local[gw]){if(local[gw][mid].w){phoneData[gw][mid]=local[gw][mid];hasData=true}}}
@@ -428,12 +444,13 @@ function pxF(url,cb){
 }
 
 function fetchLive(){
+  if(D.arch)return;
   if(location.port==='5000')return;
-  if(D.league==='wc'&&D.arch){_updDone(true);return}
   _fLiveJson();
 }
 
 function _fetchLeague(){
+  if(D.arch)return;
   if(D.league==='pl')_fPL();
   else if(D.league==='wc'&&D.fx&&D.fx.some(function(f){return _matchIsDueOrLive(f,new Date())}))_fWCQuick();
   else if(D.league==='wc')_fWC();
@@ -492,6 +509,7 @@ function _liveJsonNeedsFresh(liveSet,ageMs,now){
 }
 
 function _fLiveJson(){
+  if(D.arch)return;
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
   var url='./live.json?t='+Date.now();
@@ -508,7 +526,9 @@ function _fLiveJson(){
           var ageMs=d.ts?(Date.now()-new Date(d.ts).getTime()):0;
           var plPackForLive=d.pl_seasons&&D.plSeason?d.pl_seasons[D.plSeason]:null;
           var plLiveSet=plPackForLive&&plPackForLive.fix?plPackForLive.fix:((!D.plSeason||D.plSeason==="2025-26")?(d.fix||[]):[]);
-          var liveSet=D.league==='wc'?(d.fix_wc||[]):D.league==='laliga'?(d.fix_ll||[]):plLiveSet;
+          var llPackForLive=d.ll_seasons&&D.llSeason?d.ll_seasons[D.llSeason]:null;
+          var llLiveSet=llPackForLive&&llPackForLive.fix?llPackForLive.fix:(D.llSeason===LL_SEASONS.current?(d.fix_ll||[]):[]);
+          var liveSet=D.league==='wc'?(d.fix_wc||[]):D.league==='laliga'?llLiveSet:plLiveSet;
           var needsFresh=_liveJsonNeedsFresh(liveSet,ageMs,now)||_liveJsonNeedsFresh(D.fx||[],ageMs,now);
           function tryFresh(){if(needsFresh)setTimeout(_fetchLeague,80)}
 
@@ -537,10 +557,12 @@ function _fLiveJson(){
             _applyData('pl',D.tm||{},plGW,fix);_updDone(true);tryFresh();return;
           }
 
-          if(D.league==='laliga'&&d.fix_ll){
+          var llPack=d.ll_seasons&&D.llSeason?d.ll_seasons[D.llSeason]:null;
+          var rawLL=llPack&&llPack.fix?llPack.fix:(D.llSeason===LL_SEASONS.current?(d.fix_ll||[]):null);
+          if(D.league==='laliga'&&rawLL&&!D.arch){
             var llFix=[];
             var needFreshLL=false;
-            d.fix_ll.forEach(function(f){
+            rawLL.forEach(function(f){
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
               if(st&&!fin&&ko){
                 var el=Math.floor((now-new Date(ko))/60000);
@@ -632,10 +654,16 @@ function _updDone(ok){
 }
 
 function _applyData(lg,tm,gws,fix){
+  if(D.arch&&D.league===lg)return;
   if(lg==="pl"&&D.plSeason&&PL_SEASONS&&PL_SEASONS.data){
     var raw=PL_SEASONS.data[D.plSeason]||{};
     raw.teams=tm;raw.gws=gws;raw.fix=fix;PL_SEASONS.data[D.plSeason]=raw;
-    LDATA[lg]=normPLSeason(raw);
+    LDATA[lg]=normSeason(raw);
+  }else if(lg==="laliga"&&D.llSeason&&LL_SEASONS&&LL_SEASONS.data){
+    var rawLL=LL_SEASONS.data[D.llSeason]||{};
+    if(rawLL.archive)return;
+    rawLL.teams=tm;rawLL.gws=gws;rawLL.fix=fix;LL_SEASONS.data[D.llSeason]=rawLL;
+    LDATA[lg]=normSeason(rawLL);
   }else{
     LDATA[lg]={tm:tm,gw:gws,fx:fix};
   }
@@ -648,8 +676,9 @@ function _applyData(lg,tm,gws,fix){
 }
 
 function _fPL(){
+  if(D.arch)return;
   if(D.plSeason&&D.plSeason!=="2025-26"){
-    var ld=plSeasonData(D.plSeason);
+    var ld=seasonData("pl",D.plSeason);
     if(ld&&ld.fx){_applyData('pl',ld.tm,ld.gw,ld.fx);_updDone(true)}
     else _updDone(false);
     return;
@@ -701,11 +730,12 @@ function _fPL(){
 }
 
 function _fLL(){
+  if(D.arch)return seasonData('laliga',D.llSeason);
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
-  var now=new Date();
-  var sy=now.getMonth()>=6?now.getFullYear():now.getFullYear()-1;
-  var dr=sy+'0801-'+(sy+1)+'0630';
+  var season=D.llSeason||LL_SEASONS.current,parts=/^(\d{4})-\d{2}$/.exec(season);
+  if(!parts){_updDone(false);return}
+  var sy=+parts[1],dr=sy+'0801-'+(sy+1)+'0630';
   pxF(ESPNSB+'?dates='+dr+'&limit=1000',function(d){
     if(fid!==_fid)return;
     var evts=d?(d.events||null):null;
@@ -839,6 +869,7 @@ function wcMergeFifaFix(fix,d){
   return out;
 }
 function _fWCFifaFallback(fid){
+  if(D.arch)return;
   pxF(FIFAWC,function(fd){
     if(fid!==_fid)return;
     if(!fd||!D.fx||!D.fx.length){_updDone(false);return}
@@ -876,6 +907,7 @@ function _wcPatchFromEvent(ev,tm){
   return{id:+(ev.id||0),e:0,h:+(hm.team.id),a:+(aw.team.id),hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||'',grp:grp};
 }
 function _fWCQuick(){
+  if(D.arch)return;
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
   var base=(D.fx||[]).slice(),tm=D.tm&&Object.keys(D.tm).length?D.tm:{};
@@ -913,6 +945,7 @@ function _fWCQuick(){
 }
 
 function _fWC(){
+  if(D.arch)return;
   _fid++;var fid=_fid;
   $('upd').textContent='\u21BB ...';
   pxF(ESPNWC+'?dates=20260611-20260719&limit=200',function(d){
@@ -1419,17 +1452,20 @@ function _tickAll(){
 function startTicker(){if(_tickTmr)clearInterval(_tickTmr);_tickTmr=setInterval(_tickAll,1000);}
 startTicker();
 var _gMerged=false;
-function _gKey(){return SEASON_RUNTIME.guessKey(D.league,D.league==="pl"?(D.plSeason||"2025-26"):"")}
+function _gKey(){return SEASON_RUNTIME.guessKey(D.league,activeSeasonKey(D.league))}
 function _hasGuess(g){return !!(g&&(g.w||g.hs!=null||g.as!=null))}
 function gG(){
   var key=_gKey();
-  if(D.league==="laliga")SEASON_RUNTIME.migrateLegacyLaligaGuesses(localStorage,D.plSeason||"2025-26");
+  if(D.league==="laliga"&&D.arch)SEASON_RUNTIME.migrateLegacyLaligaGuesses(localStorage,D.llSeason);
   var local={};try{local=JSON.parse(localStorage.getItem(key)||"{}")}catch(e){}
   if(D.league==="pl"&&(D.plSeason==="2025-26"||!D.plSeason)&&!Object.keys(local).length){
     try{local=JSON.parse(localStorage.getItem("plg")||"{}")}catch(e){}
   }
   var embData;
-  if(D.league==="laliga")embData=typeof EMBEDDED_GUESSES_LL!=="undefined"?EMBEDDED_GUESSES_LL:undefined;
+  if(D.league==="laliga"){
+    embData=typeof EMBEDDED_GUESSES_LL_SEASONS!=="undefined"?EMBEDDED_GUESSES_LL_SEASONS[D.llSeason]:undefined;
+    if(!embData&&typeof EMBEDDED_GUESSES_LL!=="undefined")embData=EMBEDDED_GUESSES_LL;
+  }
   else if(D.league==="wc")embData=typeof EMBEDDED_GUESSES_WC!=="undefined"?EMBEDDED_GUESSES_WC:undefined;
   else embData=(D.plSeason==="2025-26"||!D.plSeason)&&typeof EMBEDDED_GUESSES!=="undefined"?EMBEDDED_GUESSES:undefined;
   if(!_gMerged&&embData){
@@ -1439,12 +1475,13 @@ function gG(){
       var eg=embData[gw];
       for(var mid in eg){if(!local[gw][mid])local[gw][mid]=eg[mid]}
     }
-    localStorage.setItem(key,JSON.stringify(local));
+    if(!D.arch)localStorage.setItem(key,JSON.stringify(local));
   }
   return local;
 }
-function sG(d){localStorage.setItem(_gKey(),JSON.stringify(d))}
+function sG(d){if(D.arch)return;localStorage.setItem(_gKey(),JSON.stringify(d))}
 function autoFillDueGuesses(){
+  if(D.arch)return 0;
   if(!D.fx||!D.fx.length)return 0;
   var now=Date.now(),ag=gG(),changed=0;
   D.fx.forEach(function(m){
@@ -1563,6 +1600,7 @@ function rPred(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No
 function _rndGoal(){var r=Math.random();if(r<.28)return 0;if(r<.62)return 1;if(r<.84)return 2;if(r<.94)return 3;return 4}
 
 function randomFill(){
+  if(D.arch)return;
   var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
@@ -1577,6 +1615,7 @@ function randomFill(){
 }
 
 function aiFill(){
+  if(D.arch)return;
   var gw=D.sel,ms=gFix(),ag=gG();
   if(!ag[gw])ag[gw]={};
   ms.forEach(function(m){
@@ -1599,9 +1638,9 @@ function rGF(){var gw=D.sel,ms=gFix();if(!ms.length)return'<div class="emp">No f
   var openPlayable=open.filter(function(m){return aiReadyMatch(m)});
   var filled=open.filter(function(m){return gg[m.id]&&gg[m.id].w}).length;
   var h="";
-  if(openPlayable.length>0)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
+  if(openPlayable.length>0&&!D.arch)h+='<div class="af-bar"><button class="af-btn af-ai" onclick="aiFill()">&#129302; AI Fill</button><button class="af-btn af-rnd" onclick="randomFill()">&#127922; Random</button></div>';
   if(tot>0)h+='<div class="psum">'+(D.gwl||"GW")+gw+': <b>'+cw+'</b> result(s), <b>'+ce+'</b> exact — <b>'+pts+' pts</b></div>';
-  ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=m.fin?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
+  ms.forEach(function(m){var hm=T(m.h),am=T(m.a),g=gg[m.id]||{},dis=(m.fin||D.arch)?"disabled":"",sh=g.w==="home"?"sh":"",sd=g.w==="draw"?"sd":"",sa=g.w==="away"?"sa":"";
     var cls="",bdg="",act="",rk=betRank[m.id]||0;
     if(m.fin&&(g.w||g.hs!=null)){var sc=scoreGuess(m,g);cls=sc.exact?"rex":sc.correct?"rok":"rbad";bdg=sc.exact?'<span class="rb re">★</span>':sc.correct?'<span class="rb rc">✓</span>':'<span class="rb rw">✗</span>';act='<div class="act">Actual: <b>'+m.hs+' - '+m.as+'</b> · '+sc.points+' pts</div>'}
     else if(rk){bdg='<span class="tbg">#'+rk+' Best Bet</span>'}
@@ -1682,6 +1721,7 @@ function rGH(){var ag=gG(),h='<div class="sec" style="margin-top:.6rem">My Histo
   return h;}
 
 function setW(gw,mid,w){
+  if(D.arch)return;
   var a=gG();if(!a[gw])a[gw]={};if(!a[gw][mid])a[gw][mid]={};a[gw][mid].w=w;a[gw][mid].src="manual";sG(a);
   var card=document.querySelector('[data-mid="'+mid+'"]');if(!card){rGuess();return}
   card.querySelectorAll('.wn').forEach(function(b){b.className='wn'});
@@ -1690,6 +1730,7 @@ function setW(gw,mid,w){
   card.classList.add('has');
 }
 function setS(gw,mid){
+  if(D.arch)return;
   var hv=$("h"+mid).value,av=$("a"+mid).value;
   var a=gG();if(!a[gw])a[gw]={};if(!a[gw][mid])a[gw][mid]={};
   if(hv!==""&&av!==""){
@@ -1881,7 +1922,7 @@ function rAI(){
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
   var lgKey=D.league,isPL=lgKey==='pl',isWC=lgKey==='wc';
   var lgData=lh[lgKey]||{gw_results:[]};
-  var selectedSeason=isPL?(D.plSeason||lgData.current_season||""):(lgData.current_season||"");
+  var selectedSeason=isPL?(D.plSeason||lgData.current_season||""):(lgKey==="laliga"?(D.llSeason||lgData.current_season||""):(lgData.current_season||""));
   var rows=learningRowsForSeason(normAIRows(lgData.gw_results||[]),selectedSeason);
   if(!rows.length){var localRows=normAIRows(localLearningRows());localRows.forEach(function(row){row.season=selectedSeason});rows=learningRowsForSeason(localRows,selectedSeason)}
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;

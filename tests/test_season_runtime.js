@@ -11,11 +11,14 @@ assert.ok(runtime);
 const llCatalog = {
   current: '2026-27',
   items: [{ key: '2026-27' }, { key: '2025-26' }],
-  data: { '2026-27': { id: 'current' }, '2025-26': { id: 'archive' } },
+  data: { '2026-27': { id: 'current', archive: false }, '2025-26': { id: 'archive', archive: true } },
 };
+assert.strictEqual(runtime.catalogFor('laliga', null, llCatalog).items.length, 2);
+assert.strictEqual(runtime.catalogFor('wc', null, llCatalog), null);
 assert.strictEqual(runtime.resolveKey(llCatalog, '2025-26'), '2025-26');
 assert.strictEqual(runtime.resolveKey(llCatalog, 'missing'), '2026-27');
 assert.strictEqual(runtime.packFor(llCatalog, '2025-26').id, 'archive');
+assert.strictEqual(runtime.packFor(llCatalog, '2025-26').archive, true);
 assert.strictEqual(runtime.catalogFor('laliga', null, llCatalog), llCatalog);
 assert.strictEqual(runtime.catalogFor('pl', { data: {}, items: [] }, llCatalog), null);
 assert.strictEqual(runtime.guessKey('laliga', '2025-26'), 'llg_2025-26');
