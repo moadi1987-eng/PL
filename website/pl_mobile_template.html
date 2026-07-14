@@ -320,6 +320,7 @@ function swL(lg){
   setLeagueLook(lg);
   sessionStorage.setItem("plLeague",lg);sessionStorage.removeItem("plGW");sessionStorage.removeItem("plGWDate");
   var ld=activeLD(lg);
+  D.arch=!!(ld&&ld.archive);
   if(ld&&ld.tm&&Object.keys(ld.tm).length){D.tm=ld.tm;D.gw=ld.gw;D.fx=ld.fx;D.arch=!!ld.archive;_gMerged=false;initAfterData();render();fetchLive()}
   else{var msg='<div class="emp">Fetching live '+lg+' data...</div>';for(var ti=0;ti<4;ti++)$("t"+ti).innerHTML=msg;fetchLive()}
 }

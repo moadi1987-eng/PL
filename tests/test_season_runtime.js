@@ -54,4 +54,68 @@ current.setItem('llg', JSON.stringify({ legacy: true }));
 assert.strictEqual(runtime.migrateLegacyLaligaGuesses(current, '2026-27'), false);
 assert.strictEqual(current.getItem('llg_2026-27'), null);
 
+function createStorage() {
+  const values = Object.create(null);
+  return {
+    getItem(key) { return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null; },
+    setItem(key, value) { values[key] = String(value); },
+    removeItem(key) { delete values[key]; },
+  };
+}
+
+function loadMobileTemplate() {
+  const template = fs.readFileSync(require('path').join(__dirname, '..', 'website', 'pl_mobile_template.html'), 'utf8');
+  const start = template.indexOf('<script>') + '<script>'.length;
+  const end = template.lastIndexOf('</script>');
+  const elements = Object.create(null);
+  function element() {
+    return { style: {}, className: '', innerHTML: '', textContent: '', setAttribute() {}, getAttribute() { return null; } };
+  }
+  const mobileContext = {
+    console,
+    SEASON_RUNTIME: runtime,
+    document: {
+      body: { className: '' },
+      getElementById(id) { return elements[id] || (elements[id] = element()); },
+      querySelectorAll() { return []; },
+      querySelector() { return null; },
+    },
+    sessionStorage: createStorage(),
+    localStorage: createStorage(),
+    location: { port: '', origin: '' },
+    navigator: {},
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout() { return 1; },
+    clearTimeout() {},
+  };
+  vm.runInNewContext(template.slice(start, end).replace(/\ninit\(\);\s*$/, '\n'), mobileContext, { filename: 'pl_mobile_template.html' });
+  return { mobileContext, elements };
+}
+
+for (const transition of [
+  { from: 'laliga', to: 'pl' },
+  { from: 'pl', to: 'laliga' },
+  { from: 'laliga', to: 'wc' },
+]) {
+  const { mobileContext, elements } = loadMobileTemplate();
+  const state = mobileContext.D;
+  state.league = transition.from;
+  state.arch = true;
+  mobileContext.PL_SEASONS = { current: '', items: [], data: {} };
+  mobileContext.LL_SEASONS = { current: '', items: [], data: {} };
+  mobileContext.LDATA.pl = { tm: {}, gw: [], fx: [] };
+  mobileContext.LDATA.laliga = { tm: {}, gw: [], fx: [] };
+  mobileContext.LDATA.wc = { tm: {}, gw: [], fx: [] };
+  let fetches = 0;
+  mobileContext.fetchLive = () => { fetches += 1; };
+
+  mobileContext.swL(transition.to);
+
+  assert.strictEqual(state.league, transition.to, `${transition.from} -> ${transition.to} league`);
+  assert.strictEqual(state.arch, false, `${transition.from} -> ${transition.to} clears stale archive state`);
+  assert.strictEqual(fetches, 1, `${transition.from} -> ${transition.to} starts the empty-target fetch`);
+  assert.match(elements.t0.innerHTML, new RegExp(`Fetching live ${transition.to} data`));
+}
+
 console.log('season runtime tests passed');
