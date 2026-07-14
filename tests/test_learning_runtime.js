@@ -169,6 +169,39 @@ assert.strictEqual(context.activeWeights().strength, 0.41);
 assert.strictEqual(context.activeCalibration().goal_mult, 1.04);
 
 const template = fs.readFileSync('website/pl_mobile_template.html', 'utf8');
+const guessSource = template.slice(
+  template.indexOf('var _gMerged=false;'),
+  template.indexOf('function autoFillDueGuesses'),
+);
+const archiveGuessStorage = new Map();
+let archiveGuessWrites = 0;
+const archiveGuessContext = {
+  D: { league: 'laliga', llSeason: '2025-26', arch: true },
+  EMBEDDED_GUESSES_LL_SEASONS: {
+    '2025-26': { 29: { 748424: { w: 'draw', hs: null, as: null } } },
+    '2026-27': {},
+  },
+  SEASON_RUNTIME: {
+    guessKey: (league, season) => (league === 'laliga' ? `llg_${season}` : 'wcg'),
+    migrateLegacyLaligaGuesses: () => false,
+  },
+  activeSeasonKey: () => '2025-26',
+  localStorage: {
+    getItem: (key) => (archiveGuessStorage.has(key) ? archiveGuessStorage.get(key) : null),
+    setItem: (key, value) => {
+      archiveGuessWrites += 1;
+      archiveGuessStorage.set(key, value);
+    },
+  },
+};
+vm.createContext(archiveGuessContext);
+vm.runInContext(guessSource, archiveGuessContext);
+const firstArchiveGuesses = JSON.parse(JSON.stringify(archiveGuessContext.gG()));
+const secondArchiveGuesses = JSON.parse(JSON.stringify(archiveGuessContext.gG()));
+assert.strictEqual(firstArchiveGuesses['29']['748424'].w, 'draw');
+assert.strictEqual(secondArchiveGuesses['29']['748424'].w, 'draw');
+assert.strictEqual(archiveGuessWrites, 0);
+
 const statusSource = template.slice(template.indexOf('function aiStatusText'), template.indexOf('function aiTrendChart'));
 const renderContext = {
 };

@@ -1469,8 +1469,8 @@ function gG(){
   }
   else if(D.league==="wc")embData=typeof EMBEDDED_GUESSES_WC!=="undefined"?EMBEDDED_GUESSES_WC:undefined;
   else embData=(D.plSeason==="2025-26"||!D.plSeason)&&typeof EMBEDDED_GUESSES!=="undefined"?EMBEDDED_GUESSES:undefined;
-  if(!_gMerged&&embData){
-    _gMerged=true;
+  if((!_gMerged||D.arch)&&embData){
+    if(!D.arch)_gMerged=true;
     for(var gw in embData){
       if(!local[gw])local[gw]={};
       var eg=embData[gw];
