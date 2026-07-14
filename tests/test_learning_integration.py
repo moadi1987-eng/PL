@@ -541,8 +541,10 @@ class PersistentCompetitionTests(unittest.TestCase):
             return ({"pl": {"model_comparison": {"total": 0}, "model_status": {"verified_lifecycle_samples": 0}}}, {}, {})
 
         namespace["run_persistent_competition"] = runner
-        with self.assertRaisesRegex(PermissionError, "laliga denied"):
-            namespace["run_league_learning"]([], {}, [], {}, {})
+        with tempfile.TemporaryDirectory() as tmp:
+            namespace["LEARNING_HISTORY_FILE"] = str(Path(tmp) / "history.json")
+            with self.assertRaisesRegex(PermissionError, "laliga denied"):
+                namespace["run_league_learning"]([], {}, [], {}, {})
         self.assertEqual(["pl", "laliga"], calls)
 
     def test_wc_delegates_archive_merge_to_persistent_runner(self):
