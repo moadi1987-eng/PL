@@ -43,6 +43,21 @@ def _is_positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _event_fixture_id(event):
+    raw_id = event.get("id") if isinstance(event, dict) else None
+    if isinstance(raw_id, bool):
+        raise ValueError("invalid La Liga fixture id")
+    if isinstance(raw_id, int):
+        fixture_id = raw_id
+    elif isinstance(raw_id, str) and re.fullmatch(r"[1-9]\d*", raw_id):
+        fixture_id = int(raw_id)
+    else:
+        raise ValueError("invalid La Liga fixture id")
+    if fixture_id <= 0:
+        raise ValueError("invalid La Liga fixture id")
+    return fixture_id
+
+
 def _add_team(teams, raw):
     team_id = int(raw.get("id", 0) or 0)
     if not team_id:
@@ -72,7 +87,9 @@ def build_laliga_season_pack(events, standings, season, archive):
 
     rows = []
     seen = set()
-    for event in sorted(events or [], key=lambda row: row.get("date", "")):
+    for event in sorted(
+            events or [],
+            key=lambda row: (row.get("date", ""), _event_fixture_id(row))):
         competitions = event.get("competitions", [])
         competitors = competitions[0].get("competitors", []) if competitions else []
         if len(competitors) != 2:
@@ -84,7 +101,7 @@ def build_laliga_season_pack(events, standings, season, archive):
         _add_team(teams, home.get("team", {}))
         _add_team(teams, away.get("team", {}))
         try:
-            fixture_id = int(event.get("id", 0) or 0)
+            fixture_id = _event_fixture_id(event)
             home_id = int(home["team"]["id"])
             away_id = int(away["team"]["id"])
         except (KeyError, TypeError, ValueError):

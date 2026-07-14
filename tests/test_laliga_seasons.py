@@ -88,6 +88,28 @@ class LaligaSeasonPackTests(unittest.TestCase):
         completed_pack = build_laliga_season_pack(completed, {}, "2025-26", archive=True)
         self.assertEqual([False, True], [row["cur"] for row in completed_pack["gws"]])
 
+    def test_equal_kickoff_order_is_stable_across_shuffled_input(self):
+        events = [espn_event(700000 + index, index, completed=index < 10) for index in range(20)]
+        for event in events:
+            event["date"] = "2026-05-01T18:00:00Z"
+        shuffled = events[10:15] + events[:5] + events[15:] + events[5:10]
+
+        expected = build_laliga_season_pack(events, {}, "2026-27", archive=False)
+        actual = build_laliga_season_pack(shuffled, {}, "2026-27", archive=False)
+
+        self.assertEqual(
+            [(row["id"], row["e"]) for row in expected["fix"]],
+            [(row["id"], row["e"]) for row in actual["fix"]],
+        )
+        self.assertEqual(expected["gws"], actual["gws"])
+
+    def test_equal_kickoff_sort_fails_closed_for_malformed_fixture_id(self):
+        events = [espn_event(700001, 0, completed=True), espn_event("invalid", 1, completed=True)]
+        for event in events:
+            event["date"] = "2026-05-01T18:00:00Z"
+        with self.assertRaisesRegex(ValueError, "invalid La Liga fixture"):
+            build_laliga_season_pack(events, {}, "2025-26", archive=True)
+
     def test_pack_accepts_both_espn_logo_shapes(self):
         standings = {
             "children": [{"standings": {"entries": [

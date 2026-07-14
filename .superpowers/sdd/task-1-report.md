@@ -47,3 +47,15 @@ No known concerns. Production integration is intentionally outside this task's o
 - RED check after adding regressions: `python -m unittest tests.test_laliga_seasons -v` ran 17 tests with 7 failures, exposing archive impostors and missing, multiple, or non-boolean current flags.
 - Focused post-fix check: `python -m unittest tests.test_laliga_seasons -v` ran 17 tests and finished `OK`.
 - Full post-fix check: `python -m unittest discover -v` ran 177 tests and finished `OK`.
+
+## Final Review Fix
+
+- Equal-kickoff events now sort by kickoff timestamp and then normalized positive fixture ID, so upstream feed order cannot alter fixture order, ten-match grouping, or current-matchday selection.
+- Numeric ESPN fixture-ID strings remain supported. Malformed fixture IDs fail closed before they can participate in ordering.
+- Added regression coverage comparing canonical and shuffled equal-kickoff inputs, plus malformed-ID coverage for the tie-break path.
+
+## Final Review Verification
+
+- RED check after adding regressions: `python -m unittest tests.test_laliga_seasons -v` ran 19 tests with 1 failure in equal-kickoff shuffled ordering; the malformed-ID preservation test passed.
+- Focused post-fix check: `python -m unittest tests.test_laliga_seasons -v` ran 19 tests and finished `OK`.
+- Full post-fix check: `python -m unittest discover -v` ran 179 tests and finished `OK`.
