@@ -285,6 +285,12 @@ function normSeason(raw){
   if(!raw)return{tm:{},gw:[],fx:[],archive:false,label:""};
   return{tm:raw.teams||{},gw:raw.gws||[],fx:raw.fix||[],archive:!!raw.archive,label:raw.label||""};
 }
+function llFixtureIdentity(f,season){
+  f=f||{};
+  var id=+(f.id||0),sourceId=f.source_fixture_id;
+  if(sourceId==null||sourceId==="")sourceId=id;
+  return{id:id,source_fixture_id:+sourceId||id,season:f.season||season||""};
+}
 function activeCatalog(lg){return SEASON_RUNTIME.catalogFor(lg,PL_SEASONS,LL_SEASONS)}
 function activeSeasonKey(lg){return lg==="pl"?D.plSeason:lg==="laliga"?D.llSeason:""}
 function setActiveSeasonKey(lg,key){if(lg==="pl")D.plSeason=key;else if(lg==="laliga")D.llSeason=key}
@@ -565,6 +571,7 @@ function _fLiveJson(){
             var needFreshLL=false;
             rawLL.forEach(function(f){
               var st=f.st||false,fin=f.fin||false,mn=f.mn||0,ko=f.ko||'';
+              var llIdentity=llFixtureIdentity(f,D.llSeason||LL_SEASONS.current);
               if(st&&!fin&&ko){
                 var el=Math.floor((now-new Date(ko))/60000);
                 if(mn===0&&el>0)mn=el;
@@ -573,7 +580,7 @@ function _fLiveJson(){
                   fin=true;mn=90;
                 }
               }
-              llFix.push({id:f.id,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
+              llFix.push({id:llIdentity.id,source_fixture_id:llIdentity.source_fixture_id,season:llIdentity.season,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
             if(needFreshLL){_fLL();return;}
             var llGW=_rebuildGW(llFix);
@@ -773,7 +780,8 @@ function _fLL(){
       }
       if(finished)mn=90;
       // Use fix.length as index (not evts index) so skipped events don't shift MDs
-      fix.push({id:+(ev.id||0),e:Math.floor(fix.length/10)+1,h:+(hm.team.id),a:+(aw.team.id),
+      var llIdentity=llFixtureIdentity({id:+(ev.id||0)},season);
+      fix.push({id:llIdentity.id,source_fixture_id:llIdentity.source_fixture_id,season:llIdentity.season,e:Math.floor(fix.length/10)+1,h:+(hm.team.id),a:+(aw.team.id),
         hs:hs,as:as2,fin:finished,st:started,ko:ev.date||'',mn:mn,sx:st.name||''});
     });
     if(!Object.keys(tm).length){_updDone(false);return}

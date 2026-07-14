@@ -169,6 +169,26 @@ assert.strictEqual(context.activeWeights().strength, 0.41);
 assert.strictEqual(context.activeCalibration().goal_mult, 1.04);
 
 const template = fs.readFileSync('website/pl_mobile_template.html', 'utf8');
+const llIdentityStart = template.indexOf('function llFixtureIdentity');
+assert.notStrictEqual(llIdentityStart, -1, 'La Liga fixture identity normalizer is missing');
+const llIdentityEnd = template.indexOf('\nfunction ', llIdentityStart + 9);
+assert.notStrictEqual(llIdentityEnd, -1, 'La Liga fixture identity normalizer is not isolated');
+const llIdentityContext = {};
+vm.createContext(llIdentityContext);
+vm.runInContext(template.slice(llIdentityStart, llIdentityEnd), llIdentityContext);
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(llIdentityContext.llFixtureIdentity(
+    { id: 401, source_fixture_id: 91, season: '2026-27' },
+    'fallback-season',
+  ))),
+  { id: 401, source_fixture_id: 91, season: '2026-27' },
+);
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(llIdentityContext.llFixtureIdentity({ id: 402 }, '2026-27'))),
+  { id: 402, source_fixture_id: 402, season: '2026-27' },
+);
+assert.match(template, /llFixtureIdentity\(f,D\.llSeason\|\|LL_SEASONS\.current\)/);
+assert.match(template, /llFixtureIdentity\(\{id:\+\(ev\.id\|\|0\)\},season\)/);
 const guessSource = template.slice(
   template.indexOf('var _gMerged=false;'),
   template.indexOf('function autoFillDueGuesses'),
