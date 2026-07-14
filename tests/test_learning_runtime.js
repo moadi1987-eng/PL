@@ -183,11 +183,67 @@ vm.runInContext(
 );
 vm.runInContext(source, renderContext);
 vm.runInContext(statusSource, renderContext);
-const emptySource = template.slice(template.indexOf('function aiSeasonEmptyState'), template.indexOf('function rAI'));
-vm.runInContext(emptySource, renderContext);
-const archiveHtml = renderContext.aiSeasonEmptyState('La Liga', '2025-26', true, []);
-assert.match(archiveHtml, /No verified La Liga 2025-26 AI history/);
-assert.doesNotMatch(archiveHtml, /100%/);
+const aiRenderSource = template.slice(template.indexOf('var _aiChartAcc'), template.indexOf('\ninit();'));
+const aiTarget = { innerHTML: '' };
+const aiRenderContext = { aiTarget };
+const comparison = {
+  total: 10,
+  baseline: { winner_accuracy: 60, exact_accuracy: 40, points: 18, unique_scores: 4, top_scores: [] },
+  challenger: { winner_accuracy: 50, exact_accuracy: 30, points: 15, unique_scores: 3, top_scores: [] },
+  delta: { winner_accuracy: -10, exact_accuracy: -10, points: -3, unique_scores: -1, draw_picks: 0 },
+};
+vm.createContext(aiRenderContext);
+vm.runInContext(
+  'var D={league:"laliga",llSeason:"2025-26",plSeason:"2026-27",arch:true,fx:[],sel:1};' +
+  'var EMBEDDED_MODELS=' + JSON.stringify({
+    pl: { active_strategy: 'baseline', factors: defaultWeightValues },
+    laliga: { active_strategy: 'baseline', factors: defaultWeightValues },
+    wc: { active_strategy: 'baseline', factors: defaultWeightValues },
+  }) + ';' +
+  'var LEARNING_HISTORY=' + JSON.stringify({
+    pl: { current_season: '2026-27', gw_results: [{ season: '2026-27', gw: 1, total: 1, correct_winner: 1, correct_score: 1, points: 8 }], model_comparison: comparison, model_status: { verified_lifecycle_samples: 1 } },
+    laliga: { current_season: '2026-27', gw_results: [], model_comparison: comparison, model_status: { verified_lifecycle_samples: 0 } },
+    wc: { current_season: '2026', gw_results: [{ season: '2026', gw: 1, total: 1, correct_winner: 1, correct_score: 1, points: 3 }], model_comparison: comparison, model_status: { verified_lifecycle_samples: 1 } },
+  }) + ';' +
+  'function defaultWeights(){return ' + JSON.stringify(defaultWeightValues) + ';}' +
+  'function defaultCalibration(){return ' + JSON.stringify(defaultCalibrationValues) + ';}' +
+  'function $(id){return aiTarget;}',
+  aiRenderContext,
+);
+vm.runInContext(source, aiRenderContext);
+vm.runInContext(aiRenderSource, aiRenderContext);
+function renderAi(league, season, archived) {
+  aiRenderContext.D.league = league;
+  aiRenderContext.D.arch = archived;
+  if (league === 'laliga') aiRenderContext.D.llSeason = season;
+  if (league === 'pl') aiRenderContext.D.plSeason = season;
+  aiTarget.innerHTML = '';
+  aiRenderContext.rAI();
+  return aiTarget.innerHTML;
+}
+const emptyArchiveHtml = renderAi('laliga', '2025-26', true);
+assert.match(emptyArchiveHtml, /No verified La Liga 2025-26 AI history/);
+assert.match(emptyArchiveHtml, /Model Status/);
+assert.match(emptyArchiveHtml, /Data used/);
+assert.match(emptyArchiveHtml, /What Drives The Pick/);
+assert.match(emptyArchiveHtml, /Recent Form/);
+assert.doesNotMatch(emptyArchiveHtml, /aihero|hit rate|overall 0%|exact 0%|Accuracy Trend|MD Breakdown|Model Test|60%|50%/);
+aiRenderContext.LEARNING_HISTORY.laliga.gw_results = [
+  { season: '2025-26', gw: 29, total: 1, correct_winner: 1, correct_score: 1, points: 8 },
+  { season: '2026-27', gw: 1, total: 1, correct_winner: 0, correct_score: 0, points: 0 },
+];
+const genuineArchiveHtml = renderAi('laliga', '2025-26', true);
+assert.match(genuineArchiveHtml, /aihero|MD29 hit rate/);
+assert.doesNotMatch(genuineArchiveHtml, /Model Test/);
+aiRenderContext.LEARNING_HISTORY.laliga.model_comparison = { ...comparison, season: '2025-26' };
+assert.match(renderAi('laliga', '2025-26', true), /Model Test/);
+aiRenderContext.LEARNING_HISTORY.laliga.model_comparison = comparison;
+aiRenderContext.LEARNING_HISTORY.laliga.gw_results = [{ season: '2026-27', gw: 1, total: 1, correct_winner: 1, correct_score: 1, points: 8 }];
+const currentLaLigaHtml = renderAi('laliga', '2026-27', false);
+assert.match(currentLaLigaHtml, /aihero|MD1 hit rate/);
+assert.match(currentLaLigaHtml, /Model Test|60%/);
+assert.match(renderAi('pl', '2026-27', false), /aihero|GW1 hit rate/);
+assert.match(renderAi('wc', '2026', false), /aihero|Day1 hit rate/);
 assert.strictEqual(renderContext.aiStatusNumber(null), null);
 assert.strictEqual(renderContext.aiStatusNumber(undefined), null);
 assert.strictEqual(renderContext.aiStatusNumber(NaN), null);

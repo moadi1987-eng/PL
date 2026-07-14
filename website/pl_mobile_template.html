@@ -1923,6 +1923,11 @@ function aiSeasonEmptyState(leagueName,season,archived,rows){
   if(archived&&leagueName==='La Liga')return'<div class="emp">No verified La Liga '+season+' AI history</div>';
   return'';
 }
+function aiComparisonForSeason(lgData,season,isLaLiga){
+  var comparison=lgData&&lgData.model_comparison;
+  if(!isLaLiga||season===lgData.current_season)return comparison||null;
+  return comparison&&comparison.season===season?comparison:null;
+}
 function rAI(){
   var c=$("t3");
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
@@ -1938,7 +1943,8 @@ function rAI(){
   if(!rows.length&&canUseLocalRows){var localRows=normAIRows(localLearningRows());localRows.forEach(function(row){row.season=selectedSeason});rows=learningRowsForSeason(localRows,selectedSeason)}
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
   var wts=activeWeights(),cal=activeCalibration(),modelState=learningModelState(lgKey),meta=(lgData.model_meta||modelState.meta||{});
-  var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||(canUseLocalRows?localModelComparison():null));
+  var modelCmp=isWC?lgData.model_comparison:(aiComparisonForSeason(lgData,selectedSeason,lgKey==='laliga')||(canUseLocalRows?localModelComparison():null));
+  var emptyLaLigaArchive=lgKey==='laliga'&&D.arch&&!rows.length;
   var trainedMatches=aiStatusNumber(meta.trained_matches),verifiedSamples=aiVerifiedSamples(lgData.model_status);
   var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0;
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
@@ -1956,7 +1962,7 @@ function rAI(){
   var tSpan=delta===null?'<span class="aitrend">No trend yet</span>':'<span class="aitrend '+(delta>=0?'up':'down')+'">'+(delta>=0?'Up ':'Down ')+Math.abs(delta).toFixed(1)+'%</span>';
   var mainAcc=focus?focus.accuracy_pct:acc,focusName=focus?(focus.gw===D.sel?'Selected ':'Latest ')+gwLbl+focus.gw:'Overall';
   var h='<div class="sec" style="margin-bottom:.4rem">AI Learning Engine</div>';
-  h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+' '+focusName+' hit rate</div><div class="ainum" style="color:'+lgCol+'">'+mainAcc+'%</div><div class="aimeta">'+(focus?focus.correct_winner+'/'+focus.total+' games on this '+gwLbl.toLowerCase()+' · ':'')+'overall '+acc+'% ('+overall.correct_winner+'/'+tot+') · exact '+overall.score_acc_pct+'%</div></div>'+tSpan+'</div></div>';
+  if(!emptyLaLigaArchive)h+='<div class="aihero"><div class="airow"><div><div class="ailabel">'+lgName+' '+focusName+' hit rate</div><div class="ainum" style="color:'+lgCol+'">'+mainAcc+'%</div><div class="aimeta">'+(focus?focus.correct_winner+'/'+focus.total+' games on this '+gwLbl.toLowerCase()+' · ':'')+'overall '+acc+'% ('+overall.correct_winner+'/'+tot+') · exact '+overall.score_acc_pct+'%</div></div>'+tSpan+'</div></div>';
   h+=aiModelStatus(lgData,modelCmp);
   h+='<div class="aisrc"><div><b>Data used</b><span>Completed matches before the selected '+gwLbl+', recent form, goals for/against, table/group position, clean sheets, draw tendency, head-to-head where available, and team strength ratings. For World Cup it also uses live tournament attack/defense, ESPN roster availability, manual absence overrides, points in the group, goal difference, and qualification pressure.</span></div>'+
     '<div><b>Score model</b><span>The engine estimates expected goals, runs a Poisson baseline, checks upset and draw value, then tests v4 against the learned history and uses it only when the backtest is better.</span></div>'+
@@ -1968,7 +1974,7 @@ function rAI(){
     h+='<div class="aimetric"><span>0-0 guard</span><b>'+Number(cal.zero_zero_penalty||.62).toFixed(2)+'</b><em>'+(meta.trained_matches||0)+' trained snapshots</em></div>';
     h+='</div>';
   }
-  h+=aiModelComparison(modelCmp);
+  if(!emptyLaLigaArchive)h+=aiModelComparison(modelCmp);
   if(rows.length){
     var last=rows[rows.length-1],best=rows.slice().sort(function(a,b){return b.accuracy_pct-a.accuracy_pct})[0],weak=rows.slice().sort(function(a,b){return a.accuracy_pct-b.accuracy_pct})[0];
     h+='<div class="aimetrics">';
