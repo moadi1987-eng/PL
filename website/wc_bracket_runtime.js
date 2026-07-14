@@ -54,21 +54,46 @@
     if(round==='final'||round==='third')return rounds[round];
     return rounds[round]&&rounds[round][index];
   }
-  function resolveLink(raw,rounds,teams){
-    var source=matchFor(rounds,raw.fromRound,raw.fromIndex),destination=matchFor(rounds,raw.toRound,raw.toIndex);
-    var ids=destination?[destination.h,destination.a]:[],teamId=null,placeholder=false;
-    ids.forEach(function(id){
-      if(teamId!=null)return;
-      if(participant(source,id)){teamId=+id;return}
-      var meta=placeholderMeta(teamFor(teams,id));
-      if(meta&&meta.round===raw.fromRound&&meta.index===raw.fromIndex&&meta.type===raw.type)placeholder=true;
+  function linkEvidence(raw,id,rounds,teams){
+    var source=matchFor(rounds,raw.fromRound,raw.fromIndex);
+    if(participant(source,id))return{confirmed:true,teamId:+id,placeholder:false};
+    var team=teamFor(teams,id),meta=team.ph&&placeholderMeta(team);
+    if(meta&&meta.round===raw.fromRound&&meta.index===raw.fromIndex&&meta.type===raw.type){
+      return{confirmed:false,teamId:null,placeholder:true};
+    }
+    return null;
+  }
+  function validLinkGraph(rawLinks,rounds,teams){
+    var destinations={};
+    rawLinks.forEach(function(raw){(destinations[raw.toKey]||(destinations[raw.toKey]=[])).push(raw)});
+    return Object.keys(destinations).every(function(toKey){
+      var incoming=destinations[toKey],destination=matchFor(rounds,incoming[0].toRound,incoming[0].toIndex),counts={};
+      if(!destination||incoming.length!==2)return false;
+      var slots=[destination.h,destination.a];
+      var slotsValid=slots.every(function(id){
+        var candidates=incoming.filter(function(raw){return!!linkEvidence(raw,id,rounds,teams)});
+        if(candidates.length!==1)return false;
+        var sourceKey=candidates[0].fromKey+'-'+candidates[0].type;
+        counts[sourceKey]=(counts[sourceKey]||0)+1;
+        return true;
+      });
+      return slotsValid&&incoming.every(function(raw){return counts[raw.fromKey+'-'+raw.type]===1});
     });
-    return{fromKey:raw.fromKey,toKey:raw.toKey,type:raw.type,confirmed:teamId!=null,teamId:teamId,placeholder:placeholder};
+  }
+  function resolveLink(raw,rounds,teams){
+    var destination=matchFor(rounds,raw.toRound,raw.toIndex);
+    var ids=destination?[destination.h,destination.a]:[],evidence=null;
+    ids.forEach(function(id){
+      if(!evidence)evidence=linkEvidence(raw,id,rounds,teams);
+    });
+    return{fromKey:raw.fromKey,toKey:raw.toKey,type:raw.type,confirmed:evidence.confirmed,teamId:evidence.teamId,placeholder:evidence.placeholder};
   }
   function build(fixtures,teams){
     var rounds=partition(fixtures);
     if(!rounds.ready)return rounds;
-    var links=mappedLinks().map(function(item){return resolveLink(item,rounds,teams)});
+    var rawLinks=mappedLinks();
+    if(!validLinkGraph(rawLinks,rounds,teams))return{ready:false,reason:'inconsistent-knockout-link-graph',count:32};
+    var links=rawLinks.map(function(item){return resolveLink(item,rounds,teams)});
     return{
       ready:true,count:32,rounds:rounds,links:links,
       sides:{

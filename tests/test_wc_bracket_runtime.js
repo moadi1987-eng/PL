@@ -67,4 +67,35 @@ const duplicate = fixtures.slice();
 duplicate[31] = { ...duplicate[31], id: duplicate[30].id };
 assert.strictEqual(runtime.build(duplicate, teams).reason, 'duplicate-knockout-fixture-id');
 
+const inconsistentCases = [
+  {
+    name: 'unmatched destination participant',
+    fixtures: fixtures.map((fixture, index) => index === 16 ? { ...fixture, h: 99999 } : fixture),
+    teams,
+  },
+  {
+    name: 'duplicate source and slot evidence',
+    fixtures: fixtures.map((fixture, index) => index === 16 ? { ...fixture, a: fixture.h } : fixture),
+    teams,
+  },
+  {
+    name: 'malformed placeholder source label',
+    fixtures,
+    teams: { ...teams, 9003: { ...teams[9003], n: 'Semifinal One Winner' } },
+  },
+];
+const inconsistentFailures = [];
+inconsistentCases.forEach(({ name, fixtures: caseFixtures, teams: caseTeams }) => {
+  try {
+    const result = runtime.build(caseFixtures, caseTeams);
+    assert.deepStrictEqual(
+      JSON.parse(JSON.stringify({ ready: result.ready, reason: result.reason })),
+      { ready: false, reason: 'inconsistent-knockout-link-graph' },
+    );
+  } catch (error) {
+    inconsistentFailures.push(`${name}: ${error.message}`);
+  }
+});
+assert.deepStrictEqual(inconsistentFailures, []);
+
 console.log('wc bracket runtime tests passed');

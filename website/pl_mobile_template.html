@@ -53,7 +53,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk)
 .fabs{position:absolute;top:4px;right:5px;font-size:.46rem;font-weight:700;color:var(--tm);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:10px}
 /* World Cup knockout bracket */
 .wcb-scroll{position:relative;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;margin:.3rem 0 4.5rem;padding:.2rem 0 .55rem;max-width:100%;border:1px solid var(--bd);border-radius:6px;background:var(--dk)}
-.wcb-canvas{position:relative;width:1240px;min-width:1240px;height:680px;padding:.45rem;box-sizing:border-box}
+.wcb-canvas{position:relative;width:1240px;min-width:1240px;height:680px;padding:.45rem;margin-inline:auto;box-sizing:border-box}
 .wcb-lines{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
 .wcb-line{fill:none;stroke:rgba(255,255,255,.18);stroke-width:2;vector-effect:non-scaling-stroke}
 .wcb-line.confirmed{stroke:var(--g);stroke-width:2.5}.wcb-line.loser{stroke:var(--cy);stroke-dasharray:5 5}
@@ -1591,7 +1591,7 @@ function rWCGroups(){
   });
   return h;
 }
-var _wcBracketModel=null,_wcBracketScrollLeft=null,_wcBracketCentered=false,_wcBracketResizeBound=false;
+var _wcBracketModel=null,_wcBracketScrollLeft=null,_wcBracketOverflowSeen=false,_wcBracketUserScrolled=false,_wcBracketApplyingScroll=false,_wcBracketResizeBound=false;
 function wcBracketEsc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]})}
 function wcBracketWinner(model,key,match){
   for(var i=0;i<model.links.length;i++){var link=model.links[i];if(link.fromKey===key&&link.type==='winner'&&link.confirmed)return link.teamId}
@@ -1636,15 +1636,27 @@ function drawWCBracketLines(){
   });
   svg.setAttribute('viewBox','0 0 '+canvas.clientWidth+' '+canvas.clientHeight);svg.innerHTML=paths;
 }
+function wcBracketSetScroll(el,left){
+  _wcBracketApplyingScroll=true;el.scrollLeft=left;_wcBracketScrollLeft=el.scrollLeft;
+  requestAnimationFrame(function(){_wcBracketApplyingScroll=false});
+}
+function wcBracketLayout(){
+  var el=document.querySelector('.wcb-scroll');if(!el)return;
+  var overflow=el.scrollWidth>el.clientWidth;
+  if(overflow&&!_wcBracketOverflowSeen&&!_wcBracketUserScrolled){wcBracketSetScroll(el,(el.scrollWidth-el.clientWidth)/2);_wcBracketOverflowSeen=true}
+  else _wcBracketScrollLeft=el.scrollLeft;
+  drawWCBracketLines();
+}
 function wcBracketMount(savedScroll){
   requestAnimationFrame(function(){
     var el=document.querySelector('.wcb-scroll');if(!el)return;
-    if(savedScroll!=null)el.scrollLeft=savedScroll;
-    else if(!_wcBracketCentered&&el.scrollWidth>el.clientWidth){el.scrollLeft=(el.scrollWidth-el.clientWidth)/2;_wcBracketCentered=true}
-    _wcBracketScrollLeft=el.scrollLeft;
-    el.addEventListener('scroll',function(){_wcBracketScrollLeft=el.scrollLeft},{passive:true});
+    var overflow=el.scrollWidth>el.clientWidth;
+    if(overflow&&!_wcBracketOverflowSeen&&!_wcBracketUserScrolled){wcBracketSetScroll(el,(el.scrollWidth-el.clientWidth)/2);_wcBracketOverflowSeen=true}
+    else if(savedScroll!=null)wcBracketSetScroll(el,savedScroll);
+    else _wcBracketScrollLeft=el.scrollLeft;
+    if(!el._wcBracketScrollBound){el._wcBracketScrollBound=true;el.addEventListener('scroll',function(){_wcBracketScrollLeft=el.scrollLeft;if(!_wcBracketApplyingScroll)_wcBracketUserScrolled=true},{passive:true})}
     drawWCBracketLines();
-    if(!_wcBracketResizeBound){_wcBracketResizeBound=true;window.addEventListener('resize',function(){if(document.querySelector('.wcb-canvas'))requestAnimationFrame(drawWCBracketLines)},{passive:true})}
+    if(!_wcBracketResizeBound){_wcBracketResizeBound=true;window.addEventListener('resize',function(){if(document.querySelector('.wcb-canvas'))requestAnimationFrame(wcBracketLayout)},{passive:true})}
   });
 }
 function rRes(){
