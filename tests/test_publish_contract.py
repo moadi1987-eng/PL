@@ -965,6 +965,22 @@ class PublishContractTests(unittest.TestCase):
         self.assertEqual(generated.count("root.SEASON_RUNTIME="), 1)
         self.assertLess(generated.index("SEASON_RUNTIME"), generated.index("function init()"))
 
+    def test_wc_bracket_runtime_is_embedded_once_after_data_and_before_init(self):
+        template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+        runtime = (ROOT / "website" / "wc_bracket_runtime.js").read_text(encoding="utf-8")
+
+        self.assertEqual(template.count("/*__WC_BRACKET_RUNTIME__*/"), 1)
+        self.assertEqual(self.source.count("wc_bracket_runtime.js"), 1)
+        self.assertIn(
+            'html.replace("/*__WC_BRACKET_RUNTIME__*/", wc_bracket_runtime)',
+            self.source,
+        )
+        self.assertNotIn("/*__WC_BRACKET_RUNTIME__*/", runtime)
+        generated = template.replace("/*__WC_BRACKET_RUNTIME__*/", runtime)
+        self.assertNotIn("/*__WC_BRACKET_RUNTIME__*/", generated)
+        self.assertEqual(generated.count("root.WC_BRACKET_RUNTIME="), 1)
+        self.assertLess(generated.index("WC_BRACKET_RUNTIME"), generated.index("function init()"))
+
     @classmethod
     def setUpClass(cls):
         cls.source = UPDATE_SOURCE.read_text(encoding="utf-8")

@@ -2250,6 +2250,9 @@ else:
 
 html = open(TPL, "r", encoding="utf-8").read()
 season_runtime = open(os.path.join(HERE, "season_runtime.js"), "r", encoding="utf-8").read()
+wc_bracket_runtime = open(
+    os.path.join(HERE, "wc_bracket_runtime.js"), "r", encoding="utf-8"
+).read()
 html = html.replace("/*__DATA__*/", "var EMBEDDED=" + data + ";")
 html = html.replace("/*__DATA_PL_SEASONS__*/", "var EMBEDDED_PL_SEASONS=" + pl_seasons_json + ";")
 html = html.replace("/*__DATA_LL__*/", "var EMBEDDED_LL=" + ll_data + ";")
@@ -2265,6 +2268,7 @@ html = html.replace("/*__GUESSES_WC__*/", "var EMBEDDED_GUESSES_WC=" + wc_guesse
 html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if server_url else "")
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
 html = html.replace("/*__SEASON_RUNTIME__*/", season_runtime)
+html = html.replace("/*__WC_BRACKET_RUNTIME__*/", wc_bracket_runtime)
 
 # ── ML Learning Engine ────────────────────────────────────────────────────
 _validate_learning_state_files()
