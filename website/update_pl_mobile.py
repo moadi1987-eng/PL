@@ -30,11 +30,25 @@ try:
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
     from github_atomic_publish import publish_generated_outputs, resolve_target_repository
+    from laliga_seasons import (
+        LALIGA_SEASON_SPECS,
+        build_laliga_catalog,
+        build_laliga_season_pack,
+        laliga_date_range,
+        merge_events_by_id,
+    )
 except ImportError:
     from .league_learning import comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
     from .github_atomic_publish import publish_generated_outputs, resolve_target_repository
+    from .laliga_seasons import (
+        LALIGA_SEASON_SPECS,
+        build_laliga_catalog,
+        build_laliga_season_pack,
+        laliga_date_range,
+        merge_events_by_id,
+    )
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -1573,7 +1587,7 @@ def _set_verified_lifecycle_samples(league_history):
 
 def run_league_learning(
     pl_fixtures, pl_teams, ll_fixtures, ll_teams, history,
-    pl_season="2025-26", ll_season="2025-26",
+    pl_season="2025-26", ll_season="2025-26", ll_available_seasons=None,
 ):
     now = datetime.now(timezone.utc)
     compact_pl = _compact_pl_learning_fixtures(pl_fixtures, pl_season)
@@ -1589,6 +1603,7 @@ def run_league_learning(
     compact_ll = [
         {**fixture, "source_fixture_id": fixture.get("source_fixture_id", fixture.get("id")), "season": fixture.get("season") or ll_season}
         for fixture in ll_fixtures
+        if isinstance(fixture, dict) and fixture.get("season") in (None, "", ll_season)
     ] if isinstance(ll_fixtures, list) else []
     history, ll_counts, _ = run_persistent_competition(
         league="laliga", fixtures=compact_ll, teams=ll_teams if isinstance(ll_teams, dict) else {},
@@ -1602,6 +1617,8 @@ def run_league_learning(
     history["laliga"] = _set_verified_lifecycle_samples(history["laliga"])
     history["pl"]["counts"] = copy.deepcopy(pl_counts)
     history["laliga"]["counts"] = copy.deepcopy(ll_counts)
+    history["laliga"]["current_season"] = ll_season
+    history["laliga"]["available_seasons"] = list(ll_available_seasons or [ll_season])
     return history
 
 
@@ -1956,148 +1973,49 @@ guesses_json = json.dumps(guesses, ensure_ascii=False, separators=(",", ":"))
 
 # ── La Liga data from ESPN ──
 print("\nFetching La Liga data...")
-ll_season_key = "2025-26"
-try:
-    now = datetime.now(timezone.utc)
-    start_year = now.year if now.month >= 7 else now.year - 1
-    ll_season_key = f"{start_year}-{str(start_year + 1)[-2:]}"
-    date_range = f"{start_year}0801-{start_year + 1}0630"
+ll_seasons_data = {}
+today_str = datetime.now(ISRAEL_TZ).strftime("%Y%m%d")
+for spec in LALIGA_SEASON_SPECS:
+    season = spec["key"]
+    espn_events = requests.get(
+        ESPN_SCOREBOARD,
+        params={"dates": laliga_date_range(season), "limit": "1000"},
+        headers=hdr,
+        timeout=30,
+    ).json().get("events", [])
+    if not spec["archive"]:
+        today_events = requests.get(
+            ESPN_SCOREBOARD,
+            params={"dates": today_str},
+            headers=hdr,
+            timeout=15,
+        ).json().get("events", [])
+        espn_events = merge_events_by_id(espn_events, today_events)
+    espn_standings = requests.get(
+        ESPN_STANDINGS,
+        params={"season": int(season[:4])},
+        headers=hdr,
+        timeout=20,
+    ).json()
+    ll_seasons_data[season] = build_laliga_season_pack(
+        espn_events,
+        espn_standings,
+        season,
+        archive=spec["archive"],
+    )
+    pack = ll_seasons_data[season]
+    print(
+        f"La Liga {season} — Teams: {len(pack['teams'])}, "
+        f"Matchdays: {len(pack['gws'])}, Fixtures: {len(pack['fix'])}"
+    )
 
-    espn_events = requests.get(ESPN_SCOREBOARD, params={"dates": date_range, "limit": "1000"},
-                                headers=hdr, timeout=30).json().get("events", [])
-
-    # ESPN doesn't return live status for historical date ranges — fetch today separately
-    today_str = datetime.now(ISRAEL_TZ).strftime("%Y%m%d")
-    try:
-        today_events = requests.get(ESPN_SCOREBOARD, params={"dates": today_str},
-                                    headers=hdr, timeout=15).json().get("events", [])
-        today_by_id = {ev["id"]: ev for ev in today_events}
-        if today_by_id:
-            espn_events = [today_by_id.get(ev["id"], ev) for ev in espn_events]
-            print(f"La Liga: merged {len(today_by_id)} today's events with live status")
-    except Exception as e:
-        print(f"La Liga today-fetch: {e}")
-
-    espn_events.sort(key=lambda e: e.get("date", ""))
-
-    espn_standings = requests.get(ESPN_STANDINGS, headers=hdr, timeout=20).json()
-    children = espn_standings.get("children", [])
-    entries = children[0].get("standings", {}).get("entries", []) if children else []
-
-    ll_teams = {}
-    for entry in entries:
-        et = entry.get("team", {})
-        tid = int(et.get("id", 0))
-        logos = et.get("logos", [])
-        badge = logos[0]["href"] if logos else ""
-        ll_teams[tid] = {
-            "id": tid, "n": et.get("displayName", ""), "s": et.get("abbreviation", "???"),
-            "c": tid, "b": badge,
-            "sah": 1200, "sdh": 1200, "saa": 1100, "sda": 1100,
-        }
-
-    for ev in espn_events:
-        for comp in ev.get("competitions", []):
-            for c in comp.get("competitors", []):
-                ct = c.get("team", {})
-                ctid = int(ct.get("id", 0))
-                if ctid and ctid not in ll_teams:
-                    ll_teams[ctid] = {
-                        "id": ctid, "n": ct.get("displayName", ct.get("name", "")),
-                        "s": ct.get("abbreviation", "???"), "c": ctid,
-                        "b": ct.get("logo", ""),
-                        "sah": 1100, "sdh": 1100, "saa": 1050, "sda": 1050,
-                    }
-
-    import re as _re
-
-    # Build team match count to determine real matchdays
-    team_finished = {}
-    ll_raw = []
-    for ev in espn_events:
-        comps = ev.get("competitions", [])
-        if not comps:
-            continue
-        comp = comps[0]
-        competitors = comp.get("competitors", [])
-        if len(competitors) != 2:
-            continue
-        home = away = None
-        for c in competitors:
-            if c.get("homeAway") == "home":
-                home = c
-            else:
-                away = c
-        if not home or not away:
-            continue
-        status = comp.get("status", {}).get("type", {})
-        state = status.get("state", "pre")
-        started = state in ("in", "post")
-        finished = status.get("completed", False)
-        hs = as_score = None
-        mn = 0
-        if started:
-            try: hs = int(home.get("score", "0"))
-            except (ValueError, TypeError): hs = 0
-            try: as_score = int(away.get("score", "0"))
-            except (ValueError, TypeError): as_score = 0
-            detail = status.get("shortDetail", "")
-            if detail:
-                mn_match = _re.search(r"(\d+)'", detail)
-                if mn_match:
-                    mn = int(mn_match.group(1))
-                elif "HT" in detail.upper():
-                    mn = 45
-                elif "FT" in detail.upper():
-                    mn = 90
-        hid = int(home["team"]["id"])
-        aid = int(away["team"]["id"])
-        if finished:
-            team_finished[hid] = team_finished.get(hid, 0) + 1
-            team_finished[aid] = team_finished.get(aid, 0) + 1
-        ll_raw.append({
-            "id": int(ev.get("id", 0)),
-            "source_fixture_id": int(ev.get("id", 0)),
-            "season": ll_season_key,
-            "h": hid, "a": aid,
-            "hs": hs, "as": as_score,
-            "fin": finished, "st": started, "ko": ev.get("date", ""), "mn": mn,
-            "sx": status.get("name", ""),
-        })
-
-    # Assign matchdays by sorting all matches by date → idx // 10 + 1
-    # This guarantees exactly 10 matches per matchday (matches played order)
-    ll_raw.sort(key=lambda x: x.get("ko", ""))
-    ll_fixtures = []
-    for i, f in enumerate(ll_raw):
-        f["e"] = i // 10 + 1
-        ll_fixtures.append(f)
-
-    n_fin = sum(1 for f in ll_fixtures if f["fin"])
-    n_up  = len(ll_fixtures) - n_fin
-    cur_md = ll_fixtures[-1]["e"] if ll_fixtures else 1
-    # Find current matchday (first with live or first unfinished)
-    for f in ll_fixtures:
-        if f["st"] and not f["fin"]:
-            cur_md = f["e"]; break
-    print(f"La Liga: {n_fin} finished, {n_up} upcoming, current MD~{cur_md}")
-
-    max_md = max((f["e"] for f in ll_fixtures), default=38)
-    ll_gws = []
-    for md in range(1, max_md + 1):
-        md_fix = [f for f in ll_fixtures if f["e"] == md]
-        all_fin = all(f["fin"] for f in md_fix) if md_fix else False
-        is_cur = any(f["st"] and not f["fin"] for f in md_fix)
-        ll_gws.append({"id": md, "fin": all_fin, "cur": is_cur})
-
-    _mark_current_gws(ll_gws, ll_fixtures)
-
-    ll_data = json.dumps({"teams": ll_teams, "gws": ll_gws, "fix": ll_fixtures, "season": ll_season_key},
-                          ensure_ascii=False, separators=(",", ":"))
-    print(f"La Liga — Teams: {len(ll_teams)}, Matchdays: {len(ll_gws)}, Fixtures: {len(ll_fixtures)}")
-except Exception as e:
-    print(f"La Liga fetch failed: {e}")
-    ll_data = ""
+ll_catalog = build_laliga_catalog(ll_seasons_data)
+ll_current_pack = ll_seasons_data[ll_catalog["current"]]
+ll_fixtures = ll_current_pack["fix"]
+ll_teams = ll_current_pack["teams"]
+ll_gws = ll_current_pack["gws"]
+ll_data = json.dumps(ll_current_pack, ensure_ascii=False, separators=(",", ":"))
+ll_seasons_json = json.dumps(ll_catalog, ensure_ascii=False, separators=(",", ":"))
 
 # La Liga guesses
 ll_guesses_file = os.path.join(ROOT, "user_guesses_laliga.json")
@@ -2114,6 +2032,12 @@ if os.path.exists(ll_guesses_file):
     print(f"La Liga guesses: {sum(len(v) for v in ll_guesses.values())}")
 
 ll_guesses_json = json.dumps(ll_guesses, ensure_ascii=False, separators=(",", ":"))
+ll_guesses_by_season = {"2025-26": ll_guesses, "2026-27": {}}
+ll_guesses_by_season_json = json.dumps(
+    ll_guesses_by_season,
+    ensure_ascii=False,
+    separators=(",", ":"),
+)
 
 # ── World Cup data from ESPN ──
 print("\nFetching World Cup data...")
@@ -2321,10 +2245,15 @@ else:
 html = open(TPL, "r", encoding="utf-8").read()
 html = html.replace("/*__DATA__*/", "var EMBEDDED=" + data + ";")
 html = html.replace("/*__DATA_PL_SEASONS__*/", "var EMBEDDED_PL_SEASONS=" + pl_seasons_json + ";")
-html = html.replace("/*__DATA_LL__*/", "var EMBEDDED_LL=" + ll_data + ";" if ll_data else "")
+html = html.replace("/*__DATA_LL__*/", "var EMBEDDED_LL=" + ll_data + ";")
+html = html.replace("/*__DATA_LL_SEASONS__*/", "var EMBEDDED_LL_SEASONS=" + ll_seasons_json + ";")
 html = html.replace("/*__DATA_WC__*/", "var EMBEDDED_WC=" + wc_data + ";" if wc_data else "")
 html = html.replace("/*__GUESSES__*/", "var EMBEDDED_GUESSES=" + guesses_json + ";")
 html = html.replace("/*__GUESSES_LL__*/", "var EMBEDDED_GUESSES_LL=" + ll_guesses_json + ";")
+html = html.replace(
+    "/*__GUESSES_LL_SEASONS__*/",
+    "var EMBEDDED_GUESSES_LL_SEASONS=" + ll_guesses_by_season_json + ";",
+)
 html = html.replace("/*__GUESSES_WC__*/", "var EMBEDDED_GUESSES_WC=" + wc_guesses_json + ";")
 html = html.replace("/*__SERVER__*/", f'var EMBEDDED_SERVER="{server_url}";' if server_url else "")
 html = html.replace("/*__BUILD_TIME__*/", f'var EMBEDDED_BUILD_TIME="{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}";')
@@ -2373,11 +2302,12 @@ pl_learning_teams = {
 learning_history = run_league_learning(
     pl_learning_pack.get("fix", []),
     pl_learning_teams,
-    globals().get("ll_fixtures", []),
-    globals().get("ll_teams", {}),
+    ll_current_pack["fix"],
+    ll_current_pack["teams"],
     learning_history,
     pl_season=pl_current_key,
-    ll_season=ll_season_key,
+    ll_season=ll_catalog["current"],
+    ll_available_seasons=[item["key"] for item in ll_catalog["items"]],
 )
 _log_learning_counts("pl", learning_history)
 _log_learning_counts("laliga", learning_history)
@@ -2411,12 +2341,11 @@ live_data = {
         for key, val in pl_seasons_data.items()
     },
 }
-if ll_data:
-    try:
-        ll_parsed = json.loads(ll_data)
-        live_data["fix_ll"] = ll_parsed.get("fix", [])
-    except Exception:
-        pass
+live_data["ll_seasons"] = {
+    key: {"gws": pack["gws"], "fix": pack["fix"], "archive": pack["archive"]}
+    for key, pack in ll_seasons_data.items()
+}
+live_data["fix_ll"] = ll_current_pack["fix"]
 if wc_data:
     try:
         wc_parsed = json.loads(wc_data)

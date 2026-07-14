@@ -805,6 +805,64 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(0, updated["laliga"]["model_status"]["verified_lifecycle_samples"])
         self.assertEqual(108, updated["pl"]["model_comparison"]["total"])
 
+    def test_laliga_learning_uses_current_pack_and_records_catalog_metadata(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {
+            "__name__": "website.update_pl_mobile_test",
+            "__package__": "website",
+            "__file__": str(update_path),
+        }
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        calls = []
+
+        def runner(**kwargs):
+            calls.append(kwargs)
+            history = copy.deepcopy(kwargs["history"])
+            history[kwargs["league"]] = {
+                "model_comparison": {"total": 0},
+                "model_status": {"verified_lifecycle_samples": 0},
+            }
+            return history, {}, {}
+
+        namespace["run_persistent_competition"] = runner
+        current_fixture = {
+            "id": 20262701,
+            "source_fixture_id": 20262701,
+            "season": "2026-27",
+            "e": 1,
+            "h": 1,
+            "a": 2,
+            "ko": "2026-08-15T18:00:00Z",
+            "fin": False,
+            "st": False,
+            "hs": None,
+            "as": None,
+        }
+        archive_fixture = {
+            **current_fixture,
+            "id": 20252601,
+            "source_fixture_id": 20252601,
+            "season": "2025-26",
+        }
+
+        history = namespace["run_league_learning"](
+            [],
+            {},
+            [archive_fixture, current_fixture],
+            {1: {"id": 1}, 2: {"id": 2}},
+            {},
+            ll_season="2026-27",
+            ll_available_seasons=["2026-27", "2025-26"],
+        )
+
+        laliga_call = next(call for call in calls if call["league"] == "laliga")
+        self.assertEqual([current_fixture], laliga_call["fixtures"])
+        self.assertTrue(all(row["season"] == "2026-27" for row in laliga_call["fixtures"]))
+        self.assertEqual("2026-27", history["laliga"]["current_season"])
+        self.assertEqual(["2026-27", "2025-26"], history["laliga"]["available_seasons"])
+
     def test_pl_compaction_preserves_selected_official_season_identity(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
         source = update_path.read_text(encoding="utf-8")

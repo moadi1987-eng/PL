@@ -930,6 +930,19 @@ class PublishContractTests(unittest.TestCase):
         cls.source = UPDATE_SOURCE.read_text(encoding="utf-8")
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
 
+    def test_builder_emits_complete_laliga_season_contract(self):
+        template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+
+        self.assertIn("build_laliga_catalog", self.source)
+        self.assertIn("LALIGA_SEASON_SPECS", self.source)
+        self.assertIn("laliga_date_range(season)", self.source)
+        self.assertIn('params={"season": int(season[:4])}', self.source)
+        self.assertIn("/*__DATA_LL_SEASONS__*/", template)
+        self.assertIn("/*__GUESSES_LL_SEASONS__*/", template)
+        self.assertIn('live_data["ll_seasons"]', self.source)
+        self.assertIn('ll_current_pack = ll_seasons_data[ll_catalog["current"]]', self.source)
+        self.assertIn('ll_current_pack["fix"]', self.source)
+
     def test_contents_api_is_opt_in_and_local_only(self):
         self.assertIn(
             'PUBLISH_TO_GITHUB = os.environ.get("PUBLISH_TO_GITHUB", "") == "1"',
