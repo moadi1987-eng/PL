@@ -925,6 +925,19 @@ def _alternate_upload_paths(workflow):
 
 
 class PublishContractTests(unittest.TestCase):
+    def test_season_runtime_is_embedded_once_after_data_and_before_init(self):
+        source = self.source
+        template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+        runtime = (ROOT / "website" / "season_runtime.js").read_text(encoding="utf-8")
+        self.assertEqual(template.count("/*__SEASON_RUNTIME__*/"), 1)
+        self.assertEqual(source.count("season_runtime.js"), 1)
+        self.assertIn('html.replace("/*__SEASON_RUNTIME__*/", season_runtime)', source)
+        self.assertNotIn("/*__SEASON_RUNTIME__*/", runtime)
+        generated = template.replace("/*__SEASON_RUNTIME__*/", runtime)
+        self.assertNotIn("/*__SEASON_RUNTIME__*/", generated)
+        self.assertEqual(generated.count("root.SEASON_RUNTIME="), 1)
+        self.assertLess(generated.index("SEASON_RUNTIME"), generated.index("function init()"))
+
     @classmethod
     def setUpClass(cls):
         cls.source = UPDATE_SOURCE.read_text(encoding="utf-8")

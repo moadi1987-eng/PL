@@ -235,6 +235,7 @@ body.wc .htot .hl,body.wc .htot .hp{color:#f7c948}
 /*__BUILD_TIME__*/
 /*__LEARNING_HISTORY__*/
 /*__LEARNING_RUNTIME__*/
+/*__SEASON_RUNTIME__*/
 var BLB='<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .6.4 1 1 1h6c.6 0 1-.4 1-1v-2.3c1.8-1.2 3-3.3 3-5.7 0-3.9-3.1-7-7-7zM9 21c0 .6.4 1 1 1h4c.6 0 1-.4 1-1v-1H9v1z"/></svg>';
 var D={tm:{},gw:[],fx:[],st:[],cur:1,sel:1,tab:0,sub:0,ct1:null,ct2:null,ct3:null,ct4:null,cn:5,league:"pl",gwl:"GW",arch:false,plSeason:""};
 var LDATA={pl:{tm:{},gw:[],fx:[]},laliga:{tm:{},gw:[],fx:[]},wc:{tm:{},gw:[],fx:[],archive:false}};
@@ -1418,10 +1419,11 @@ function _tickAll(){
 function startTicker(){if(_tickTmr)clearInterval(_tickTmr);_tickTmr=setInterval(_tickAll,1000);}
 startTicker();
 var _gMerged=false;
-function _gKey(){return D.league==="laliga"?"llg":D.league==="wc"?"wcg":"plg_"+(D.plSeason||"2025-26")}
+function _gKey(){return SEASON_RUNTIME.guessKey(D.league,D.league==="pl"?(D.plSeason||"2025-26"):"")}
 function _hasGuess(g){return !!(g&&(g.w||g.hs!=null||g.as!=null))}
 function gG(){
   var key=_gKey();
+  if(D.league==="laliga")SEASON_RUNTIME.migrateLegacyLaligaGuesses(localStorage,D.plSeason||"2025-26");
   var local={};try{local=JSON.parse(localStorage.getItem(key)||"{}")}catch(e){}
   if(D.league==="pl"&&(D.plSeason==="2025-26"||!D.plSeason)&&!Object.keys(local).length){
     try{local=JSON.parse(localStorage.getItem("plg")||"{}")}catch(e){}
