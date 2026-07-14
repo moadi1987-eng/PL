@@ -36,7 +36,8 @@ def make_pack(season, archive, matches=380, teams=20):
         "label": season.replace("-", "/"),
         "archive": archive,
         "teams": {team_id: {"id": team_id, "n": f"Team {team_id}"} for team_id in range(1, teams + 1)},
-        "gws": [{"id": matchday, "fin": archive, "cur": matchday == 1 and not archive} for matchday in range(1, 39)],
+        "gws": [{"id": matchday, "fin": archive,
+                 "cur": matchday == (38 if archive else 1)} for matchday in range(1, 39)],
         "fix": [
             {"id": 700000 + index, "source_fixture_id": 700000 + index, "season": season,
              "e": index // 10 + 1, "h": index % teams + 1, "a": (index + 1) % teams + 1,
@@ -170,6 +171,46 @@ class LaligaSeasonPackTests(unittest.TestCase):
         packs["2026-27"]["fix"][0]["id"] = -1
         with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):
             build_laliga_catalog(packs)
+
+    def test_catalog_rejects_non_boolean_archive_metadata(self):
+        for season, expected_archive in (("2025-26", True), ("2026-27", False)):
+            for impostor in (1, 0, "false", None):
+                with self.subTest(season=season, impostor=impostor):
+                    packs = {
+                        "2025-26": make_pack("2025-26", archive=True),
+                        "2026-27": make_pack("2026-27", archive=False),
+                    }
+                    packs[season]["archive"] = impostor
+                    if impostor is expected_archive:
+                        continue
+                    with self.assertRaisesRegex(ValueError, f"invalid La Liga season metadata {season}"):
+                        build_laliga_catalog(packs)
+
+    def test_catalog_strict_mode_requires_exactly_one_boolean_current_matchday(self):
+        cases = {
+            "missing": lambda pack: [row.update(cur=False) for row in pack["gws"]],
+            "multiple": lambda pack: pack["gws"][1].update(cur=True),
+            "non_boolean": lambda pack: pack["gws"][0].update(cur=1),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                packs = {
+                    "2025-26": make_pack("2025-26", archive=True),
+                    "2026-27": make_pack("2026-27", archive=False),
+                }
+                mutate(packs["2026-27"])
+                with self.assertRaisesRegex(ValueError, "invalid La Liga current matchdays 2026-27"):
+                    build_laliga_catalog(packs)
+
+    def test_catalog_non_strict_mode_preserves_small_pack_behavior(self):
+        packs = {
+            "2025-26": make_pack("2025-26", archive=True, matches=2, teams=2),
+            "2026-27": make_pack("2026-27", archive=False, matches=2, teams=2),
+        }
+        packs["2026-27"]["gws"][0]["cur"] = 1
+        packs["2026-27"]["gws"][1]["cur"] = True
+        catalog = build_laliga_catalog(packs, strict=False)
+        self.assertEqual("2026-27", catalog["current"])
         packs["2026-27"] = make_pack("2026-27", archive=False)
         packs["2026-27"]["fix"][0]["source_fixture_id"] = 999999
         with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):

@@ -35,3 +35,15 @@ No known concerns. Production integration is intentionally outside this task's o
 - RED check after adding regressions: `python -m unittest tests.test_laliga_seasons -v` ran 14 tests with 5 failures, exposing multiple current matchdays, invalid strict identities, and nested-logo loss.
 - Focused post-fix check: `python -m unittest tests.test_laliga_seasons -v` ran 14 tests and finished `OK`.
 - Full post-fix check: `python -m unittest discover -v` ran 174 tests and finished `OK`.
+
+## Re-review Fixes
+
+- Catalog archive metadata now requires an actual boolean and exact identity with the supported season specification; numeric, string, and null impostors fail closed.
+- Strict catalog validation now requires each season to contain exactly one `cur is True` matchday, with every `cur` value itself an exact boolean. Relaxed `strict=False` catalogs retain their small-pack behavior.
+- Updated the shared test pack fixture so archived valid packs carry one final current matchday, matching the strict catalog contract.
+
+## Re-review Verification
+
+- RED check after adding regressions: `python -m unittest tests.test_laliga_seasons -v` ran 17 tests with 7 failures, exposing archive impostors and missing, multiple, or non-boolean current flags.
+- Focused post-fix check: `python -m unittest tests.test_laliga_seasons -v` ran 17 tests and finished `OK`.
+- Full post-fix check: `python -m unittest discover -v` ran 177 tests and finished `OK`.

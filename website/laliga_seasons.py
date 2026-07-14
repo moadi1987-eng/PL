@@ -147,11 +147,16 @@ def build_laliga_catalog(packs, current="2026-27", strict=True):
         if season not in packs:
             raise ValueError(f"missing La Liga season {season}")
         pack = packs[season]
-        if pack.get("season") != season or bool(pack.get("archive")) != bool(specs[season]["archive"]):
+        if (pack.get("season") != season or type(pack.get("archive")) is not bool
+                or pack.get("archive") is not specs[season]["archive"]):
             raise ValueError(f"invalid La Liga season metadata {season}")
         if strict and (len(pack.get("teams", {})) != 20 or len(pack.get("gws", [])) != 38 or len(pack.get("fix", [])) != 380):
             raise ValueError(f"incomplete La Liga season {season}")
         if strict:
+            gws = pack.get("gws", [])
+            if (any(not isinstance(row, dict) or type(row.get("cur")) is not bool for row in gws)
+                    or sum(row["cur"] for row in gws) != 1):
+                raise ValueError(f"invalid La Liga current matchdays {season}")
             team_ids = set()
             for key, team in pack.get("teams", {}).items():
                 if not isinstance(team, dict) or not _is_positive_int(team.get("id")):
