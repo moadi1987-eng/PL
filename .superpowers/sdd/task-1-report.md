@@ -23,3 +23,15 @@
 ## Concerns
 
 No known concerns. Production integration is intentionally outside this task's ownership boundary.
+
+## Review Fixes
+
+- Added regression coverage proving that exactly one matchday is current: the earliest live matchday wins, then the earliest unfinished matchday, then the final matchday for fully completed input.
+- Hardened strict catalog validation to require 20 positive integer team record IDs matching their map keys, unique positive fixture IDs, `source_fixture_id` equal to `id`, and distinct home/away IDs present in the team set.
+- Preserved direct ESPN `logo` values and safely falls back to the first `logos[].href` value when the direct field is absent.
+
+## Review-Fix Verification
+
+- RED check after adding regressions: `python -m unittest tests.test_laliga_seasons -v` ran 14 tests with 5 failures, exposing multiple current matchdays, invalid strict identities, and nested-logo loss.
+- Focused post-fix check: `python -m unittest tests.test_laliga_seasons -v` ran 14 tests and finished `OK`.
+- Full post-fix check: `python -m unittest discover -v` ran 174 tests and finished `OK`.

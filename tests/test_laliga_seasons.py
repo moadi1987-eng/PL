@@ -9,11 +9,11 @@ from website.laliga_seasons import (
 )
 
 
-def espn_event(event_id, index, completed):
+def espn_event(event_id, index, completed, started=False):
     kickoff = datetime(2026, 5, 1, tzinfo=timezone.utc) + timedelta(days=index)
     home_id = index % 20 + 1
     away_id = (index + 1) % 20 + 1
-    state = "post" if completed else "pre"
+    state = "post" if completed else "in" if started else "pre"
     return {
         "id": str(event_id),
         "date": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -71,6 +71,33 @@ class LaligaSeasonPackTests(unittest.TestCase):
         self.assertEqual((None, None), (pack["fix"][10]["hs"], pack["fix"][10]["as"]))
         self.assertEqual(20, len(pack["teams"]))
 
+    def test_pack_marks_only_earliest_live_matchday_current(self):
+        events = [espn_event(700000 + index, index, completed=index < 10) for index in range(30)]
+        for event in events[10:]:
+            event["competitions"][0]["status"]["type"]["state"] = "in"
+        pack = build_laliga_season_pack(events, {}, "2026-27", archive=False)
+        self.assertEqual([False, True, False], [row["cur"] for row in pack["gws"]])
+
+    def test_pack_falls_back_to_earliest_unfinished_or_final_matchday(self):
+        unfinished = [espn_event(700000 + index, index, completed=index < 10) for index in range(20)]
+        unfinished_pack = build_laliga_season_pack(unfinished, {}, "2026-27", archive=False)
+        self.assertEqual([False, True], [row["cur"] for row in unfinished_pack["gws"]])
+
+        completed = [espn_event(700000 + index, index, completed=True) for index in range(20)]
+        completed_pack = build_laliga_season_pack(completed, {}, "2025-26", archive=True)
+        self.assertEqual([False, True], [row["cur"] for row in completed_pack["gws"]])
+
+    def test_pack_accepts_both_espn_logo_shapes(self):
+        standings = {
+            "children": [{"standings": {"entries": [
+                {"team": {"id": "1", "displayName": "Team 1", "logo": "direct.png"}},
+                {"team": {"id": "2", "displayName": "Team 2", "logos": [{"href": "nested.png"}]}},
+            ]}}]
+        }
+        pack = build_laliga_season_pack([espn_event(700001, 0, completed=True)], standings, "2025-26", archive=True)
+        self.assertEqual("direct.png", pack["teams"][1]["b"])
+        self.assertEqual("nested.png", pack["teams"][2]["b"])
+
     def test_merge_events_replaces_by_id_and_preserves_order(self):
         base = [{"id": "1", "value": "old"}, {"id": "2", "value": "keep"}]
         overlay = [{"id": "1", "value": "new"}, {"id": "3", "value": "append"}]
@@ -111,6 +138,41 @@ class LaligaSeasonPackTests(unittest.TestCase):
         packs["2025-26"] = make_pack("2025-26", archive=True)
         packs["2025-26"]["fix"][0]["season"] = "2026-27"
         with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2025-26"):
+            build_laliga_catalog(packs)
+
+    def test_catalog_strict_mode_rejects_invalid_team_identity(self):
+        packs = {
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": make_pack("2026-27", archive=False),
+        }
+        packs["2026-27"]["teams"][1]["id"] = -9
+        with self.assertRaisesRegex(ValueError, "invalid La Liga teams 2026-27"):
+            build_laliga_catalog(packs)
+
+    def test_catalog_strict_mode_rejects_dangling_or_same_fixture_teams(self):
+        packs = {
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": make_pack("2026-27", archive=False),
+        }
+        packs["2026-27"]["fix"][0]["h"] = 999999
+        with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):
+            build_laliga_catalog(packs)
+        packs["2026-27"] = make_pack("2026-27", archive=False)
+        packs["2026-27"]["fix"][0]["a"] = packs["2026-27"]["fix"][0]["h"]
+        with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):
+            build_laliga_catalog(packs)
+
+    def test_catalog_strict_mode_requires_stable_positive_fixture_ids(self):
+        packs = {
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": make_pack("2026-27", archive=False),
+        }
+        packs["2026-27"]["fix"][0]["id"] = -1
+        with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):
+            build_laliga_catalog(packs)
+        packs["2026-27"] = make_pack("2026-27", archive=False)
+        packs["2026-27"]["fix"][0]["source_fixture_id"] = 999999
+        with self.assertRaisesRegex(ValueError, "invalid La Liga fixtures 2026-27"):
             build_laliga_catalog(packs)
 
 
