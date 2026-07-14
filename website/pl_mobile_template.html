@@ -65,8 +65,9 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--dk)
 .wcb-team{display:grid;grid-template-columns:15px minmax(0,1fr) auto;align-items:center;gap:.22rem;height:19px;font-size:.52rem;font-weight:700;color:var(--tx)}
 .wcb-team img{width:15px;height:15px;object-fit:contain}.wcb-team span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wcb-team b{font-size:.58rem}
 .wcb-team.winner{color:var(--g)}.wcb-team.placeholder{color:var(--tm);font-weight:600}
+.wcb-trophy{grid-column:5;grid-row:6;align-self:center;justify-self:center;width:52px;height:auto;z-index:2;pointer-events:none;filter:drop-shadow(0 0 8px rgba(255,197,61,.38))}
 .wcb-empty{padding:.75rem;border:1px solid var(--bd);border-radius:6px;color:var(--tm);text-align:center;font-size:.62rem}
-@media(max-width:700px){.wcb-scroll{margin-left:0;margin-right:0}.wcb-canvas{height:660px}.wcb-card{height:56px}}
+@media(max-width:700px){.wcb-scroll{margin-left:0;margin-right:0}.wcb-canvas{height:660px}.wcb-card{height:56px}.wcb-trophy{width:46px}}
 /* Table */
 .tw{overflow-x:auto}
 table.tbl{width:100%;border-collapse:collapse;font-size:.65rem;white-space:nowrap}
@@ -1617,7 +1618,9 @@ function rWCBracket(){
   var heads=[[1,'Round of 32'],[2,'Round of 16'],[3,'Quarterfinal'],[4,'Semifinal'],[5,'Final'],[6,'Semifinal'],[7,'Quarterfinal'],[8,'Round of 16'],[9,'Round of 32']];
   heads.forEach(function(item){h+='<div class="wcb-head" style="grid-column:'+item[0]+';grid-row:1">'+item[1]+'</div>'});
   h+=wcBracketRound(model.sides.left.r32,1,1,'R32')+wcBracketRound(model.sides.left.r16,2,2,'R16')+wcBracketRound(model.sides.left.qf,3,4,'QF')+wcBracketRound(model.sides.left.sf,4,8,'SF');
-  h+=wcBracketPlace(model.final,5,3,3,'Final')+wcBracketPlace(model.third,5,7,2,'3rd Place');
+  h+=wcBracketPlace(model.final,5,3,3,'Final');
+  h+='<img class="wcb-trophy" src="static/world-cup-trophy.png" alt="" aria-hidden="true">';
+  h+=wcBracketPlace(model.third,5,7,2,'3rd Place');
   h+=wcBracketRound(model.sides.right.sf,6,8,'SF')+wcBracketRound(model.sides.right.qf,7,4,'QF')+wcBracketRound(model.sides.right.r16,8,2,'R16')+wcBracketRound(model.sides.right.r32,9,1,'R32');
   return h+'</div></div></div>';
 }

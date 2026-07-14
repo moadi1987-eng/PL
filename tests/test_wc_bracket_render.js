@@ -43,6 +43,8 @@ const context = {
 vm.createContext(context);
 vm.runInContext(template.slice(start, end), context);
 const html = context.rWCBracket();
+assert.strictEqual((html.match(/class="wcb-trophy"/g) || []).length, 1);
+assert.match(html, /<img class="wcb-trophy" src="static\/world-cup-trophy\.png" alt="" aria-hidden="true">/);
 assert.strictEqual((html.match(/class="wcb-card/g) || []).length, 32);
 assert.match(html, /Knockout Bracket/);
 assert.match(html, /Round of 32/);
@@ -53,6 +55,9 @@ assert.match(html, /<div class="wcb-team placeholder"><span><\/span><span title=
 assert.match(html, /wcb-team winner/);
 assert.match(html, /wcb-card finished/);
 assert.doesNotMatch(html, /undefined|NaN|Infinity/);
+
+context.WC_BRACKET_RUNTIME = { build: () => ({ ready: false }) };
+assert.doesNotMatch(context.rWCBracket(), /wcb-trophy/);
 
 const resultBody = template.slice(template.indexOf('function rRes'), template.indexOf('/*', template.indexOf('function rRes')));
 assert.match(resultBody, /rWCGroups\(\)/);
