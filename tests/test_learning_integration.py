@@ -817,16 +817,11 @@ class PersistentCompetitionTests(unittest.TestCase):
         exec(compile(prefix, str(update_path), "exec"), namespace)
 
         def runner(**kwargs):
-            if kwargs["league"] == "wc":
-                reloaded = json.loads(Path(kwargs["history_path"]).read_text(encoding="utf-8"))
-                reloaded["wc"] = {
-                    "gw_results": [],
-                    "model_comparison": {"total": 0},
-                    "model_status": {"verified_lifecycle_samples": 0},
-                }
-                namespace["atomic_save_json"](kwargs["history_path"], reloaded)
-                return reloaded, {}, {}
-            history = copy.deepcopy(kwargs["history"])
+            history = {
+                league: copy.deepcopy(value)
+                for league, value in kwargs["history"].items()
+                if league in {"pl", "laliga"}
+            }
             history[kwargs["league"]] = {
                 "gw_results": [],
                 "model_comparison": {"total": 0},
@@ -837,10 +832,17 @@ class PersistentCompetitionTests(unittest.TestCase):
         namespace["run_persistent_competition"] = runner
         with tempfile.TemporaryDirectory() as tmp:
             history_path = Path(tmp) / "history.json"
+            wc_sentinel = {
+                "gw_results": [{"season": "2026", "gw": 1, "total": 1}],
+                "model_comparison": {"total": 1, "sentinel": "preserve-wc"},
+                "model_status": {"verified_lifecycle_samples": 1},
+                "generation_id": "wc-sentinel-generation",
+            }
+            history_path.write_text(json.dumps({"wc": wc_sentinel}), encoding="utf-8")
             namespace["LEARNING_HISTORY_FILE"] = str(history_path)
             with patch.object(learning, "atomic_save_json", wraps=learning.atomic_save_json) as save:
                 namespace["atomic_save_json"] = save
-                namespace["run_league_learning"](
+                returned = namespace["run_league_learning"](
                     [], {}, [], {}, {},
                     ll_season="2026-27",
                     ll_available_seasons=["2026-27", "2025-26"],
@@ -856,10 +858,12 @@ class PersistentCompetitionTests(unittest.TestCase):
                     history_saves[0].args[1]["laliga"]["available_seasons"],
                 )
 
-                namespace["run_wc_learning"](json.dumps({"teams": {}, "fix": []}), {})
-
             persisted = json.loads(history_path.read_text(encoding="utf-8"))
 
+        self.assertEqual(wc_sentinel, returned["wc"])
+        self.assertEqual("2026-27", returned["laliga"]["current_season"])
+        self.assertEqual(["2026-27", "2025-26"], returned["laliga"]["available_seasons"])
+        self.assertEqual(wc_sentinel, persisted["wc"])
         self.assertEqual("2026-27", persisted["laliga"]["current_season"])
         self.assertEqual(["2026-27", "2025-26"], persisted["laliga"]["available_seasons"])
 

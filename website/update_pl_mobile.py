@@ -26,7 +26,7 @@ TPL = os.path.join(HERE, "pl_mobile_template.html")
 
 from datetime import datetime, timedelta, timezone
 try:
-    from league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition
+    from league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition, validate_global_history
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
     from github_atomic_publish import publish_generated_outputs, resolve_target_repository
@@ -38,7 +38,7 @@ try:
         merge_events_by_id,
     )
 except ImportError:
-    from .league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition
+    from .league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition, validate_global_history
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
     from .github_atomic_publish import publish_generated_outputs, resolve_target_repository
@@ -1619,8 +1619,13 @@ def run_league_learning(
     history["laliga"]["counts"] = copy.deepcopy(ll_counts)
     history["laliga"]["current_season"] = ll_season
     history["laliga"]["available_seasons"] = list(ll_available_seasons or [ll_season])
-    atomic_save_json(LEARNING_HISTORY_FILE, history)
-    return history
+    latest_history, _ = load_json_state(LEARNING_HISTORY_FILE, {})
+    validate_global_history(latest_history)
+    for league in ("pl", "laliga"):
+        latest_history[league] = copy.deepcopy(history[league])
+    validate_global_history(latest_history)
+    atomic_save_json(LEARNING_HISTORY_FILE, latest_history)
+    return latest_history
 
 
 def _validate_learning_state_files():
