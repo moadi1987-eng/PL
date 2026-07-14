@@ -49,7 +49,7 @@ assert.match(html, /Round of 32/);
 assert.match(html, /Final/);
 assert.match(html, /3rd Place/);
 assert.match(html, /67'/);
-assert.match(html, /Semifinal 1 Winner/);
+assert.match(html, /<div class="wcb-team placeholder"><span><\/span><span title="Semifinal 1 Winner">Semifinal 1 Winner<\/span><b><\/b><\/div>/);
 assert.match(html, /wcb-team winner/);
 assert.match(html, /wcb-card finished/);
 assert.doesNotMatch(html, /undefined|NaN|Infinity/);

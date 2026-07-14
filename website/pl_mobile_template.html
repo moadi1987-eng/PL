@@ -1602,9 +1602,9 @@ function wcBracketCard(ref,label){
   var model=_wcBracketModel,m=ref.match||{},home=T(m.h),away=T(m.a),winner=wcBracketWinner(model,ref.key,m);
   var live=m.st&&!m.fin,status=live?liveText(m.ko,m.mn,m.sx||''):m.fin?'FT':fKO(m.ko||'');
   function row(team,id,score){
-    var cls='wcb-team'+(winner===id?' winner':'')+(team.ph?' placeholder':'');
+    var cls='wcb-team'+(winner===id?' winner':'')+(team.ph?' placeholder':''),displayName=team.ph?(team.n||team.s||'TBD'):(team.s||team.n||'TBD');
     var img=team.b?'<img src="'+wcBracketEsc(team.b)+'" alt="'+wcBracketEsc(team.n||team.s||'Team')+'" onerror="this.style.display=\'none\'">':'<span></span>';
-    return'<div class="'+cls+'">'+img+'<span title="'+wcBracketEsc(team.n||team.s||'TBD')+'">'+wcBracketEsc(team.s||team.n||'TBD')+'</span><b>'+(score==null?'':score)+'</b></div>';
+    return'<div class="'+cls+'">'+img+'<span title="'+wcBracketEsc(team.n||team.s||'TBD')+'">'+wcBracketEsc(displayName)+'</span><b>'+(score==null?'':score)+'</b></div>';
   }
   return'<div class="wcb-card'+(live?' live':'')+(m.fin?' finished':'')+'" data-bracket-key="'+ref.key+'"><div class="wcb-stage"><span>'+label+'</span><span>'+status+'</span></div>'+row(home,m.h,m.hs)+row(away,m.a,m.as)+'</div>';
 }
