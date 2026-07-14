@@ -821,6 +821,8 @@ class PersistentCompetitionTests(unittest.TestCase):
             calls.append(kwargs)
             history = copy.deepcopy(kwargs["history"])
             history[kwargs["league"]] = {
+                "gw_results": [],
+                "total_evaluated": 0,
                 "model_comparison": {"total": 0},
                 "model_status": {"verified_lifecycle_samples": 0},
             }
@@ -842,8 +844,6 @@ class PersistentCompetitionTests(unittest.TestCase):
         }
         archive_fixture = {
             **current_fixture,
-            "id": 20252601,
-            "source_fixture_id": 20252601,
             "season": "2025-26",
         }
 
@@ -860,8 +860,82 @@ class PersistentCompetitionTests(unittest.TestCase):
         laliga_call = next(call for call in calls if call["league"] == "laliga")
         self.assertEqual([current_fixture], laliga_call["fixtures"])
         self.assertTrue(all(row["season"] == "2026-27" for row in laliga_call["fixtures"]))
+        self.assertEqual(
+            "laliga:2025-26:20262701",
+            learning.competition_match_key("laliga", archive_fixture["season"], archive_fixture["source_fixture_id"]),
+        )
+        self.assertEqual(
+            "laliga:2026-27:20262701",
+            learning.competition_match_key("laliga", current_fixture["season"], current_fixture["source_fixture_id"]),
+        )
+        self.assertNotEqual(
+            learning.competition_match_key("laliga", archive_fixture["season"], archive_fixture["source_fixture_id"]),
+            learning.competition_match_key("laliga", current_fixture["season"], current_fixture["source_fixture_id"]),
+        )
         self.assertEqual("2026-27", history["laliga"]["current_season"])
         self.assertEqual(["2026-27", "2025-26"], history["laliga"]["available_seasons"])
+        self.assertEqual([], history["laliga"]["gw_results"])
+        self.assertEqual(0, history["laliga"]["total_evaluated"])
+
+    def test_laliga_current_season_only_locks_and_trains_when_source_id_repeats(self):
+        now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        source_fixture_id = 90210
+        current_fixture = {
+            "id": source_fixture_id,
+            "source_fixture_id": source_fixture_id,
+            "season": "2026-27",
+            "e": 1,
+            "h": 1,
+            "a": 2,
+            "ko": (now + timedelta(hours=10)).isoformat(),
+            "fin": False,
+            "st": False,
+            "hs": None,
+            "as": None,
+        }
+        archive_fixture = {
+            **current_fixture,
+            "season": "2025-26",
+            "ko": (now - timedelta(days=2)).isoformat(),
+        }
+        archive_key = learning.competition_match_key("laliga", archive_fixture["season"], source_fixture_id)
+        current_key = learning.competition_match_key("laliga", current_fixture["season"], source_fixture_id)
+        trained_keys = []
+
+        def trainer(model, rows):
+            trained_keys.extend(row["match_key"] for row in rows)
+            return self._trainer(model, rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prediction_path = root / "laliga-predictions.json"
+            model_path = root / "laliga-weights.json"
+            history, initial_counts, _ = run_persistent_competition(
+                league="laliga", fixtures=[archive_fixture, current_fixture],
+                teams={1: {"id": 1}, 2: {"id": 2}},
+                prediction_path=str(prediction_path), model_path=str(model_path),
+                history={}, now=now, snapshot_builder=self._snapshot_builder,
+                model_trainer=trainer, default_model=default_model_state("laliga"),
+            )
+            completed_current = dict(current_fixture, fin=True, st=True, hs=2)
+            completed_current["as"] = 0
+            history, completed_counts, _ = run_persistent_competition(
+                league="laliga", fixtures=[archive_fixture, completed_current],
+                teams={1: {"id": 1}, 2: {"id": 2}},
+                prediction_path=str(prediction_path), model_path=str(model_path),
+                history=history, now=now + timedelta(days=1), snapshot_builder=self._snapshot_builder,
+                model_trainer=trainer, default_model=default_model_state("laliga"),
+            )
+            stored_keys = {
+                snapshot["match_key"]
+                for snapshot in json.loads(prediction_path.read_text(encoding="utf-8"))["matches"].values()
+            }
+
+        self.assertNotEqual(archive_key, current_key)
+        self.assertEqual(1, initial_counts["locked"])
+        self.assertEqual(1, completed_counts["trained"])
+        self.assertEqual([current_key], trained_keys)
+        self.assertEqual({current_key}, stored_keys)
 
     def test_pl_compaction_preserves_selected_official_season_identity(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"

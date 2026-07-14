@@ -1918,17 +1918,27 @@ function aiTrendChart(rows,gwLbl,lgCol){
   var trendText=dayDelta==null?'First point':(dayDelta>=0?'+':'')+dayDelta.toFixed(1)+'% vs prev';
   return'<div class="sec" style="margin-bottom:.25rem">Accuracy Trend</div><div class="aichart"><div class="aichart-head"><div><b>'+(gwLbl==='Day'?'Daily hit rate':gwLbl+' hit rate')+'</b><span>'+rs.length+' points · latest '+last.correct_winner+'/'+last.total+' winners</span></div><em class="'+cls+'">'+trendText+'</em></div><svg viewBox="0 0 320 116" aria-label="AI accuracy trend">'+grid+'<path class="area" d="'+area+'" style="fill:'+lgCol+'"></path><path class="line" d="'+d+'" style="stroke:'+lgCol+'"></path>'+dots+labels+'</svg><div class="aichart-foot"><span>0%</span><span>50%</span><span>100%</span></div></div>';
 }
+function aiSeasonEmptyState(leagueName,season,archived,rows){
+  if(rows&&rows.length)return'';
+  if(archived&&leagueName==='La Liga')return'<div class="emp">No verified La Liga '+season+' AI history</div>';
+  return'';
+}
 function rAI(){
   var c=$("t3");
   var lh=(typeof LEARNING_HISTORY!=="undefined")?LEARNING_HISTORY:{pl:{gw_results:[]},laliga:{gw_results:[]},wc:{gw_results:[]}};
   var lgKey=D.league,isPL=lgKey==='pl',isWC=lgKey==='wc';
   var lgData=lh[lgKey]||{gw_results:[]};
-  var selectedSeason=isPL?(D.plSeason||lgData.current_season||""):(lgKey==="laliga"?(D.llSeason||lgData.current_season||""):(lgData.current_season||""));
+  var selectedSeason=isPL
+    ?(D.plSeason||lgData.current_season||'')
+    :D.league==='laliga'
+      ?(D.llSeason||lgData.current_season||'')
+      :(lgData.current_season||'');
   var rows=learningRowsForSeason(normAIRows(lgData.gw_results||[]),selectedSeason);
-  if(!rows.length){var localRows=normAIRows(localLearningRows());localRows.forEach(function(row){row.season=selectedSeason});rows=learningRowsForSeason(localRows,selectedSeason)}
+  var canUseLocalRows=!D.arch&&selectedSeason===lgData.current_season;
+  if(!rows.length&&canUseLocalRows){var localRows=normAIRows(localLearningRows());localRows.forEach(function(row){row.season=selectedSeason});rows=learningRowsForSeason(localRows,selectedSeason)}
   var overall=aiOverall(rows),tot=overall.total,acc=overall.accuracy_pct;
   var wts=activeWeights(),cal=activeCalibration(),modelState=learningModelState(lgKey),meta=(lgData.model_meta||modelState.meta||{});
-  var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||localModelComparison());
+  var modelCmp=isWC?lgData.model_comparison:(lgData.model_comparison||(canUseLocalRows?localModelComparison():null));
   var trainedMatches=aiStatusNumber(meta.trained_matches),verifiedSamples=aiVerifiedSamples(lgData.model_status);
   var hasOwnWeights=(trainedMatches!==null&&trainedMatches>0)||verifiedSamples>0;
   var lgCol=isPL?'var(--g)':isWC?'#f7c948':'#ff6b35';
@@ -1974,7 +1984,7 @@ function rAI(){
     h+=aiTrendChart(rows,gwLbl,lgCol);
     h+=aiDayBreakdown(rows,gwLbl,lgCol);
   } else {
-    h+='<div class="emp" style="margin:1.2rem 0;line-height:1.7">No '+lgName+' data yet.<br><span style="font-size:.55rem;color:var(--tm)">Builds automatically after each completed gameweek.</span></div>';
+    h+=aiSeasonEmptyState(isPL?'Premier League':isWC?'World Cup':'La Liga',selectedSeason,D.arch,rows)||'<div class="emp" style="margin:1.2rem 0;line-height:1.7">No '+lgName+' data yet.<br><span style="font-size:.55rem;color:var(--tm)">Builds automatically after each completed gameweek.</span></div>';
   }
   if(Object.keys(wts).length){
     var ents=Object.entries(wts).sort(function(a,b){return b[1]-a[1]});

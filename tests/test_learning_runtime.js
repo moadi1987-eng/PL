@@ -52,6 +52,11 @@ const seasonRows = vm.runInContext(
   context,
 );
 assert.deepStrictEqual(JSON.parse(JSON.stringify(seasonRows)), [{ season: '2026-27', gw: 1 }]);
+const llRows = vm.runInContext(
+  'learningRowsForSeason([{season:"2025-26",gw:29},{season:"2026-27",gw:1}],"2025-26")',
+  context,
+);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(llRows)), [{ season: '2025-26', gw: 29 }]);
 
 function assertLeague(league, strength, goalMult, strategy, status) {
   context.D.league = league;
@@ -178,6 +183,11 @@ vm.runInContext(
 );
 vm.runInContext(source, renderContext);
 vm.runInContext(statusSource, renderContext);
+const emptySource = template.slice(template.indexOf('function aiSeasonEmptyState'), template.indexOf('function rAI'));
+vm.runInContext(emptySource, renderContext);
+const archiveHtml = renderContext.aiSeasonEmptyState('La Liga', '2025-26', true, []);
+assert.match(archiveHtml, /No verified La Liga 2025-26 AI history/);
+assert.doesNotMatch(archiveHtml, /100%/);
 assert.strictEqual(renderContext.aiStatusNumber(null), null);
 assert.strictEqual(renderContext.aiStatusNumber(undefined), null);
 assert.strictEqual(renderContext.aiStatusNumber(NaN), null);
