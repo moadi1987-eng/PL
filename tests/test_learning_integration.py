@@ -714,6 +714,7 @@ class PersistentCompetitionTests(unittest.TestCase):
         exec(compile(prefix, str(update_path), "exec"), namespace)
         store = {"matches": {"1": {
             "legacy": True,
+            "lock_verified": True,
             "checked": True,
             "actual_home_score": 1,
             "actual_away_score": 0,
@@ -726,6 +727,10 @@ class PersistentCompetitionTests(unittest.TestCase):
             "picks": {
                 "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
                 "v4": {"winner": "home", "home_score": 2, "away_score": 0},
+            },
+            "evaluations": {
+                "baseline": {"winner_correct": True, "exact": True, "points": 3},
+                "v4": {"winner_correct": True, "exact": False, "points": 1},
             },
         }}}
         previous = {"total_evaluated": 1, "model_comparison": {
@@ -741,6 +746,39 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertEqual(0.0, comparison["models"]["baseline"]["goal_mae"])
         self.assertEqual(0.14, comparison["models"]["baseline"]["outcome_brier"])
         self.assertEqual(0.5, comparison["models"]["v4"]["goal_mae"])
+
+    def test_wc_archive_metrics_ignore_checked_unverified_snapshots(self):
+        update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"
+        source = update_path.read_text(encoding="utf-8")
+        prefix = source[:source.index("\ndef _pl_official_int")]
+        namespace = {"__name__": "website.update_pl_mobile_test", "__package__": "website", "__file__": str(update_path)}
+        exec(compile(prefix, str(update_path), "exec"), namespace)
+        verified = {
+            "lock_verified": True,
+            "checked": True,
+            "actual_home_score": 1,
+            "actual_away_score": 0,
+            "actual_winner": "home",
+            "rule": {"key": "group", "result": 1, "exact": 3, "additive": False},
+            "picks": {
+                "baseline": {"winner": "home", "home_score": 1, "away_score": 0},
+                "v4": {"winner": "home", "home_score": 2, "away_score": 0},
+            },
+            "evaluations": {
+                "baseline": {"winner_correct": True, "exact": True, "points": 3},
+                "v4": {"winner_correct": True, "exact": False, "points": 1},
+            },
+        }
+        unverified = copy.deepcopy(verified)
+        unverified["lock_verified"] = False
+        summary = namespace["_wc_archive_metric_summary"](
+            {"matches": {"verified": verified, "unverified": unverified}},
+            archive_total=1,
+        )
+
+        for strategy in ("baseline", "v4"):
+            self.assertEqual(1, summary["models"][strategy]["sample_size"])
+            self.assertEqual(100.0, summary["models"][strategy]["completeness_pct"])
 
     def test_wc_bare_merged_ids_migrate_without_counting_snapshot_twice(self):
         update_path = Path(__file__).parents[1] / "website" / "update_pl_mobile.py"

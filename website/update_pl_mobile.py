@@ -1341,11 +1341,22 @@ def _wc_archive_box(comparison, name):
     return source
 
 
+def _wc_is_verified_archive_snapshot(snapshot):
+    evaluations = snapshot.get("evaluations") if isinstance(snapshot, dict) else None
+    return (
+        isinstance(snapshot, dict)
+        and snapshot.get("lock_verified") is True
+        and snapshot.get("checked") is True
+        and isinstance(evaluations, dict)
+        and {"baseline", "v4"}.issubset(evaluations)
+    )
+
+
 def _wc_archive_metric_summary(store, archive_total):
     rows = []
     matches = store.get("matches", {}) if isinstance(store, dict) else {}
     for snapshot in matches.values() if isinstance(matches, dict) else ():
-        if not isinstance(snapshot, dict) or snapshot.get("checked") is not True:
+        if not _wc_is_verified_archive_snapshot(snapshot):
             continue
         picks = snapshot.get("picks")
         rule = snapshot.get("rule") or snapshot.get("phase_rule")
@@ -1477,7 +1488,7 @@ def _wc_merge_verified_archive(previous, lifecycle_history, store):
             lifecycle_key = f"wc:{snapshot.get('season') or '2026'}:{snapshot.get('source_fixture_id', snapshot.get('match_id', match_id))}"
         if lifecycle_key in seen:
             continue
-        if snapshot.get("lock_verified") is True and snapshot.get("checked") is True and {"baseline", "v4"}.issubset((snapshot.get("evaluations") or {})):
+        if _wc_is_verified_archive_snapshot(snapshot):
             new_snapshots.append(snapshot)
             seen.add(lifecycle_key)
 
