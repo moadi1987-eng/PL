@@ -117,7 +117,7 @@ class LaligaSeasonPackTests(unittest.TestCase):
                 cache_path=str(cache_path),
             )
 
-        self.assertEqual("cache", source)
+        self.assertEqual("cache (not JSON)", source)
         self.assertEqual(380, len(loaded["data"]["2026-27"]["fix"]))
         self.assertEqual("2026-27", loaded["current"])
 

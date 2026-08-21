@@ -160,8 +160,9 @@ def fetch_laliga_catalog(request_get, *, api_base, api_key, cache_path):
                 )
                 response.raise_for_status()
                 payload = response.json()
-                if (not isinstance(payload, dict) or payload.get("errors")
-                        or not isinstance(payload.get("response"), list)):
+                if isinstance(payload, dict) and payload.get("errors"):
+                    raise ValueError(f"API-Football errors: {payload['errors']}")
+                if not isinstance(payload, dict) or not isinstance(payload.get("response"), list):
                     raise ValueError("invalid API-Football La Liga response")
                 packs[spec["key"]] = build_api_football_season_pack(
                     payload["response"], spec["key"], archive=spec["archive"]
@@ -170,7 +171,10 @@ def fetch_laliga_catalog(request_get, *, api_base, api_key, cache_path):
         except Exception as exc:
             provider_error = exc
     try:
-        return _load_cached_laliga_catalog(cache_path), "cache"
+        reason = re.sub(r"\s+", " ", str(provider_error)).strip() or type(provider_error).__name__
+        if api_key:
+            reason = reason.replace(api_key, "***")
+        return _load_cached_laliga_catalog(cache_path), f"cache ({reason[:240]})"
     except Exception as cache_error:
         raise RuntimeError(
             f"La Liga providers unavailable ({provider_error}); cache invalid ({cache_error})"

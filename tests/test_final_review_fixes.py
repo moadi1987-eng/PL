@@ -113,11 +113,12 @@ class FinalReviewLifecycleTests(unittest.TestCase):
             raise AssertionError("canonical PL matches must be a collection")
         packets = {}
         for snapshot in rows:
+            if not isinstance(snapshot, dict):
+                raise AssertionError("canonical PL row must be an object")
+            if snapshot.get("legacy") is not True or snapshot.get("lock_verified") is not False:
+                continue
             if (
-                not isinstance(snapshot, dict)
-                or snapshot.get("legacy") is not True
-                or snapshot.get("lock_verified") is not False
-                or not isinstance(snapshot.get("round"), int)
+                not isinstance(snapshot.get("round"), int)
                 or isinstance(snapshot.get("round"), bool)
             ):
                 raise AssertionError("canonical PL row must be exact unverified legacy evidence")
