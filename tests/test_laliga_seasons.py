@@ -1,4 +1,5 @@
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -68,7 +69,126 @@ def api_football_fixture(fixture_id, round_id, status="NS", home_score=None, awa
     }
 
 
+def official_page(round_id, statuses=None):
+    statuses = statuses or ["PreMatch"] * 10
+    matches = []
+    for offset, status in enumerate(statuses):
+        home_id = offset * 2 + 1
+        away_id = offset * 2 + 2
+        matches.append({
+            "id": 100000 + round_id * 100 + offset,
+            "date": f"2026-08-{min(28, 10 + round_id):02d}T19:00:00+00:00",
+            "home_score": 2 if status != "PreMatch" else None,
+            "away_score": 1 if status != "PreMatch" else None,
+            "status": status,
+            "home_team": {
+                "id": home_id, "nickname": f"Team {home_id}", "shortname": f"T{home_id}",
+                "shield": {"url": f"https://assets.laliga.com/{home_id}.png"},
+            },
+            "away_team": {
+                "id": away_id, "nickname": f"Team {away_id}", "shortname": f"T{away_id}",
+                "shield": {"url": f"https://assets.laliga.com/{away_id}.png"},
+            },
+        })
+    return {
+        "statusCode": 200,
+        "season": "2026",
+        "gameweek": {"id": 10000 + round_id, "week": round_id},
+        "currentGameweek": {"id": 10002, "week": 2},
+        "gameweekList": [{"id": 10000 + value, "week": value} for value in range(1, 39)],
+        "matches": matches,
+    }
+
+
+def official_response(page):
+    payload = {"props": {"pageProps": page}}
+
+    class Response:
+        text = '<script id="__NEXT_DATA__" type="application/json">' + json.dumps(payload) + "</script>"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            raise AssertionError("official La Liga pages must not be parsed as API JSON")
+
+    return Response()
+
+
 class LaligaSeasonPackTests(unittest.TestCase):
+    def test_official_pack_preserves_matchday_scores_status_and_team_assets(self):
+        pack = laliga.build_laliga_official_season_pack([
+            official_page(1, ["FullTime"] * 10),
+            official_page(2, ["FirstHalf"] + ["PreMatch"] * 9),
+        ], "2026-27", archive=False)
+
+        self.assertEqual([1, 2], [row["id"] for row in pack["gws"]])
+        self.assertEqual((2, 1, True, True), tuple(pack["fix"][0][key] for key in ("hs", "as", "fin", "st")))
+        self.assertEqual((2, 1, False, True, "FirstHalf"), tuple(pack["fix"][10][key] for key in ("hs", "as", "fin", "st", "sx")))
+        self.assertEqual("https://assets.laliga.com/1.png", pack["teams"][1]["b"])
+        self.assertEqual("laliga.com", pack["provider"])
+
+    def test_fetch_catalog_bootstraps_current_season_from_official_laliga(self):
+        cached = build_laliga_catalog({
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": make_pack("2026-27", archive=False),
+        })
+        requested = []
+
+        def get(url, **kwargs):
+            requested.append(url)
+            if "laliga.com" not in url:
+                raise AssertionError("API-Football should not be called after an official success")
+            match = __import__("re").search(r"gameweek-(\d+)$", url)
+            return official_response(official_page(int(match.group(1))))
+
+        with TemporaryDirectory() as root:
+            cache_path = Path(root) / "dashboard.html"
+            cache_path.write_text(
+                "<script>\nvar EMBEDDED_LL_SEASONS=" + json.dumps(cached, separators=(",", ":"))
+                + ";\nvar NEXT_VALUE={};\n</script>", encoding="utf-8",
+            )
+            catalog, source = laliga.fetch_laliga_catalog(
+                get, api_base="https://api.invalid", api_key="", cache_path=str(cache_path)
+            )
+
+        self.assertEqual("laliga.com", source)
+        self.assertEqual(38, len(requested))
+        self.assertEqual(380, len(catalog["data"]["2026-27"]["fix"]))
+        self.assertEqual("laliga.com", catalog["data"]["2026-27"]["provider"])
+        self.assertEqual(380, len(catalog["data"]["2025-26"]["fix"]))
+
+    def test_fetch_catalog_refreshes_only_nearby_rounds_after_official_bootstrap(self):
+        current = laliga.build_laliga_official_season_pack(
+            [official_page(round_id) for round_id in range(1, 39)], "2026-27", archive=False
+        )
+        cached = build_laliga_catalog({
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": current,
+        })
+        requested = []
+
+        def get(url, **kwargs):
+            requested.append(url)
+            round_match = __import__("re").search(r"gameweek-(\d+)$", url)
+            round_id = int(round_match.group(1)) if round_match else 2
+            statuses = ["FullTime"] * 10 if round_id == 1 else None
+            return official_response(official_page(round_id, statuses))
+
+        with TemporaryDirectory() as root:
+            cache_path = Path(root) / "dashboard.html"
+            cache_path.write_text(
+                "<script>\nvar EMBEDDED_LL_SEASONS=" + json.dumps(cached, separators=(",", ":"))
+                + ";\nvar NEXT_VALUE={};\n</script>", encoding="utf-8",
+            )
+            catalog, source = laliga.fetch_laliga_catalog(
+                get, api_base="https://api.invalid", api_key="", cache_path=str(cache_path)
+            )
+
+        self.assertEqual("laliga.com", source)
+        self.assertEqual(3, len(requested))
+        self.assertTrue(all(row["fin"] for row in catalog["data"]["2026-27"]["fix"] if row["e"] == 1))
+
     def test_api_football_pack_preserves_round_live_status_and_score(self):
         builder = getattr(laliga, "build_api_football_season_pack", None)
         self.assertTrue(callable(builder), "API-Football La Liga adapter is missing")
@@ -117,7 +237,8 @@ class LaligaSeasonPackTests(unittest.TestCase):
                 cache_path=str(cache_path),
             )
 
-        self.assertEqual("cache (not JSON)", source)
+        self.assertTrue(source.startswith("cache ("))
+        self.assertIn("not JSON", source)
         self.assertEqual(380, len(loaded["data"]["2026-27"]["fix"]))
         self.assertEqual("2026-27", loaded["current"])
 

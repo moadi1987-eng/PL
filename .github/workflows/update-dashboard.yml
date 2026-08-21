@@ -39,11 +39,11 @@ jobs:
         id: check
         run: |
           python3 << 'PYEOF'
-          import requests, os, subprocess, datetime
+          import requests, os, subprocess, datetime, json, re
 
           is_manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
           FPL = "https://fantasy.premierleague.com/api"
-          ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
+          LALIGA_RESULTS = "https://www.laliga.com/en-GB/laliga-easports/results"
           ESPN_WC_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
           FIFA_WC_MATCHES = "https://api.fifa.com/api/v3/calendar/matches"
           HDR = {"User-Agent": "PL-Dashboard/1.0"}
@@ -70,17 +70,30 @@ jobs:
               raise SystemExit(0)
 
           try:
-              today = now.strftime("%Y%m%d")
-              espn = requests.get(ESPN_SB, params={"dates": today, "limit": "50"}, headers=HDR, timeout=15).json()
-              for ev in espn.get("events", []):
-                  for comp in ev.get("competitions", []):
-                      state = comp.get("status", {}).get("type", {}).get("state", "pre")
-                      if state == "in":
-                          ll_live += 1
+              response = requests.get(LALIGA_RESULTS, headers=HDR, timeout=20)
+              response.raise_for_status()
+              match = re.search(
+                  r"<script\s+id=[^>]*__NEXT_DATA__[^>]*>(.*?)</script>",
+                  response.text,
+                  flags=re.DOTALL,
+              )
+              if not match:
+                  raise ValueError("official page data missing")
+              page = json.loads(match.group(1)).get("props", {}).get("pageProps", {})
+              live_statuses = {
+                  "FirstHalf", "HalfTime", "SecondHalf", "ExtraFirstHalf",
+                  "ExtraSecondHalf", "ExtraHalfTime", "ShootOut",
+              }
+              ll_live = len([
+                  fixture for fixture in page.get("matches", [])
+                  if fixture.get("status") in live_statuses
+              ])
               if ll_live:
                   print(f"La Liga LIVE: {ll_live} matches in progress")
           except Exception as e:
-              print(f"La Liga check failed ({e}) - ignoring")
+              print(f"La Liga official check failed ({e}) - refreshing as precaution")
+              write_output("true")
+              raise SystemExit(0)
 
           try:
               today = now.strftime("%Y%m%d")

@@ -1,3 +1,4 @@
+import json
 import re
 
 try:
@@ -10,6 +11,9 @@ LALIGA_SEASON_SPECS = (
     {"key": "2026-27", "label": "2026/27", "archive": False},
     {"key": "2025-26", "label": "2025/26", "archive": True},
 )
+LALIGA_OFFICIAL_RESULTS = "https://www.laliga.com/en-GB/laliga-easports/results"
+LALIGA_SCHEDULED_STATUSES = {"PreMatch", "Postponed", "Canceled"}
+LALIGA_FINISHED_STATUSES = {"FullTime", "Abandoned"}
 
 
 def laliga_date_range(season):
@@ -139,6 +143,135 @@ def build_api_football_season_pack(fixtures, season, archive):
     }
 
 
+def _official_page_props(response):
+    response.raise_for_status()
+    text = str(getattr(response, "text", "") or "")
+    match = re.search(
+        r'<script\s+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("invalid official La Liga page")
+    payload = json.loads(match.group(1))
+    props = payload.get("props", {}).get("pageProps", {}) if isinstance(payload, dict) else {}
+    if not isinstance(props, dict) or props.get("statusCode") != 200:
+        raise ValueError("invalid official La Liga page data")
+    return props
+
+
+def _official_team(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    team_id = raw.get("id")
+    if not _is_positive_int(team_id):
+        raise ValueError("invalid official La Liga team")
+    name = str(raw.get("nickname") or raw.get("boundname") or raw.get("name") or "").strip()
+    if not name:
+        raise ValueError("invalid official La Liga team")
+    shield = raw.get("shield") if isinstance(raw.get("shield"), dict) else {}
+    return team_id, {
+        "id": team_id,
+        "n": name,
+        "s": str(raw.get("shortname") or name[:3]).upper()[:3],
+        "c": team_id,
+        "b": str(shield.get("url") or ""),
+        "sah": 1100,
+        "sdh": 1100,
+        "saa": 1050,
+        "sda": 1050,
+    }
+
+
+def build_laliga_official_season_pack(pages, season, archive, base_pack=None):
+    laliga_date_range(season)
+    expected_year = season[:4]
+    teams = {
+        int(team_id): team
+        for team_id, team in (base_pack or {}).get("teams", {}).items()
+    }
+    rows = list((base_pack or {}).get("fix", []))
+    refreshed_rounds = set()
+    current_round = None
+
+    for page in pages if isinstance(pages, list) else ():
+        if not isinstance(page, dict) or str(page.get("season")) != expected_year:
+            raise ValueError("invalid official La Liga season")
+        gameweek = page.get("gameweek") if isinstance(page.get("gameweek"), dict) else {}
+        round_id = gameweek.get("week")
+        matches = page.get("matches")
+        if not _is_positive_int(round_id) or round_id > 38 or not isinstance(matches, list) or len(matches) != 10:
+            raise ValueError("invalid official La Liga matchday")
+        if round_id in refreshed_rounds:
+            raise ValueError("duplicate official La Liga matchday")
+        refreshed_rounds.add(round_id)
+        current = page.get("currentGameweek") if isinstance(page.get("currentGameweek"), dict) else {}
+        if _is_positive_int(current.get("week")):
+            current_round = current["week"]
+
+        round_rows = []
+        for raw in matches:
+            if not isinstance(raw, dict) or not _is_positive_int(raw.get("id")):
+                raise ValueError("invalid official La Liga fixture")
+            home_id, home = _official_team(raw.get("home_team"))
+            away_id, away = _official_team(raw.get("away_team"))
+            if home_id == away_id:
+                raise ValueError("invalid official La Liga fixture")
+            teams[home_id] = home
+            teams[away_id] = away
+            status = str(raw.get("status") or "")
+            finished = status in LALIGA_FINISHED_STATUSES
+            started = finished or status not in LALIGA_SCHEDULED_STATUSES
+            home_score = _score(raw.get("home_score")) if started else None
+            away_score = _score(raw.get("away_score")) if started else None
+            if started and not finished and (home_score is None or away_score is None):
+                raise ValueError("invalid official La Liga live score")
+            round_rows.append({
+                "id": raw["id"],
+                "source_fixture_id": raw["id"],
+                "season": season,
+                "e": round_id,
+                "h": home_id,
+                "a": away_id,
+                "hs": home_score,
+                "as": away_score,
+                "fin": finished,
+                "st": started,
+                "ko": str(raw.get("date") or raw.get("time") or ""),
+                "mn": 90 if finished else 0,
+                "sx": status,
+            })
+        rows = [row for row in rows if row.get("e") != round_id] + round_rows
+
+    if not refreshed_rounds or not rows or not teams:
+        raise ValueError(f"empty official La Liga season {season}")
+    rows.sort(key=lambda row: (row["e"], row["ko"], row["id"]))
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("duplicate official La Liga fixture")
+    max_matchday = max(row["e"] for row in rows)
+    gws = []
+    for matchday in range(1, max_matchday + 1):
+        fixtures = [row for row in rows if row["e"] == matchday]
+        finished = bool(fixtures) and all(row["fin"] for row in fixtures)
+        gws.append({"id": matchday, "fin": finished, "cur": False})
+    live_rounds = [row["id"] for row in gws if any(
+        fixture["st"] and not fixture["fin"] for fixture in rows if fixture["e"] == row["id"]
+    )]
+    unfinished_rounds = [row["id"] for row in gws if not row["fin"]]
+    selected = (live_rounds or ([current_round] if current_round in range(1, max_matchday + 1) else [])
+                or unfinished_rounds or [gws[-1]["id"]])[0]
+    for row in gws:
+        row["cur"] = row["id"] == selected
+    return {
+        "teams": teams,
+        "gws": gws,
+        "fix": rows,
+        "season": season,
+        "label": season.replace("-", "/"),
+        "archive": bool(archive),
+        "provider": "laliga.com",
+    }
+
+
 def _load_cached_laliga_catalog(path):
     catalog = load_embedded_json_variable(path, "EMBEDDED_LL_SEASONS")
     if not isinstance(catalog, dict) or not isinstance(catalog.get("data"), dict):
@@ -146,7 +279,67 @@ def _load_cached_laliga_catalog(path):
     return build_laliga_catalog(catalog["data"], current=catalog.get("current", "2026-27"))
 
 
+def _fetch_official_page(request_get, url):
+    return _official_page_props(request_get(
+        url,
+        headers={"User-Agent": "PL-Dashboard/1.0"},
+        timeout=30,
+    ))
+
+
+def _fetch_official_season(request_get, season):
+    pages = [
+        _fetch_official_page(request_get, f"{LALIGA_OFFICIAL_RESULTS}/{season}/gameweek-{round_id}")
+        for round_id in range(1, 39)
+    ]
+    return build_laliga_official_season_pack(
+        pages,
+        season,
+        archive=next(row["archive"] for row in LALIGA_SEASON_SPECS if row["key"] == season),
+    )
+
+
+def _refresh_official_current(request_get, cached_pack):
+    current_page = _fetch_official_page(request_get, LALIGA_OFFICIAL_RESULTS)
+    gameweek = current_page.get("gameweek") if isinstance(current_page.get("gameweek"), dict) else {}
+    current_round = gameweek.get("week")
+    if not _is_positive_int(current_round) or current_round > 38:
+        raise ValueError("invalid official La Liga current matchday")
+    pages = [current_page]
+    for round_id in sorted({current_round - 1, current_round + 1} & set(range(1, 39))):
+        pages.append(_fetch_official_page(
+            request_get, f"{LALIGA_OFFICIAL_RESULTS}/2026-27/gameweek-{round_id}"
+        ))
+    return build_laliga_official_season_pack(
+        pages, "2026-27", archive=False, base_pack=cached_pack
+    )
+
+
 def fetch_laliga_catalog(request_get, *, api_base, api_key, cache_path):
+    cached_catalog = None
+    cache_error = None
+    try:
+        cached_catalog = _load_cached_laliga_catalog(cache_path)
+    except Exception as exc:
+        cache_error = exc
+
+    official_error = None
+    try:
+        cached_current = (cached_catalog or {}).get("data", {}).get("2026-27", {})
+        if cached_current.get("provider") == "laliga.com":
+            current_pack = _refresh_official_current(request_get, cached_current)
+        else:
+            current_pack = _fetch_official_season(request_get, "2026-27")
+        archive_pack = (cached_catalog or {}).get("data", {}).get("2025-26")
+        if not archive_pack:
+            archive_pack = _fetch_official_season(request_get, "2025-26")
+        return build_laliga_catalog({
+            "2026-27": current_pack,
+            "2025-26": archive_pack,
+        }), "laliga.com"
+    except Exception as exc:
+        official_error = exc
+
     provider_error = ValueError("API-Football key unavailable")
     if api_key:
         try:
@@ -171,13 +364,17 @@ def fetch_laliga_catalog(request_get, *, api_base, api_key, cache_path):
         except Exception as exc:
             provider_error = exc
     try:
-        reason = re.sub(r"\s+", " ", str(provider_error)).strip() or type(provider_error).__name__
+        reasons = [f"laliga.com: {official_error}", f"API-Football: {provider_error}"]
+        reason = re.sub(r"\s+", " ", "; ".join(reasons)).strip()
         if api_key:
             reason = reason.replace(api_key, "***")
-        return _load_cached_laliga_catalog(cache_path), f"cache ({reason[:240]})"
-    except Exception as cache_error:
+        if cached_catalog:
+            return cached_catalog, f"cache ({reason[:240]})"
+        raise cache_error or ValueError("invalid cached La Liga catalog")
+    except Exception as final_cache_error:
         raise RuntimeError(
-            f"La Liga providers unavailable ({provider_error}); cache invalid ({cache_error})"
+            f"La Liga providers unavailable ({official_error}; {provider_error}); "
+            f"cache invalid ({final_cache_error})"
         ) from provider_error
 
 

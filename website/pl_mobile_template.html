@@ -484,7 +484,7 @@ function _fetchLeague(){
   if(D.league==='pl')_fPL();
   else if(D.league==='wc'&&D.fx&&D.fx.some(function(f){return _matchIsDueOrLive(f,new Date())}))_fWCQuick();
   else if(D.league==='wc')_fWC();
-  else _fLL();
+  else if(D.league==='laliga')_updDone(false);
 }
 
 function _rebuildGW(fix){
@@ -605,7 +605,7 @@ function _fLiveJson(){
               }
               llFix.push({id:llIdentity.id,source_fixture_id:llIdentity.source_fixture_id,season:llIdentity.season,e:f.e,h:f.h,a:f.a,hs:f.hs,as:f.as,fin:fin,st:st,ko:ko,mn:mn,sx:f.sx||''});
             });
-            if(needFreshLL){_fLL();return;}
+            if(needFreshLL){_updDone(false);return;}
             var llGW=_rebuildGW(llFix);
             _applyData('laliga',D.tm||{},llGW,llFix);_updDone(true);tryFresh();return;
           }

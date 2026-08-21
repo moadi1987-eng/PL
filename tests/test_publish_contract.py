@@ -1000,6 +1000,19 @@ class PublishContractTests(unittest.TestCase):
         self.assertIn('ll_current_pack = ll_seasons_data[ll_catalog["current"]]', self.source)
         self.assertIn('ll_current_pack["fix"]', self.source)
 
+    def test_workflow_checks_laliga_live_state_from_the_official_site(self):
+        self.assertIn(
+            "https://www.laliga.com/en-GB/laliga-easports/results",
+            self.workflow,
+        )
+        self.assertIn("__NEXT_DATA__", self.workflow)
+        self.assertNotIn('ESPN_SB = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"', self.workflow)
+
+    def test_browser_does_not_replace_official_laliga_data_with_espn_fallback(self):
+        template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
+        self.assertIn("else if(D.league==='laliga')_updDone(false);", template)
+        self.assertIn("if(needFreshLL){_updDone(false);return;}", template)
+
     def test_contents_api_is_opt_in_and_local_only(self):
         self.assertIn(
             'PUBLISH_TO_GITHUB = os.environ.get("PUBLISH_TO_GITHUB", "") == "1"',

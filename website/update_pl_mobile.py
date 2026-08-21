@@ -1982,7 +1982,7 @@ else:
 
 guesses_json = json.dumps(guesses, ensure_ascii=False, separators=(",", ":"))
 
-# ── La Liga data from API-Football with validated cache fallback ──
+# ── La Liga data from the official site with validated provider fallbacks ──
 print("\nFetching La Liga data...")
 ll_catalog, ll_source = fetch_laliga_catalog(
     requests.get,
