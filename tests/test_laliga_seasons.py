@@ -1,5 +1,9 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import website.laliga_seasons as laliga
 
 from website.laliga_seasons import (
     build_laliga_catalog,
@@ -48,7 +52,75 @@ def make_pack(season, archive, matches=380, teams=20):
     }
 
 
+def api_football_fixture(fixture_id, round_id, status="NS", home_score=None, away_score=None):
+    return {
+        "fixture": {
+            "id": fixture_id,
+            "date": f"2026-08-{14 + round_id:02d}T19:00:00+00:00",
+            "status": {"short": status, "elapsed": 90 if status == "FT" else None},
+        },
+        "league": {"id": 140, "season": 2026, "round": f"Regular Season - {round_id}"},
+        "teams": {
+            "home": {"id": 1, "name": "Home FC", "logo": "home.png"},
+            "away": {"id": 2, "name": "Away FC", "logo": "away.png"},
+        },
+        "goals": {"home": home_score, "away": away_score},
+    }
+
+
 class LaligaSeasonPackTests(unittest.TestCase):
+    def test_api_football_pack_preserves_round_live_status_and_score(self):
+        builder = getattr(laliga, "build_api_football_season_pack", None)
+        self.assertTrue(callable(builder), "API-Football La Liga adapter is missing")
+
+        pack = builder(
+            [
+                api_football_fixture(900001, 1, status="FT", home_score=2, away_score=1),
+                api_football_fixture(900002, 2, status="1H", home_score=1, away_score=0),
+            ],
+            "2026-27",
+            archive=False,
+        )
+
+        self.assertEqual([1, 2], [row["e"] for row in pack["fix"]])
+        self.assertEqual((2, 1, True, True, 90), tuple(pack["fix"][0][key] for key in ("hs", "as", "fin", "st", "mn")))
+        self.assertEqual((1, 0, False, True), tuple(pack["fix"][1][key] for key in ("hs", "as", "fin", "st")))
+        self.assertEqual([False, True], [row["cur"] for row in pack["gws"]])
+
+    def test_fetch_catalog_uses_last_valid_cache_when_provider_returns_non_json(self):
+        fetcher = getattr(laliga, "fetch_laliga_catalog", None)
+        self.assertTrue(callable(fetcher), "resilient La Liga catalog fetcher is missing")
+        catalog = build_laliga_catalog({
+            "2025-26": make_pack("2025-26", archive=True),
+            "2026-27": make_pack("2026-27", archive=False),
+        })
+
+        class NonJsonResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                raise ValueError("not JSON")
+
+        with TemporaryDirectory() as root:
+            cache_path = Path(root) / "dashboard.html"
+            cache_path.write_text(
+                "<script>\nvar EMBEDDED_LL_SEASONS="
+                + __import__("json").dumps(catalog, separators=(",", ":"))
+                + ";\nvar NEXT_VALUE={};\n</script>",
+                encoding="utf-8",
+            )
+            loaded, source = fetcher(
+                lambda *args, **kwargs: NonJsonResponse(),
+                api_base="https://example.invalid",
+                api_key="available",
+                cache_path=str(cache_path),
+            )
+
+        self.assertEqual("cache", source)
+        self.assertEqual(380, len(loaded["data"]["2026-27"]["fix"]))
+        self.assertEqual("2026-27", loaded["current"])
+
     def test_fixed_ranges_cover_previous_and_current_seasons(self):
         self.assertEqual("20250801-20260630", laliga_date_range("2025-26"))
         self.assertEqual("20260801-20270630", laliga_date_range("2026-27"))

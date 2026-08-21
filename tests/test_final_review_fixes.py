@@ -489,7 +489,8 @@ class FinalReviewLifecycleTests(unittest.TestCase):
 
     def test_raw_pl_rows_never_train_compare_or_promote(self):
         path = Path(__file__).parents[1] / "ai_predictions.json"
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        production = json.loads(path.read_text(encoding="utf-8"))
+        raw = self.raw_pl_packets_from_production_store(production)
         trainer_calls = []
 
         store, model, history, counts = evolve_competition_state(

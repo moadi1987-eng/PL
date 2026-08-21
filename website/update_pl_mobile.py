@@ -29,33 +29,27 @@ try:
     from league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition, validate_global_history
     from league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from learning_embed import embed_learning_runtime
+    from embedded_cache import load_world_cup_archive
     from github_atomic_publish import publish_generated_outputs, resolve_target_repository
     from laliga_seasons import (
         LALIGA_SEASON_SPECS,
-        build_laliga_catalog,
-        build_laliga_season_pack,
-        laliga_date_range,
-        merge_events_by_id,
+        fetch_laliga_catalog,
     )
 except ImportError:
     from .league_learning import atomic_save_json, comparison_summary, load_json_state, recover_pending_competitions, run_persistent_competition, validate_global_history
     from .league_predictor import default_model_state, legacy_v4_pick, predict_league_snapshot, train_factor_model
     from .learning_embed import embed_learning_runtime
+    from .embedded_cache import load_world_cup_archive
     from .github_atomic_publish import publish_generated_outputs, resolve_target_repository
     from .laliga_seasons import (
         LALIGA_SEASON_SPECS,
-        build_laliga_catalog,
-        build_laliga_season_pack,
-        laliga_date_range,
-        merge_events_by_id,
+        fetch_laliga_catalog,
     )
 try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
 
-ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
-ESPN_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/esp.1/standings"
 PL_OFFICIAL_COMPSEASON = "841"
 PL_OFFICIAL_FIXTURES = "https://footballapi.pulselive.com/football/fixtures"
 ESPN_WC_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
@@ -1988,45 +1982,24 @@ else:
 
 guesses_json = json.dumps(guesses, ensure_ascii=False, separators=(",", ":"))
 
-# ── La Liga data from ESPN ──
+# ── La Liga data from API-Football with validated cache fallback ──
 print("\nFetching La Liga data...")
-ll_seasons_data = {}
-today_str = datetime.now(ISRAEL_TZ).strftime("%Y%m%d")
+ll_catalog, ll_source = fetch_laliga_catalog(
+    requests.get,
+    api_base=FOOTBALL_API,
+    api_key=FOOTBALL_API_KEY,
+    cache_path=OUT,
+)
+ll_seasons_data = ll_catalog["data"]
 for spec in LALIGA_SEASON_SPECS:
     season = spec["key"]
-    espn_events = requests.get(
-        ESPN_SCOREBOARD,
-        params={"dates": laliga_date_range(season), "limit": "1000"},
-        headers=hdr,
-        timeout=30,
-    ).json().get("events", [])
-    if not spec["archive"]:
-        today_events = requests.get(
-            ESPN_SCOREBOARD,
-            params={"dates": today_str},
-            headers=hdr,
-            timeout=15,
-        ).json().get("events", [])
-        espn_events = merge_events_by_id(espn_events, today_events)
-    espn_standings = requests.get(
-        ESPN_STANDINGS,
-        params={"season": int(season[:4])},
-        headers=hdr,
-        timeout=20,
-    ).json()
-    ll_seasons_data[season] = build_laliga_season_pack(
-        espn_events,
-        espn_standings,
-        season,
-        archive=spec["archive"],
-    )
     pack = ll_seasons_data[season]
     print(
         f"La Liga {season} — Teams: {len(pack['teams'])}, "
         f"Matchdays: {len(pack['gws'])}, Fixtures: {len(pack['fix'])}"
     )
+print(f"La Liga source: {ll_source}")
 
-ll_catalog = build_laliga_catalog(ll_seasons_data)
 ll_current_pack = ll_seasons_data[ll_catalog["current"]]
 ll_fixtures = ll_current_pack["fix"]
 ll_teams = ll_current_pack["teams"]
@@ -2220,7 +2193,13 @@ try:
     print(f"World Cup — Teams: {len(wc_teams)}, Days: {len(wc_gws)}, Fixtures: {len(wc_fixtures)}, Finished: {n_fin}, Archive: {wc_archive}")
 except Exception as e:
     print(f"World Cup fetch failed: {e}")
-    wc_data = ""
+    try:
+        cached_wc = load_world_cup_archive(OUT)
+        wc_data = json.dumps(cached_wc, ensure_ascii=False, separators=(",", ":"))
+        print("World Cup: using complete cached archive (48 teams, 104 matches)")
+    except Exception as cache_error:
+        print(f"World Cup cache unavailable: {cache_error}")
+        wc_data = ""
 
 # World Cup guesses
 wc_guesses_file = os.path.join(ROOT, "user_guesses_wc.json")

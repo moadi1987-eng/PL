@@ -989,10 +989,11 @@ class PublishContractTests(unittest.TestCase):
     def test_builder_emits_complete_laliga_season_contract(self):
         template = (ROOT / "website" / "pl_mobile_template.html").read_text(encoding="utf-8")
 
-        self.assertIn("build_laliga_catalog", self.source)
         self.assertIn("LALIGA_SEASON_SPECS", self.source)
-        self.assertIn("laliga_date_range(season)", self.source)
-        self.assertIn('params={"season": int(season[:4])}', self.source)
+        self.assertIn("fetch_laliga_catalog(", self.source)
+        self.assertIn("api_base=FOOTBALL_API", self.source)
+        self.assertIn("api_key=FOOTBALL_API_KEY", self.source)
+        self.assertIn("cache_path=OUT", self.source)
         self.assertIn("/*__DATA_LL_SEASONS__*/", template)
         self.assertIn("/*__GUESSES_LL_SEASONS__*/", template)
         self.assertIn('live_data["ll_seasons"]', self.source)

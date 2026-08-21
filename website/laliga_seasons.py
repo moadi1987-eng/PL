@@ -1,5 +1,10 @@
 import re
 
+try:
+    from embedded_cache import load_embedded_json_variable
+except ImportError:
+    from .embedded_cache import load_embedded_json_variable
+
 
 LALIGA_SEASON_SPECS = (
     {"key": "2026-27", "label": "2026/27", "archive": False},
@@ -27,6 +32,149 @@ def merge_events_by_id(base, overlay):
         merged.append(replacements.get(key, row))
     merged.extend(row for row in overlay or [] if str(row.get("id")) not in seen)
     return merged
+
+
+def _api_football_round(value):
+    match = re.search(r"(?:^|\s-\s)(\d{1,2})$", str(value or ""))
+    round_id = int(match.group(1)) if match else 0
+    if not 1 <= round_id <= 38:
+        raise ValueError("invalid API-Football La Liga round")
+    return round_id
+
+
+def _api_football_team(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    team_id = raw.get("id")
+    if not _is_positive_int(team_id):
+        raise ValueError("invalid API-Football La Liga team")
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        raise ValueError("invalid API-Football La Liga team")
+    abbreviation = "".join(part[:1] for part in name.split()).upper()[:3] or name[:3].upper()
+    return team_id, {
+        "id": team_id,
+        "n": name,
+        "s": abbreviation,
+        "c": team_id,
+        "b": str(raw.get("logo") or ""),
+        "sah": 1100,
+        "sdh": 1100,
+        "saa": 1050,
+        "sda": 1050,
+    }
+
+
+def build_api_football_season_pack(fixtures, season, archive):
+    laliga_date_range(season)
+    rows = []
+    teams = {}
+    seen = set()
+    finished_statuses = {"FT", "AET", "PEN"}
+    scheduled_statuses = {"TBD", "NS", "PST", "CANC", "ABD", "AWD", "WO"}
+    for item in fixtures if isinstance(fixtures, list) else ():
+        fixture = item.get("fixture") if isinstance(item, dict) else None
+        league = item.get("league") if isinstance(item, dict) else None
+        raw_teams = item.get("teams") if isinstance(item, dict) else None
+        goals = item.get("goals") if isinstance(item, dict) else None
+        if not all(isinstance(value, dict) for value in (fixture, league, raw_teams, goals)):
+            raise ValueError("invalid API-Football La Liga fixture")
+        fixture_id = fixture.get("id")
+        if not _is_positive_int(fixture_id) or fixture_id in seen:
+            raise ValueError("invalid API-Football La Liga fixture")
+        seen.add(fixture_id)
+        round_id = _api_football_round(league.get("round"))
+        home_id, home_team = _api_football_team(raw_teams.get("home"))
+        away_id, away_team = _api_football_team(raw_teams.get("away"))
+        if home_id == away_id:
+            raise ValueError("invalid API-Football La Liga fixture")
+        teams.setdefault(home_id, home_team)
+        teams.setdefault(away_id, away_team)
+        status = fixture.get("status") if isinstance(fixture.get("status"), dict) else {}
+        short = str(status.get("short") or "").upper()
+        finished = short in finished_statuses
+        started = finished or short not in scheduled_statuses
+        home_score = _score(goals.get("home")) if started else None
+        away_score = _score(goals.get("away")) if started else None
+        if started and (home_score is None or away_score is None):
+            raise ValueError("invalid API-Football La Liga score")
+        elapsed = _score(status.get("elapsed")) or (90 if finished else 0)
+        rows.append({
+            "id": fixture_id,
+            "source_fixture_id": fixture_id,
+            "season": season,
+            "e": round_id,
+            "h": home_id,
+            "a": away_id,
+            "hs": home_score,
+            "as": away_score,
+            "fin": finished,
+            "st": started,
+            "ko": str(fixture.get("date") or ""),
+            "mn": elapsed,
+            "sx": short,
+        })
+    if not rows or not teams:
+        raise ValueError(f"empty La Liga season {season}")
+    rows.sort(key=lambda row: (row["e"], row["ko"], row["id"]))
+    max_matchday = max(row["e"] for row in rows)
+    gws = []
+    for matchday in range(1, max_matchday + 1):
+        matchday_fixtures = [row for row in rows if row["e"] == matchday]
+        finished = bool(matchday_fixtures) and all(row["fin"] for row in matchday_fixtures)
+        gws.append({"id": matchday, "fin": finished, "cur": False})
+    live_matchdays = [row["id"] for row in gws if any(
+        fixture["st"] and not fixture["fin"] for fixture in rows if fixture["e"] == row["id"]
+    )]
+    unfinished_matchdays = [row["id"] for row in gws if not row["fin"]]
+    current_id = (live_matchdays or unfinished_matchdays or [gws[-1]["id"]])[0]
+    for row in gws:
+        row["cur"] = row["id"] == current_id
+    return {
+        "teams": teams,
+        "gws": gws,
+        "fix": rows,
+        "season": season,
+        "label": season.replace("-", "/"),
+        "archive": bool(archive),
+    }
+
+
+def _load_cached_laliga_catalog(path):
+    catalog = load_embedded_json_variable(path, "EMBEDDED_LL_SEASONS")
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("data"), dict):
+        raise ValueError("invalid cached La Liga catalog")
+    return build_laliga_catalog(catalog["data"], current=catalog.get("current", "2026-27"))
+
+
+def fetch_laliga_catalog(request_get, *, api_base, api_key, cache_path):
+    provider_error = ValueError("API-Football key unavailable")
+    if api_key:
+        try:
+            packs = {}
+            for spec in LALIGA_SEASON_SPECS:
+                response = request_get(
+                    f"{api_base}/fixtures",
+                    params={"league": 140, "season": int(spec["key"][:4])},
+                    headers={"x-apisports-key": api_key},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if (not isinstance(payload, dict) or payload.get("errors")
+                        or not isinstance(payload.get("response"), list)):
+                    raise ValueError("invalid API-Football La Liga response")
+                packs[spec["key"]] = build_api_football_season_pack(
+                    payload["response"], spec["key"], archive=spec["archive"]
+                )
+            return build_laliga_catalog(packs), "api-football"
+        except Exception as exc:
+            provider_error = exc
+    try:
+        return _load_cached_laliga_catalog(cache_path), "cache"
+    except Exception as cache_error:
+        raise RuntimeError(
+            f"La Liga providers unavailable ({provider_error}); cache invalid ({cache_error})"
+        ) from provider_error
 
 
 def _score(value):

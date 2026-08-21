@@ -234,6 +234,46 @@ vm.createContext(archiveGuessContext);
 vm.runInContext(guessSource, archiveGuessContext);
 const firstArchiveGuesses = JSON.parse(JSON.stringify(archiveGuessContext.gG()));
 const secondArchiveGuesses = JSON.parse(JSON.stringify(archiveGuessContext.gG()));
+
+const autoFillSource = template.slice(
+  template.indexOf('function autoFillDueGuesses'),
+  template.indexOf('var _autoFillWatchTmr'),
+);
+const autoNow = Date.parse('2026-08-21T18:00:00Z');
+const autoStore = {};
+let autoSaved = 0;
+let autoSynced = 0;
+const randomGoals = [2, 1];
+const autoFillContext = {
+  D: {
+    arch: false,
+    fx: [
+      { id: 101, e: 1, ko: '2026-08-21T18:30:00Z', fin: false, st: false },
+      { id: 102, e: 1, ko: '2026-08-21T20:00:01Z', fin: false, st: false },
+    ],
+  },
+  gG: () => autoStore,
+  sG: () => { autoSaved += 1; },
+  autoSync: () => { autoSynced += 1; },
+  aiReadyMatch: () => true,
+  _hasGuess: (guess) => Boolean(guess && guess.hs != null && guess.as != null),
+  _rndGoal: () => randomGoals.shift(),
+};
+vm.createContext(autoFillContext);
+vm.runInContext(`Date.now=()=>${autoNow};${autoFillSource}`, autoFillContext);
+assert.strictEqual(autoFillContext.autoFillDueGuesses(), 1);
+const autoGuess = JSON.parse(JSON.stringify(autoStore[1][101]));
+const autoTimestamp = autoGuess.ts;
+delete autoGuess.ts;
+assert.deepStrictEqual(
+  autoGuess,
+  { w: 'home', hs: 2, as: 1, src: 'auto_random60', auto: true },
+);
+assert.ok(Number.isFinite(Date.parse(autoTimestamp)));
+assert.strictEqual(autoStore[1][102], undefined);
+assert.strictEqual(autoFillContext.autoFillDueGuesses(), 0);
+assert.strictEqual(autoSaved, 1);
+assert.strictEqual(autoSynced, 1);
 assert.strictEqual(firstArchiveGuesses['29']['748424'].w, 'draw');
 assert.strictEqual(secondArchiveGuesses['29']['748424'].w, 'draw');
 assert.strictEqual(archiveGuessWrites, 0);
