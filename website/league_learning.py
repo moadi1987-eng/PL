@@ -295,7 +295,7 @@ def comparison_summary(rows, active_strategy, candidate_strategy):
     }
 
 
-def promotion_decision(comparison, minimum_samples=30):
+def promotion_decision(comparison, minimum_samples=60):
     active_name = comparison["active_strategy"]
     candidate_name = comparison["candidate_strategy"]
     if comparison["total"] < minimum_samples:
@@ -814,6 +814,8 @@ def validate_model_state(model, league):
         _validate_calibration(model["calibration"])
     if "meta" in model:
         _validate_meta(model["meta"])
+    if "training_bootstrap_pending" in model and not isinstance(model["training_bootstrap_pending"], bool):
+        _state_error("invalid training bootstrap state")
     if "applied_ledger_version" in model and model["applied_ledger_version"] != LEDGER_VERSION:
         _state_error("invalid applied-match ledger version")
     if "applied_match_keys" in model:
@@ -1091,8 +1093,9 @@ def atomic_save_json(path, value):
 
 def evolve_competition_state(
     *, league, fixtures, store, model, snapshot_builder, model_trainer,
-    now, lock_hours=36, minimum_samples=30,
+    now, lock_hours=36, minimum_samples=None,
 ):
+    minimum_samples = (30 if league == "wc" else 60) if minimum_samples is None else minimum_samples
     store = normalize_prediction_store(store, league)
     store = copy.deepcopy(store)
     model = copy.deepcopy(model)
@@ -1197,6 +1200,7 @@ def evolve_competition_state(
 
     comparison_rows = []
     train_batch = []
+    training_evidence = []
     for snapshot in store["matches"].values():
         match_key = snapshot["match_key"]
         if _is_unverified_legacy(snapshot) and snapshot.get("checked") is True:
@@ -1281,15 +1285,32 @@ def evolve_competition_state(
             comparison_rows.append({
                 **evidence_row,
             })
+        training_row = copy.deepcopy(snapshot)
+        training_row["fixture"] = copy.deepcopy(stored_fixture)
+        training_evidence.append(training_row)
         if match_key not in applied and not _is_unverified_legacy(snapshot):
-            training_row = copy.deepcopy(snapshot)
-            training_row["fixture"] = copy.deepcopy(stored_fixture)
             train_batch.append(training_row)
 
-    if train_batch:
-        model = model_trainer(model, train_batch)
+    stats = model.get("training_stats") if isinstance(model.get("training_stats"), dict) else {}
+    calibration_evidence = stats.get("calibration_evidence") if isinstance(stats.get("calibration_evidence"), dict) else {}
+    has_cumulative_evidence = calibration_evidence.get("matches", 0) > 0
+    needs_bootstrap = (
+        league in {"pl", "laliga"}
+        and model.get("training_bootstrap_pending") is True
+        and bool(training_evidence)
+        and not has_cumulative_evidence
+    )
+    if train_batch or needs_bootstrap:
+        trainer_rows = (
+            training_evidence
+            if needs_bootstrap
+            else train_batch
+        )
+        model = model_trainer(model, trainer_rows)
         if not isinstance(model, dict):
             raise StateConsistencyError("model trainer returned invalid state")
+        if needs_bootstrap:
+            model.pop("training_bootstrap_pending", None)
         for row in train_batch:
             match_key = row["match_key"]
             applied.add(match_key)
@@ -1305,6 +1326,7 @@ def evolve_competition_state(
     model.setdefault("candidate_strategy", candidate)
     comparison = comparison_summary(comparison_rows, active, candidate)
     decision = promotion_decision(comparison, minimum_samples)
+    decision["minimum_samples"] = minimum_samples
     if decision["promote"] and decision["next_active_strategy"] != active:
         model["promotion_history"].append({
             "at": timestamp, "from": active, "to": decision["next_active_strategy"],
@@ -1377,6 +1399,21 @@ def _persistent_model(raw_model, default_model, league):
     default = copy.deepcopy(default_model) if isinstance(default_model, dict) else {}
     validate_model_state(raw_model, league)
     raw = raw_model
+    raw_stats = raw.get("training_stats") if isinstance(raw.get("training_stats"), dict) else {}
+    raw_calibration_evidence = raw_stats.get("calibration_evidence") if isinstance(raw_stats.get("calibration_evidence"), dict) else {}
+    raw_meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    has_prior_training = raw_meta.get("trained_matches", 0) > 0
+    raw_evidence_matches = raw_calibration_evidence.get("matches")
+    has_cumulative_training = _nonnegative_int(raw_evidence_matches) and raw_evidence_matches > 0
+    needs_training_bootstrap = (
+        league in {"pl", "laliga"}
+        and bool(raw)
+        and (
+            raw.get("training_bootstrap_pending") is True
+            or "training_stats" not in raw
+            or has_prior_training and not has_cumulative_training
+        )
+    )
     model = copy.deepcopy(default)
 
     if "factors" in raw or "calibration" in raw or "meta" in raw:
@@ -1416,13 +1453,15 @@ def _persistent_model(raw_model, default_model, league):
             from league_predictor import normalize_model_state
         normalized = normalize_model_state(model, league, model["active_strategy"])
         normalized["promotion_history"] = copy.deepcopy(model["promotion_history"])
-        for key in ("applied_ledger_version", "applied_match_keys", "generation_id", "comparison", "status"):
+        for key in ("applied_ledger_version", "applied_match_keys", "generation_id", "comparison", "status", "training_bootstrap_pending"):
             if key in model:
                 normalized[key] = copy.deepcopy(model[key])
         if isinstance(model.get("meta"), dict):
             for key, value in model["meta"].items():
                 if key not in {"trained_matches", "last_trained_at", "last_batch_size"}:
                     normalized["meta"][key] = copy.deepcopy(value)
+        if needs_training_bootstrap:
+            normalized["training_bootstrap_pending"] = True
         return normalized
     return model
 

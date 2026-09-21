@@ -25,6 +25,49 @@ DEFAULT_FACTORS = {
 }
 
 
+def _default_training_stats():
+    return {
+        "version": 1,
+        "factor_evidence": {
+            key: {"correct": 0, "total": 0}
+            for key in DEFAULT_FACTORS
+        },
+        "calibration_evidence": {
+            "matches": 0,
+            "predicted_home_goals": 0.0,
+            "predicted_away_goals": 0.0,
+            "actual_home_goals": 0.0,
+            "actual_away_goals": 0.0,
+            "predicted_draws": 0.0,
+            "actual_draws": 0,
+        },
+    }
+
+
+def _normalize_training_stats(raw):
+    default = _default_training_stats()
+    if not isinstance(raw, dict):
+        return default
+    evidence = raw.get("factor_evidence") if isinstance(raw.get("factor_evidence"), dict) else {}
+    for key in DEFAULT_FACTORS:
+        item = evidence.get(key) if isinstance(evidence.get(key), dict) else {}
+        total = max(0, int(_number(item.get("total"), 0)))
+        correct = _clip(int(_number(item.get("correct"), 0)), 0, total)
+        default["factor_evidence"][key] = {"correct": correct, "total": total}
+    calibration = raw.get("calibration_evidence") if isinstance(raw.get("calibration_evidence"), dict) else {}
+    for key in (
+        "matches", "predicted_home_goals", "predicted_away_goals",
+        "actual_home_goals", "actual_away_goals", "predicted_draws", "actual_draws",
+    ):
+        value = max(0.0, _number(calibration.get(key), 0.0))
+        default["calibration_evidence"][key] = int(value) if key in {"matches", "actual_draws"} else value
+    default["calibration_evidence"]["actual_draws"] = min(
+        default["calibration_evidence"]["actual_draws"],
+        default["calibration_evidence"]["matches"],
+    )
+    return default
+
+
 def _clip(value, low, high):
     return max(low, min(high, value))
 
@@ -87,6 +130,7 @@ def default_model_state(league, active_strategy="baseline"):
             "zero_zero_penalty": 0.62,
         },
         "meta": {"trained_matches": 0, "last_trained_at": "", "last_batch_size": 0},
+        "training_stats": _default_training_stats(),
         "promotion_history": [],
     }
 
@@ -118,6 +162,7 @@ def normalize_model_state(raw, league, default_active="baseline"):
         "last_trained_at": meta.get("last_trained_at") if isinstance(meta.get("last_trained_at"), str) else "",
         "last_batch_size": max(0, int(_number(meta.get("last_batch_size"), 0))),
     }
+    merged["training_stats"] = _normalize_training_stats(raw.get("training_stats"))
     merged["promotion_history"] = copy.deepcopy(raw["promotion_history"]) if isinstance(raw.get("promotion_history"), list) else []
     return merged
 
@@ -250,9 +295,15 @@ def _reweight_score_grid(grid, poisson_outcomes, target_outcomes):
 
 
 def _expected_points_pick(grid, outcomes, rule):
+    preferred_winner = max(
+        ("home", "draw", "away"),
+        key=lambda winner: _number(outcomes.get(winner), 0.0),
+    )
     best = None
     for (home_score, away_score), exact_probability in grid.items():
         winner = _score_winner(home_score, away_score)
+        if winner != preferred_winner:
+            continue
         if rule.get("additive"):
             value = outcomes[winner] * rule["result"] + exact_probability * rule["exact"]
         else:
@@ -267,7 +318,7 @@ def _v4_pick(lam_h, lam_a, probabilities, draw_rate):
     home_probability = probabilities["home"]
     draw_probability = probabilities["draw"]
     away_probability = probabilities["away"]
-    if draw_probability >= 0.23 and abs(home_probability - away_probability) <= 0.12:
+    if draw_probability >= max(home_probability, away_probability):
         goals = 2 if lam_h + lam_a >= 3.1 else 1 if lam_h + lam_a >= 1.8 else 0
         return {"winner": "draw", "home_score": goals, "away_score": goals, "reason": "draw-v4"}
     winner = "home" if home_probability >= away_probability else "away"
@@ -413,28 +464,59 @@ def train_factor_model(model, rows):
         return copy.deepcopy(raw_model)
     league = raw_model.get("league") if isinstance(raw_model.get("league"), str) else "pl"
     model = normalize_model_state(raw_model, league, raw_model.get("active_strategy", "baseline"))
-    factor_scores = {key: [] for key in model["factors"]}
-    actual_totals = []
-    predicted_totals = []
+    stats = model["training_stats"]
+    factor_evidence = stats["factor_evidence"]
+    calibration_evidence = stats["calibration_evidence"]
     for row in valid_rows:
         actual = row.get("actual_winner")
         for key, edge in (row.get("factor_edges") or {}).items():
             edge = _number(edge)
-            if key in factor_scores and abs(edge) >= 0.05 and actual != "draw":
-                factor_scores[key].append(1.0 if (edge > 0 and actual == "home") or (edge < 0 and actual == "away") else 0.0)
+            if key in factor_evidence and abs(edge) >= 0.05:
+                factor_evidence[key]["total"] += 1
+                factor_evidence[key]["correct"] += int(
+                    (edge > 0 and actual == "home") or (edge < 0 and actual == "away")
+                )
         fixture = row.get("fixture") if isinstance(row.get("fixture"), dict) else {}
-        actual_totals.append(max(_number(fixture.get("hs")), 0.0) + max(_number(fixture.get("as")), 0.0))
-        predicted_totals.append(max(_number(row.get("expected_home_goals")), 0.0) + max(_number(row.get("expected_away_goals")), 0.0))
-    for key, values in factor_scores.items():
-        if len(values) >= 3:
-            model["factors"][key] = _clip(model["factors"][key] + ((sum(values) / len(values)) - 0.5) * 0.04, 0.03, 0.25)
-    model["factors"] = _rounded_normalized_factors(model["factors"])
-    if valid_rows:
-        actual_avg = sum(actual_totals) / len(valid_rows)
-        predicted_avg = sum(predicted_totals) / len(valid_rows)
-        model["calibration"]["goal_mult"] = round(_clip(model["calibration"]["goal_mult"] + _clip((actual_avg - predicted_avg) * 0.035, -0.06, 0.06), 0.82, 1.22), 4)
+        calibration_evidence["matches"] += 1
+        calibration_evidence["actual_home_goals"] += max(_number(fixture.get("hs")), 0.0)
+        calibration_evidence["actual_away_goals"] += max(_number(fixture.get("as")), 0.0)
+        calibration_evidence["predicted_home_goals"] += max(_number(row.get("expected_home_goals")), 0.0)
+        calibration_evidence["predicted_away_goals"] += max(_number(row.get("expected_away_goals")), 0.0)
+        probabilities = row.get("evaluation_probabilities", row.get("probabilities"))
+        if isinstance(probabilities, Mapping):
+            predicted_draw = _clip(_number(probabilities.get("draw")), 0.0, 100.0)
+            calibration_evidence["predicted_draws"] += predicted_draw / 100 if predicted_draw > 1 else predicted_draw
+        calibration_evidence["actual_draws"] += int(actual == "draw")
+
+    learned_factors = copy.deepcopy(DEFAULT_FACTORS)
+    for key, evidence in factor_evidence.items():
+        if evidence["total"] < 3:
+            continue
+        accuracy = evidence["correct"] / evidence["total"]
+        confidence = evidence["total"] / (evidence["total"] + 12)
+        learned_factors[key] *= _clip(1 + (accuracy - 0.5) * 2 * confidence, 0.6, 1.4)
+    model["factors"] = _rounded_normalized_factors(learned_factors)
+
+    sample_count = calibration_evidence["matches"]
+    shrinkage = sample_count / (sample_count + 20)
+    predicted_total = calibration_evidence["predicted_home_goals"] + calibration_evidence["predicted_away_goals"]
+    actual_total = calibration_evidence["actual_home_goals"] + calibration_evidence["actual_away_goals"]
+    target_multiplier = _clip(actual_total / predicted_total, 0.82, 1.22) if predicted_total else 1.0
+    goal_multiplier = 1 + (target_multiplier - 1) * shrinkage
+    model["calibration"]["goal_mult"] = round(_clip(goal_multiplier, 0.82, 1.22), 4)
+    if sample_count:
+        predicted_home = calibration_evidence["predicted_home_goals"] / sample_count * goal_multiplier
+        predicted_away = calibration_evidence["predicted_away_goals"] / sample_count * goal_multiplier
+        actual_home = calibration_evidence["actual_home_goals"] / sample_count
+        actual_away = calibration_evidence["actual_away_goals"] / sample_count
+        model["calibration"]["home_goal_bias"] = round(_clip((actual_home - predicted_home) * shrinkage, -0.5, 0.5), 4)
+        model["calibration"]["away_goal_bias"] = round(_clip((actual_away - predicted_away) * shrinkage, -0.5, 0.5), 4)
+        predicted_draw_rate = calibration_evidence["predicted_draws"] / sample_count
+        actual_draw_rate = calibration_evidence["actual_draws"] / sample_count
+        target_draw_bias = _clip(actual_draw_rate / predicted_draw_rate, 0.65, 1.35) if predicted_draw_rate else 1.0
+        model["calibration"]["draw_bias"] = round(1 + (target_draw_bias - 1) * shrinkage, 4)
     meta = model["meta"]
-    meta["trained_matches"] += len(valid_rows)
+    meta["trained_matches"] = max(meta["trained_matches"], sample_count)
     meta["last_batch_size"] = len(valid_rows)
     if valid_rows:
         meta["last_trained_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

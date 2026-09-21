@@ -11,6 +11,7 @@ import website.league_learning as learning
 from website import ml_engine
 from website.league_learning import (
     _prepare_persistent_competition,
+    _persistent_model,
     load_json_state,
     merge_learning_history,
     normalize_prediction_store,
@@ -176,6 +177,15 @@ class PersistentCompetitionTests(unittest.TestCase):
         self.assertNotEqual(pl_model["factors"], ll_model["factors"])
         self.assertEqual(default_model_state("pl"), pl_default)
         self.assertEqual(default_model_state("laliga"), ll_default)
+
+    def test_zeroed_cumulative_stats_with_trained_ledger_still_request_bootstrap(self):
+        raw = default_model_state("pl")
+        raw["meta"]["trained_matches"] = 3
+        raw["applied_match_keys"] = ["pl:2026-27:1", "pl:2026-27:2", "pl:2026-27:3"]
+
+        migrated = _persistent_model(raw, default_model_state("pl"), "pl")
+
+        self.assertTrue(migrated["training_bootstrap_pending"])
 
     def test_wc_list_map_unknown_fields_and_v4_active_pick_survive_normalization(self):
         raw = {

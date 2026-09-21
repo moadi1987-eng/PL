@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 import website.league_predictor as predictor
 from website.league_predictor import (
+    _expected_points_pick,
     _poisson_grid,
+    _v4_pick,
     default_model_state,
     legacy_v4_pick,
     normalize_model_state,
@@ -95,6 +97,66 @@ class LeaguePredictorTests(unittest.TestCase):
         self.assertEqual(3, trained["meta"]["trained_matches"])
         self.assertGreater(trained["factors"]["strength"], model["factors"]["strength"])
         self.assertEqual("laliga", trained["league"])
+
+    def test_single_match_training_batches_accumulate_factor_evidence(self):
+        model = default_model_state("pl")
+        row = {
+            "actual_winner": "home", "fixture": {"hs": 3, "as": 0},
+            "factor_edges": {"strength": 0.8},
+            "expected_home_goals": 1.0, "expected_away_goals": 1.0,
+            "probabilities": {"home": 45.0, "draw": 30.0, "away": 25.0},
+        }
+
+        trained = model
+        for _ in range(3):
+            trained = train_factor_model(trained, [row])
+
+        evidence = trained["training_stats"]["factor_evidence"]["strength"]
+        self.assertEqual({"correct": 3, "total": 3}, evidence)
+        self.assertGreater(trained["factors"]["strength"], model["factors"]["strength"])
+        self.assertGreater(trained["calibration"]["home_goal_bias"], trained["calibration"]["away_goal_bias"])
+
+    def test_draw_result_counts_as_negative_directional_factor_evidence(self):
+        model = default_model_state("pl")
+        row = {
+            "actual_winner": "draw", "fixture": {"hs": 1, "as": 1},
+            "factor_edges": {"strength": 0.8},
+            "expected_home_goals": 1.1, "expected_away_goals": 1.0,
+            "probabilities": {"home": 40.0, "draw": 30.0, "away": 30.0},
+        }
+
+        trained = train_factor_model(model, [row])
+
+        self.assertEqual(
+            {"correct": 0, "total": 1},
+            trained["training_stats"]["factor_evidence"]["strength"],
+        )
+
+    def test_expected_points_pick_keeps_the_most_likely_outcome(self):
+        grid = {
+            (1, 0): 0.20,
+            (2, 0): 0.206,
+            (0, 0): 0.30,
+            (1, 1): 0.094,
+            (0, 1): 0.20,
+        }
+        pick = _expected_points_pick(
+            grid,
+            {"home": 0.406, "draw": 0.394, "away": 0.20},
+            {"result": 3, "exact": 5, "additive": True},
+        )
+
+        self.assertEqual("home", pick["winner"])
+
+    def test_v4_does_not_pick_draw_below_the_leading_probability(self):
+        pick = _v4_pick(
+            1.2,
+            1.1,
+            {"home": 0.36, "draw": 0.29, "away": 0.35},
+            0.30,
+        )
+
+        self.assertEqual("home", pick["winner"])
 
     def test_training_exactly_normalizes_factor_weights_after_rounding(self):
         model = default_model_state("pl")

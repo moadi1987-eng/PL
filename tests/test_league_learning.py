@@ -45,9 +45,9 @@ class LeagueLearningRulesTests(unittest.TestCase):
             self.assertEqual(result_points, score_pick(direction, fixture, competition_rule("wc", fixture))["points"])
             self.assertEqual(exact_points, score_pick(exact, fixture, competition_rule("wc", fixture))["points"])
 
-    def test_candidate_promotes_only_with_more_points_and_no_accuracy_loss(self):
+    def test_candidate_promotes_only_after_sixty_matches_with_more_points_and_no_accuracy_loss(self):
         rows = []
-        for match_id in range(30):
+        for match_id in range(60):
             actual = {"hs": 1, "as": 0, "fin": True}
             rows.append({
                 "match_id": match_id,
@@ -66,7 +66,7 @@ class LeagueLearningRulesTests(unittest.TestCase):
 
     def test_candidate_with_lower_winner_accuracy_never_promotes(self):
         comparison = {
-            "total": 30,
+            "total": 60,
             "active_strategy": "baseline",
             "candidate_strategy": "v4",
             "models": {
@@ -78,7 +78,7 @@ class LeagueLearningRulesTests(unittest.TestCase):
 
     def test_missing_winner_counts_never_promote_after_sample_threshold(self):
         comparison = {
-            "total": 30,
+            "total": 60,
             "active_strategy": "baseline",
             "candidate_strategy": "v4",
             "models": {
@@ -90,9 +90,9 @@ class LeagueLearningRulesTests(unittest.TestCase):
         self.assertFalse(decision["promote"])
         self.assertEqual("winner_guard", decision["status"])
 
-    def test_candidate_collects_until_thirty_rows(self):
+    def test_candidate_collects_until_sixty_rows(self):
         comparison = {
-            "total": 29,
+            "total": 59,
             "active_strategy": "baseline",
             "candidate_strategy": "v4",
             "models": {
@@ -230,6 +230,78 @@ class SnapshotLifecycleTests(unittest.TestCase):
         )
         self.assertEqual([[77]], calls)
         self.assertTrue(store["matches"]["77"]["model_trained"])
+
+    def test_model_without_cumulative_stats_bootstraps_all_verified_rows(self):
+        second = {
+            **self.fixture,
+            "id": 78,
+            "ko": (self.now + timedelta(hours=21)).isoformat(),
+        }
+        store, model, _, _ = evolve_competition_state(
+            league="pl", fixtures=[self.fixture, second], store=self.empty_current_store(), model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        calls = []
+
+        def trainer(state, rows):
+            calls.append([row["match_id"] for row in rows])
+            return state
+
+        first_finished = {**self.fixture, "fin": True, "st": True, "hs": 2, "as": 0}
+        store, model, _, _ = evolve_competition_state(
+            league="pl", fixtures=[first_finished, second], store=store, model=model,
+            snapshot_builder=self.snapshot_builder, model_trainer=trainer,
+            now=self.now + timedelta(days=1),
+        )
+        model["training_bootstrap_pending"] = True
+        second_finished = {**second, "fin": True, "st": True, "hs": 1, "as": 0}
+        evolve_competition_state(
+            league="pl", fixtures=[first_finished, second_finished], store=store, model=model,
+            snapshot_builder=self.snapshot_builder, model_trainer=trainer,
+            now=self.now + timedelta(days=2),
+        )
+
+        self.assertEqual([[77], [77, 78]], calls)
+
+    def test_model_without_cumulative_stats_bootstraps_on_quiet_run(self):
+        store, model, _, _ = evolve_competition_state(
+            league="pl", fixtures=[self.fixture], store=self.empty_current_store(), model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+        finished = {**self.fixture, "fin": True, "st": True, "hs": 2, "as": 0}
+        store, model, _, _ = evolve_competition_state(
+            league="pl", fixtures=[finished], store=store, model=model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now + timedelta(days=1),
+        )
+        model["training_bootstrap_pending"] = True
+        calls = []
+
+        def bootstrap_trainer(state, rows):
+            calls.append([row["match_id"] for row in rows])
+            updated = dict(state)
+            updated["training_stats"] = {"calibration_evidence": {"matches": len(rows)}}
+            return updated
+
+        _, _, _, counts = evolve_competition_state(
+            league="pl", fixtures=[finished], store=store, model=model,
+            snapshot_builder=self.snapshot_builder, model_trainer=bootstrap_trainer,
+            now=self.now + timedelta(days=2),
+        )
+
+        self.assertEqual([[77]], calls)
+        self.assertEqual(0, counts["trained"])
+
+    def test_world_cup_keeps_thirty_match_promotion_target(self):
+        _, _, history, _ = evolve_competition_state(
+            league="wc", fixtures=[], store={"matches": {}}, model=self.model,
+            snapshot_builder=self.snapshot_builder, model_trainer=lambda state, rows: state,
+            now=self.now,
+        )
+
+        self.assertEqual(30, history["model_status"]["minimum_samples"])
 
     def test_legacy_pl_rows_are_preserved(self):
         legacy = {"28": {"created_at": "before", "predictions": [{"match_id": 9, "winner": "home", "home_score": 2, "away_score": 1}]}}

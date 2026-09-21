@@ -361,27 +361,34 @@ const freshLaLigaStatus = renderContext.aiModelStatus(
   { model_status: renderContext.LEARNING_HISTORY.laliga.model_status, data_completeness_pct: 100, model_meta: { trained_matches: 0 } },
   { total: 0, models: { baseline: {}, v4: {} } },
 );
-assert.match(freshLaLigaStatus, /Collecting 0\/30/);
+assert.match(freshLaLigaStatus, /Collecting 0\/60/);
 assert.match(freshLaLigaStatus, /<b>n\/a<\/b><em>Trusted inputs unavailable<\/em>/);
 assert.doesNotMatch(freshLaLigaStatus, /100\.0%|All tracked inputs available/);
 const localOnlyStatus = renderContext.aiModelStatus(
   { model_status: renderContext.LEARNING_HISTORY.laliga.model_status, data_completeness_pct: 100, model_meta: { trained_matches: 0 } },
   { total: 2, models: { baseline: {}, v4: {} } },
 );
-assert.match(localOnlyStatus, /Collecting 0\/30/);
+assert.match(localOnlyStatus, /Collecting 0\/60/);
 assert.match(localOnlyStatus, /Trusted inputs unavailable/);
 const stalePlStatus = renderContext.aiModelStatus(
   { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4' }, data_completeness_pct: 100, model_comparison: { total: 108 } },
   { total: 108, models: { baseline: {}, v4: {} } },
 );
-assert.match(stalePlStatus, /Collecting 0\/30/);
+assert.match(stalePlStatus, /Collecting 0\/60/);
 assert.match(stalePlStatus, /Trusted inputs unavailable/);
 const explicitLifecycleStatus = renderContext.aiModelStatus(
   { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 4 }, data_completeness_pct: 76.5, model_comparison: { total: 108 } },
   { total: 108, models: { baseline: {}, v4: {} } },
 );
-assert.match(explicitLifecycleStatus, /Collecting 4\/30/);
+assert.match(explicitLifecycleStatus, /Collecting 4\/60/);
 assert.match(explicitLifecycleStatus, /76\.5%/);
+renderContext.D.league = 'wc';
+const worldCupStatus = renderContext.aiModelStatus(
+  { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 4 } },
+  { total: 4, models: { baseline: {}, v4: {} } },
+);
+assert.match(worldCupStatus, /Collecting 4\/30/);
+renderContext.D.league = 'laliga';
 const verifiedStatus = renderContext.aiModelStatus(
   { model_status: { status: 'collecting', active_strategy: 'baseline', candidate_strategy: 'v4', verified_lifecycle_samples: 2 }, data_completeness_pct: 76.5, model_comparison: { total: 2 } },
   { total: 2, models: { baseline: {}, v4: {} } },
